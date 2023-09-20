@@ -15,9 +15,8 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      max-parallel: 1
       matrix:
-        args: ["--no-default-features", "--all-features", "--default-features"]
+        args: ["--no-default-features", "--all-features", "--features default"]
     env:
       FREENET_LOG: error
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -37,11 +36,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build
-        run: |
-          cargo build --locked 
-          cargo install --path ./crates/core
-
       - name: Test - features
         run: cargo test --workspace ${{ matrix.args }}
 
@@ -50,7 +44,6 @@ jobs:
 
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 1
       matrix:
         targets: ["wasm32-unknown-unknown", "x86_64-unknown-linux-gnu"]
     env:
@@ -73,7 +66,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build - freenet-stdlib
-        working-directory: stdlib/rust
+        working-directory: rust
         run: cargo build --target ${{ matrix.targets }}
 
   clippy_check:
@@ -82,7 +75,6 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      max-parallel: 1
       matrix:
         target: ["wasm32-unknown-unknown", "x86_64-unknown-linux-gnu"]
     env:
@@ -106,7 +98,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: clippy - freenet-stdlib
-        working-directory: stdlib/rust
+        working-directory: rust
         run: cargo clippy --target ${{ matrix.target }} -- -D warnings
 
   fmt_check:
