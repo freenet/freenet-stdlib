@@ -1,0 +1,125 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "README.md"]
+  pull_request:
+    branches: [main]
+    paths-ignore: ["docs/**", "README.md"]
+
+jobs:
+  test_all:
+    name: Test features
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      max-parallel: 1
+      matrix:
+        args: ["--no-default-features", "--all-features", "--default-features"]
+    env:
+      FREENET_LOG: error
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+
+    steps:
+      - name: Cancel Previous Runs
+        uses: styfle/cancel-workflow-action@0.11.0
+        with:
+          access_token: ${{ github.token }}
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: |
+          cargo build --locked 
+          cargo install --path ./crates/core
+
+      - name: Test - features
+        run: cargo test --workspace ${{ matrix.args }}
+
+  build_targets:
+    name: Build targets
+
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        targets: ["wasm32-unknown-unknown", "x86_64-unknown-linux-gnu"]
+    env:
+      FREENET_LOG: error
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+
+    steps:
+      - name: Cancel Previous Runs
+        uses: styfle/cancel-workflow-action@0.11.0
+        with:
+          access_token: ${{ github.token }}
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build - freenet-stdlib
+        working-directory: stdlib/rust
+        run: cargo build --target ${{ matrix.targets }}
+
+  clippy_check:
+    name: Clippy
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      max-parallel: 1
+      matrix:
+        target: ["wasm32-unknown-unknown", "x86_64-unknown-linux-gnu"]
+    env:
+      FREENET_LOG: error
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+
+    steps:
+      - name: Cancel Previous Runs
+        uses: styfle/cancel-workflow-action@0.11.0
+        with:
+          access_token: ${{ github.token }}
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: clippy
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: clippy - freenet-stdlib
+        working-directory: stdlib/rust
+        run: cargo clippy --target ${{ matrix.target }} -- -D warnings
+
+  fmt_check:
+    name: Fmt
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Check code formatting
+        run: cargo fmt -- --check
