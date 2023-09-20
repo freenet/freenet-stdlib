@@ -1,0 +1,8 @@
+*.wasm
+**/node_modules/*
+**/target/*
+**/build/*
+
+jest.config.js
+typescript/**/*.js
+docs
