@@ -1,7 +1,7 @@
 {
   "name": "@freenetorg/freenet-stdlib",
   "version": "0.0.5",
-  "description": "Locutus Standard Library and Utils",
+  "description": "Freenet standard library and utils",
   "main": "src/index.ts",
   "files": [
     "**/*.ts",
