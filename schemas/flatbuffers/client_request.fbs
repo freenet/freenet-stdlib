@@ -66,10 +66,6 @@ union ContractRequestType {
   Subscribe
 }
 
-table RandomBytes {
-    data:[ubyte](required);
-}
-
 table ClientResponse {
     data: [ubyte](required);
 }
@@ -83,7 +79,6 @@ table UserInputResponse {
 union InboundDelegateMsgType {
     common.ApplicationMessage,
     common.GetSecretResponse,
-    RandomBytes,
     UserInputResponse,
     common.GetSecretRequest,
 }

@@ -137,20 +137,19 @@ pub mod host_response {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_OUTBOUND_DELEGATE_MSG_TYPE: u8 = 7;
+    pub const ENUM_MAX_OUTBOUND_DELEGATE_MSG_TYPE: u8 = 6;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_OUTBOUND_DELEGATE_MSG_TYPE: [OutboundDelegateMsgType; 8] = [
+    pub const ENUM_VALUES_OUTBOUND_DELEGATE_MSG_TYPE: [OutboundDelegateMsgType; 7] = [
         OutboundDelegateMsgType::NONE,
         OutboundDelegateMsgType::common_ApplicationMessage,
         OutboundDelegateMsgType::RequestUserInput,
         OutboundDelegateMsgType::ContextUpdated,
         OutboundDelegateMsgType::common_GetSecretRequest,
         OutboundDelegateMsgType::SetSecretRequest,
-        OutboundDelegateMsgType::RandomBytesRequest,
         OutboundDelegateMsgType::common_GetSecretResponse,
     ];
 
@@ -165,11 +164,10 @@ pub mod host_response {
         pub const ContextUpdated: Self = Self(3);
         pub const common_GetSecretRequest: Self = Self(4);
         pub const SetSecretRequest: Self = Self(5);
-        pub const RandomBytesRequest: Self = Self(6);
-        pub const common_GetSecretResponse: Self = Self(7);
+        pub const common_GetSecretResponse: Self = Self(6);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 7;
+        pub const ENUM_MAX: u8 = 6;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::common_ApplicationMessage,
@@ -177,7 +175,6 @@ pub mod host_response {
             Self::ContextUpdated,
             Self::common_GetSecretRequest,
             Self::SetSecretRequest,
-            Self::RandomBytesRequest,
             Self::common_GetSecretResponse,
         ];
         /// Returns the variant's name or "" if unknown.
@@ -189,7 +186,6 @@ pub mod host_response {
                 Self::ContextUpdated => Some("ContextUpdated"),
                 Self::common_GetSecretRequest => Some("common_GetSecretRequest"),
                 Self::SetSecretRequest => Some("SetSecretRequest"),
-                Self::RandomBytesRequest => Some("RandomBytesRequest"),
                 Self::common_GetSecretResponse => Some("common_GetSecretResponse"),
                 _ => None,
             }
@@ -2137,110 +2133,6 @@ pub mod host_response {
             ds.finish()
         }
     }
-    pub enum RandomBytesRequestOffset {}
-    #[derive(Copy, Clone, PartialEq)]
-
-    pub struct RandomBytesRequest<'a> {
-        pub _tab: flatbuffers::Table<'a>,
-    }
-
-    impl<'a> flatbuffers::Follow<'a> for RandomBytesRequest<'a> {
-        type Inner = RandomBytesRequest<'a>;
-        #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self {
-                _tab: flatbuffers::Table::new(buf, loc),
-            }
-        }
-    }
-
-    impl<'a> RandomBytesRequest<'a> {
-        pub const VT_DATA: flatbuffers::VOffsetT = 4;
-
-        #[inline]
-        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-            RandomBytesRequest { _tab: table }
-        }
-        #[allow(unused_mut)]
-        pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
-            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
-            args: &'args RandomBytesRequestArgs,
-        ) -> flatbuffers::WIPOffset<RandomBytesRequest<'bldr>> {
-            let mut builder = RandomBytesRequestBuilder::new(_fbb);
-            builder.add_data(args.data);
-            builder.finish()
-        }
-
-        #[inline]
-        pub fn data(&self) -> u32 {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<u32>(RandomBytesRequest::VT_DATA, Some(0))
-                    .unwrap()
-            }
-        }
-    }
-
-    impl flatbuffers::Verifiable for RandomBytesRequest<'_> {
-        #[inline]
-        fn run_verifier(
-            v: &mut flatbuffers::Verifier,
-            pos: usize,
-        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-            use self::flatbuffers::Verifiable;
-            v.visit_table(pos)?
-                .visit_field::<u32>("data", Self::VT_DATA, false)?
-                .finish();
-            Ok(())
-        }
-    }
-    pub struct RandomBytesRequestArgs {
-        pub data: u32,
-    }
-    impl<'a> Default for RandomBytesRequestArgs {
-        #[inline]
-        fn default() -> Self {
-            RandomBytesRequestArgs { data: 0 }
-        }
-    }
-
-    pub struct RandomBytesRequestBuilder<'a: 'b, 'b> {
-        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
-        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-    }
-    impl<'a: 'b, 'b> RandomBytesRequestBuilder<'a, 'b> {
-        #[inline]
-        pub fn add_data(&mut self, data: u32) {
-            self.fbb_
-                .push_slot::<u32>(RandomBytesRequest::VT_DATA, data, 0);
-        }
-        #[inline]
-        pub fn new(
-            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>,
-        ) -> RandomBytesRequestBuilder<'a, 'b> {
-            let start = _fbb.start_table();
-            RandomBytesRequestBuilder {
-                fbb_: _fbb,
-                start_: start,
-            }
-        }
-        #[inline]
-        pub fn finish(self) -> flatbuffers::WIPOffset<RandomBytesRequest<'a>> {
-            let o = self.fbb_.end_table(self.start_);
-            flatbuffers::WIPOffset::new(o.value())
-        }
-    }
-
-    impl core::fmt::Debug for RandomBytesRequest<'_> {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            let mut ds = f.debug_struct("RandomBytesRequest");
-            ds.field("data", &self.data());
-            ds.finish()
-        }
-    }
     pub enum OutboundDelegateMsgOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -2383,20 +2275,6 @@ pub mod host_response {
 
         #[inline]
         #[allow(non_snake_case)]
-        pub fn inbound_as_random_bytes_request(&self) -> Option<RandomBytesRequest<'a>> {
-            if self.inbound_type() == OutboundDelegateMsgType::RandomBytesRequest {
-                let u = self.inbound();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { RandomBytesRequest::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
         pub fn inbound_as_common_get_secret_response(
             &self,
         ) -> Option<super::common::GetSecretResponse<'a>> {
@@ -2427,7 +2305,6 @@ pub mod host_response {
           OutboundDelegateMsgType::ContextUpdated => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ContextUpdated>>("OutboundDelegateMsgType::ContextUpdated", pos),
           OutboundDelegateMsgType::common_GetSecretRequest => v.verify_union_variant::<flatbuffers::ForwardsUOffset<super::common::GetSecretRequest>>("OutboundDelegateMsgType::common_GetSecretRequest", pos),
           OutboundDelegateMsgType::SetSecretRequest => v.verify_union_variant::<flatbuffers::ForwardsUOffset<SetSecretRequest>>("OutboundDelegateMsgType::SetSecretRequest", pos),
-          OutboundDelegateMsgType::RandomBytesRequest => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RandomBytesRequest>>("OutboundDelegateMsgType::RandomBytesRequest", pos),
           OutboundDelegateMsgType::common_GetSecretResponse => v.verify_union_variant::<flatbuffers::ForwardsUOffset<super::common::GetSecretResponse>>("OutboundDelegateMsgType::common_GetSecretResponse", pos),
           _ => Ok(()),
         }
@@ -2539,16 +2416,6 @@ pub mod host_response {
                 }
                 OutboundDelegateMsgType::SetSecretRequest => {
                     if let Some(x) = self.inbound_as_set_secret_request() {
-                        ds.field("inbound", &x)
-                    } else {
-                        ds.field(
-                            "inbound",
-                            &"InvalidFlatbuffer: Union discriminant does not match value.",
-                        )
-                    }
-                }
-                OutboundDelegateMsgType::RandomBytesRequest => {
-                    if let Some(x) = self.inbound_as_random_bytes_request() {
                         ds.field("inbound", &x)
                     } else {
                         ds.field(
