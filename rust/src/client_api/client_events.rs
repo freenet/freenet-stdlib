@@ -31,7 +31,6 @@ use crate::host_response_generated::host_response::{
     HostResponse as FbsHostResponse, HostResponseArgs, HostResponseType, Ok as FbsOk, OkArgs,
     OutboundDelegateMsg as FbsOutboundDelegateMsg, OutboundDelegateMsgArgs,
     OutboundDelegateMsgType, PutResponse as FbsPutResponse, PutResponseArgs,
-    RandomBytesRequest as FbsRandomBytesRequest, RandomBytesRequestArgs,
     RequestUserInput as FbsRequestUserInput, RequestUserInputArgs,
     SetSecretRequest as FbsSetSecretRequest, SetSecretRequestArgs,
     UpdateNotification as FbsUpdateNotification, UpdateNotificationArgs,
@@ -1195,21 +1194,6 @@ impl HostResponse {
                             &mut builder,
                             &OutboundDelegateMsgArgs {
                                 inbound_type: OutboundDelegateMsgType::SetSecretRequest,
-                                inbound: Some(request_offset.as_union_value()),
-                            },
-                        );
-                        messages.push(msg);
-                    }
-                    OutboundDelegateMsg::RandomBytesRequest(size) => {
-                        let data: u32 = *size as u32;
-                        let request_offset = FbsRandomBytesRequest::create(
-                            &mut builder,
-                            &RandomBytesRequestArgs { data },
-                        );
-                        let msg = FbsOutboundDelegateMsg::create(
-                            &mut builder,
-                            &OutboundDelegateMsgArgs {
-                                inbound_type: OutboundDelegateMsgType::RandomBytesRequest,
                                 inbound: Some(request_offset.as_union_value()),
                             },
                         );

@@ -429,8 +429,6 @@ impl AsRef<[u8]> for DelegateContext {
 pub enum InboundDelegateMsg<'a> {
     ApplicationMessage(ApplicationMessage),
     GetSecretResponse(GetSecretResponse),
-    // todo: remove this and replace by native freenet_stdlib contract api calls
-    RandomBytes(Vec<u8>),
     UserResponse(#[serde(borrow)] UserInputResponse<'a>),
     GetSecretRequest(GetSecretRequest),
 }
@@ -440,7 +438,6 @@ impl InboundDelegateMsg<'_> {
         match self {
             InboundDelegateMsg::ApplicationMessage(r) => InboundDelegateMsg::ApplicationMessage(r),
             InboundDelegateMsg::GetSecretResponse(r) => InboundDelegateMsg::GetSecretResponse(r),
-            InboundDelegateMsg::RandomBytes(b) => InboundDelegateMsg::RandomBytes(b),
             InboundDelegateMsg::UserResponse(r) => InboundDelegateMsg::UserResponse(r.into_owned()),
             InboundDelegateMsg::GetSecretRequest(r) => InboundDelegateMsg::GetSecretRequest(r),
         }
@@ -507,12 +504,6 @@ impl<'a> TryFromFbs<&FbsInboundDelegateMsg<'a>> for InboundDelegateMsg<'a> {
                     context: DelegateContext::new(get_secret.delegate_context().bytes().to_vec()),
                 };
                 Ok(InboundDelegateMsg::GetSecretResponse(get_secret))
-            }
-            InboundDelegateMsgType::RandomBytes => {
-                let random_bytes = msg.inbound_as_random_bytes().unwrap();
-                Ok(InboundDelegateMsg::RandomBytes(
-                    random_bytes.data().bytes().to_vec(),
-                ))
             }
             InboundDelegateMsgType::UserInputResponse => {
                 let user_response = msg.inbound_as_user_input_response().unwrap();
@@ -604,7 +595,6 @@ pub enum OutboundDelegateMsg {
     // from the node
     GetSecretRequest(GetSecretRequest),
     SetSecretRequest(SetSecretRequest),
-    RandomBytesRequest(usize),
     // GetContractRequest {
     //     mode: RelatedMode,
     //     contract_id: ContractInstanceId,
@@ -629,7 +619,6 @@ impl OutboundDelegateMsg {
         match self {
             OutboundDelegateMsg::ApplicationMessage(msg) => msg.processed,
             OutboundDelegateMsg::GetSecretRequest(msg) => msg.processed,
-            OutboundDelegateMsg::RandomBytesRequest(_) => false,
             OutboundDelegateMsg::SetSecretRequest(_) => false,
             OutboundDelegateMsg::RequestUserInput(_) => true,
             OutboundDelegateMsg::ContextUpdated(_) => true,

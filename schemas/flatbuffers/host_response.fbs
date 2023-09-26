@@ -66,17 +66,12 @@ table SetSecretRequest {
     value: [ubyte](required);
 }
 
-table RandomBytesRequest {
-    data: uint;
-}
-
 union OutboundDelegateMsgType {
     common.ApplicationMessage,
     RequestUserInput,
     ContextUpdated,
     common.GetSecretRequest,
     SetSecretRequest,
-    RandomBytesRequest,
     common.GetSecretResponse,
 }
 
