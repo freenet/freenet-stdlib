@@ -675,7 +675,7 @@ function getAuthTokenFromCookie(): string | null {
  * const locutusApi = new LocutusWsApi(API_URL, handler);
  * ```
  */
-export class LocutusWsApi {
+export class FreenetWsApi {
   /**
    * Websocket object for creating and managing a WebSocket connection to a server,
    * as well as for sending and receiving data on the connection.
