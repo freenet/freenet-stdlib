@@ -55,7 +55,7 @@ use super::WsApiError;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClientError {
-    kind: ErrorKind,
+    kind: Box<ErrorKind>,
 }
 
 impl ClientError {
@@ -81,20 +81,22 @@ impl ClientError {
     }
 
     pub fn kind(&self) -> ErrorKind {
-        self.kind.clone()
+        (*self.kind).clone()
     }
 }
 
 impl From<ErrorKind> for ClientError {
     fn from(kind: ErrorKind) -> Self {
-        ClientError { kind }
+        ClientError {
+            kind: Box::new(kind),
+        }
     }
 }
 
 impl From<String> for ClientError {
     fn from(cause: String) -> Self {
         ClientError {
-            kind: ErrorKind::Unhandled { cause },
+            kind: Box::new(ErrorKind::Unhandled { cause }),
         }
     }
 }
