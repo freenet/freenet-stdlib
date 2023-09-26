@@ -395,10 +395,9 @@ pub trait DelegateInterface {
     ) -> Result<Vec<OutboundDelegateMsg>, DelegateError>;
 }
 
-#[non_exhaustive]
+#[serde_as]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-// todo: add serde_as(Bytes)
-pub struct DelegateContext(Vec<u8>);
+pub struct DelegateContext(#[serde_as(as = "serde_with::Bytes")] Vec<u8>);
 
 impl DelegateContext {
     pub const MAX_SIZE: usize = 4096 * 10 * 10;
