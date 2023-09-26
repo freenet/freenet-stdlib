@@ -11,11 +11,11 @@ import {
   GetResponse,
   HostError,
   Key,
-  LocutusWsApi,
+  FreenetWsApi,
   PutResponse,
   UpdateNotification,
   UpdateResponse,
-} from "@locutus/locutus-stdlib/websocket-interface";
+} from "@freenetorg/freenet-stdlib/websocket-interface";
 
 const handler = {
   onPut: (_response: PutResponse) => {},
@@ -27,7 +27,7 @@ const handler = {
 };
 
 const API_URL = new URL(`ws://${location.host}/contract/command/`);
-const locutusApi = new LocutusWsApi(API_URL, handler);
+const locutusApi = new FreenetWsApi(API_URL, handler);
 
 const CONTRACT = "DCBi7HNZC3QUZRiZLFZDiEduv5KHgZfgBk8WwTiheGq1";
 
