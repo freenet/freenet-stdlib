@@ -29,7 +29,6 @@ import {
   InboundDelegateMsgT,
   InboundDelegateMsgType,
   PutT,
-  RandomBytesT,
   RegisterDelegateT,
   RelatedContractsT,
   SubscribeT,
@@ -54,7 +53,6 @@ import {
   HostResponseType,
   OutboundDelegateMsgT,
   OutboundDelegateMsgType,
-  RandomBytesRequestT,
   RequestUserInputT,
   SetSecretRequestT,
 } from "./host-response";
@@ -376,11 +374,6 @@ export class DisconnectRequest extends DisconnectT {
 
 // Delegate
 /**
- * Representation of the RandomBytes message
- * @public
- */
-export type RandomBytes = RandomBytesT;
-/**
  * Representation of the UserInputResponse message
  * @public
  */
@@ -389,7 +382,6 @@ export type UserInputResponse = UserInputResponseT;
 export type InboundMessage =
   | ApplicationMessage
   | GetSecretResponse
-  | RandomBytes
   | UserInputResponse
   | GetSecretRequest;
 
@@ -536,11 +528,6 @@ export class UpdateNotification extends UpdateNotificationT {
  */
 export type ContextUpdated = ContextUpdatedT;
 /**
- * Representation of RandomBytesRequest message
- * @public
- */
-export type RandomBytesRequest = RandomBytesRequestT;
-/**
  * Representation of RequestUserInput message
  * @public
  */
@@ -561,7 +548,6 @@ export type OutboundMessage =
   | ContextUpdated
   | GetSecretRequest
   | SetSecretRequest
-  | RandomBytesRequest
   | GetSecretResponse;
 
 export class OutboundDelegateMsg extends OutboundDelegateMsgT {
