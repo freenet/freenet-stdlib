@@ -4,14 +4,14 @@ set -e
 npm install --save-dev .
 npm run test
 npm run build
-if [ "$1"="dev" ]; then 
+if [ "$1" = "dev" ]; then 
 PKG_DIR=$SCRIPT_DIR/dist/pack
 IS_DEV=1
 else
-PKG_DIR=${1:-$(mktemp -d)}
-fi
-mkdir -p  $PKG_DIR
+PKG_DIR="$1"
 echo "Package dir: $PKG_DIR"
+fi
+mkdir -p $PKG_DIR
 cd $PKG_DIR
 cp -r $SCRIPT_DIR/dist/src/* $PKG_DIR
 cp $SCRIPT_DIR/README.md $SCRIPT_DIR/package.json $PKG_DIR

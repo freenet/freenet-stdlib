@@ -2,7 +2,6 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd $SCRIPT_DIR && cd ..
 SRC_DIR=$(pwd)
-source typescript/package.prod.sh
 cd $SRC_DIR
 
 cargo publish --dry-run -p freenet-macros || { exit 1; }
