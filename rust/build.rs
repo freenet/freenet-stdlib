@@ -12,5 +12,7 @@ fn main() {
     if let Err(err) = status {
         println!("failed compiling flatbuffers schema: {err}");
         println!("refer to https://github.com/google/flatbuffers to install the flatc compiler");
+    } else {
+        let _ = Command::new("cargo").arg("fmt").status();
     }
 }

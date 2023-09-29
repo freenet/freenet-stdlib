@@ -21,8 +21,6 @@ pub mod log;
 pub mod rand;
 #[cfg(all(feature = "time", target_family = "wasm"))]
 pub mod time;
-#[cfg(feature = "archive")]
-pub mod web;
 
 /// Locutus stdlib prelude.
 pub mod prelude {
