@@ -831,9 +831,9 @@ pub(crate) mod wasm_interface {
             #[cfg(feature = "trace")]
             {
                 tracing::trace!(
-                "sending result through FFI; addr: {ptr:p} ({}),\n  serialized: {serialized:?}\n  value: {value:?}",
-                ptr as i64
-            );
+                    "sending result through FFI; addr: {ptr:p} ({}),\n  serialized: {serialized:?}\n  value: {value:?}",
+                    ptr as i64
+                );
             }
             std::mem::forget(serialized);
             Self {
