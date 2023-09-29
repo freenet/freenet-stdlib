@@ -441,6 +441,7 @@ pub trait ContractInterface {
 /// A complete contract specification requires a `parameters` section
 /// and a `contract` section.
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
 pub struct Contract<'a> {
     #[serde(borrow)]
     pub parameters: Parameters<'a>,
@@ -521,23 +522,6 @@ impl std::fmt::Display for Contract<'_> {
             self.data.data.iter().copied().map(char::from).collect()
         };
         write!(f, ", data: [{data}])")
-    }
-}
-
-#[cfg(all(any(test, feature = "testing"), any(unix, windows)))]
-impl<'a> arbitrary::Arbitrary<'a> for Contract<'static> {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let contract: ContractCode = u.arbitrary()?;
-        let parameters: Vec<u8> = u.arbitrary()?;
-        let parameters = Parameters::from(parameters);
-
-        let key = ContractKey::from((&parameters, &contract));
-
-        Ok(Contract {
-            data: contract,
-            parameters,
-            key,
-        })
     }
 }
 
@@ -690,6 +674,7 @@ impl<'a> DerefMut for StateDelta<'a> {
 /// summary is determined by the state's contract.
 #[serde_as]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
 pub struct StateSummary<'a>(
     // TODO: conver this to Arc<[u8]> instead
     #[serde_as(as = "serde_with::Bytes")]
@@ -748,20 +733,13 @@ impl<'a> DerefMut for StateSummary<'a> {
     }
 }
 
-#[cfg(all(any(test, feature = "testing"), any(unix, windows)))]
-impl<'a> arbitrary::Arbitrary<'a> for StateSummary<'static> {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let data: Vec<u8> = u.arbitrary()?;
-        Ok(StateSummary::from(data))
-    }
-}
-
 /// The executable contract.
 ///
 /// It is the part of the executable belonging to the full specification
 /// and does not include any other metadata (like the parameters).
 #[serde_as]
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
 pub struct ContractCode<'a> {
     // TODO: conver this to Arc<[u8]> instead
     #[serde_as(as = "serde_with::Bytes")]
@@ -865,14 +843,6 @@ impl PartialEq for ContractCode<'_> {
 
 impl Eq for ContractCode<'_> {}
 
-#[cfg(all(any(test, feature = "testing"), any(unix, windows)))]
-impl<'a> arbitrary::Arbitrary<'a> for ContractCode<'static> {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let data: Vec<u8> = u.arbitrary()?;
-        Ok(ContractCode::from(data))
-    }
-}
-
 impl std::fmt::Display for ContractCode<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Contract( key: ")?;
@@ -894,10 +864,7 @@ impl std::fmt::Display for ContractCode<'_> {
 /// The key representing the hash of the contract executable code hash and a set of `parameters`.
 #[serde_as]
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
-#[cfg_attr(
-    all(any(test, feature = "testing"), any(unix, windows)),
-    derive(arbitrary::Arbitrary)
-)]
+#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
 #[repr(transparent)]
 pub struct ContractInstanceId(#[serde_as(as = "[_; CONTRACT_KEY_SIZE]")] [u8; CONTRACT_KEY_SIZE]);
 
@@ -963,10 +930,7 @@ impl Display for ContractInstanceId {
 /// A complete key specification, that represents a cryptographic hash that identifies the contract.
 #[serde_as]
 #[derive(Debug, Eq, Clone, Serialize, Deserialize)]
-#[cfg_attr(
-    all(any(test, feature = "testing"), any(unix, windows)),
-    derive(arbitrary::Arbitrary)
-)]
+#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
 pub struct ContractKey {
     instance: ContractInstanceId,
     code: Option<CodeHash>,
@@ -1312,7 +1276,7 @@ impl Display for WrappedContract {
 impl<'a> arbitrary::Arbitrary<'a> for WrappedContract {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         use arbitrary::Arbitrary;
-        let data: ContractCode = Arbitrary::arbitrary(u)?;
+        let data = <ContractCode as Arbitrary>::arbitrary(u)?.into_owned();
         let param_bytes: Vec<u8> = Arbitrary::arbitrary(u)?;
         let params = Parameters::from(param_bytes);
         let key = ContractKey::from((&params, &data));
@@ -1329,7 +1293,7 @@ pub(crate) mod wasm_interface {
     //! Contains all the types to interface between the host environment and
     //! the wasm module execution.
     use super::*;
-    use crate::WasmLinearMem;
+    use crate::memory::WasmLinearMem;
 
     #[repr(i32)]
     enum ResultKind {
@@ -1371,7 +1335,7 @@ pub(crate) mod wasm_interface {
             let kind = ResultKind::from(self.kind);
             match kind {
                 ResultKind::ValidateState => {
-                    let ptr = crate::buf::compute_ptr(self.ptr as *mut u8, &mem);
+                    let ptr = crate::memory::buf::compute_ptr(self.ptr as *mut u8, &mem);
                     let serialized = std::slice::from_raw_parts(ptr as *const u8, self.size as _);
                     let value = bincode::deserialize(serialized)
                         .map_err(|e| ContractError::Other(format!("{e}")))?;
@@ -1391,7 +1355,7 @@ pub(crate) mod wasm_interface {
             let kind = ResultKind::from(self.kind);
             match kind {
                 ResultKind::ValidateDelta => {
-                    let ptr = crate::buf::compute_ptr(self.ptr as *mut u8, &mem);
+                    let ptr = crate::memory::buf::compute_ptr(self.ptr as *mut u8, &mem);
                     let serialized = std::slice::from_raw_parts(ptr as *const u8, self.size as _);
                     let value = bincode::deserialize(serialized)
                         .map_err(|e| ContractError::Other(format!("{e}")))?;
@@ -1410,7 +1374,7 @@ pub(crate) mod wasm_interface {
             let kind = ResultKind::from(self.kind);
             match kind {
                 ResultKind::UpdateState => {
-                    let ptr = crate::buf::compute_ptr(self.ptr as *mut u8, &mem);
+                    let ptr = crate::memory::buf::compute_ptr(self.ptr as *mut u8, &mem);
                     let serialized = std::slice::from_raw_parts(ptr as *const u8, self.size as _);
                     let value: Result<UpdateModification<'_>, ContractError> =
                         bincode::deserialize(serialized)
@@ -1432,7 +1396,7 @@ pub(crate) mod wasm_interface {
             let kind = ResultKind::from(self.kind);
             match kind {
                 ResultKind::SummarizeState => {
-                    let ptr = crate::buf::compute_ptr(self.ptr as *mut u8, &mem);
+                    let ptr = crate::memory::buf::compute_ptr(self.ptr as *mut u8, &mem);
                     let serialized = std::slice::from_raw_parts(ptr as *const u8, self.size as _);
                     let value: Result<StateSummary<'static>, ContractError> =
                         bincode::deserialize(serialized)
@@ -1454,7 +1418,7 @@ pub(crate) mod wasm_interface {
             let kind = ResultKind::from(self.kind);
             match kind {
                 ResultKind::StateDelta => {
-                    let ptr = crate::buf::compute_ptr(self.ptr as *mut u8, &mem);
+                    let ptr = crate::memory::buf::compute_ptr(self.ptr as *mut u8, &mem);
                     let serialized = std::slice::from_raw_parts(ptr as *const u8, self.size as _);
                     let value: Result<StateDelta<'static>, ContractError> =
                         bincode::deserialize(serialized)
@@ -1469,6 +1433,7 @@ pub(crate) mod wasm_interface {
             }
         }
 
+        #[cfg(all(feature = "contract", target_family = "wasm"))]
         pub fn into_raw(self) -> i64 {
             #[cfg(feature = "trace")]
             {
@@ -1483,7 +1448,7 @@ pub(crate) mod wasm_interface {
         }
 
         pub unsafe fn from_raw(ptr: i64, mem: &WasmLinearMem) -> Self {
-            let result = Box::leak(Box::from_raw(crate::buf::compute_ptr(
+            let result = Box::leak(Box::from_raw(crate::memory::buf::compute_ptr(
                 ptr as *mut Self,
                 mem,
             )));
@@ -1509,6 +1474,7 @@ pub(crate) mod wasm_interface {
         }
     }
 
+    #[cfg(all(feature = "contract", target_family = "wasm"))]
     macro_rules! conversion {
         ($value:ty: $kind:expr) => {
             impl From<$value> for ContractInterfaceResult {
@@ -1533,10 +1499,15 @@ pub(crate) mod wasm_interface {
         };
     }
 
+    #[cfg(all(feature = "contract", target_family = "wasm"))]
     conversion!(Result<ValidateResult, ContractError>: ResultKind::ValidateState);
+    #[cfg(all(feature = "contract", target_family = "wasm"))]
     conversion!(Result<bool, ContractError>: ResultKind::ValidateDelta);
+    #[cfg(all(feature = "contract", target_family = "wasm"))]
     conversion!(Result<UpdateModification<'static>, ContractError>: ResultKind::UpdateState);
+    #[cfg(all(feature = "contract", target_family = "wasm"))]
     conversion!(Result<StateSummary<'static>, ContractError>: ResultKind::SummarizeState);
+    #[cfg(all(feature = "contract", target_family = "wasm"))]
     conversion!(Result<StateDelta<'static>, ContractError>: ResultKind::StateDelta);
 }
 
