@@ -1,6 +1,6 @@
 //! Memory buffers to interact with the WASM contracts.
 
-use crate::prelude::WasmLinearMem;
+use super::WasmLinearMem;
 
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug)]
@@ -18,15 +18,18 @@ impl BufferBuilder {
         self.capacity as _
     }
 
-    pub fn written(&self, mem: Option<&WasmLinearMem>) -> usize {
+    /// Returns the number of bytes written to the buffer.
+    #[cfg(any(windows, unix))]
+    pub fn bytes_written(&self, mem: &WasmLinearMem) -> usize {
         unsafe {
-            let ptr = if let Some(mem) = mem {
-                compute_ptr(self.last_write as *mut u32, mem)
-            } else {
-                self.last_write as *mut u32
-            };
+            let ptr = compute_ptr(self.last_write as *mut u32, mem);
             *ptr as usize
         }
+    }
+
+    #[cfg(all(target_family = "wasm", feature = "contract"))]
+    pub fn bytes_written(&self) -> usize {
+        unsafe { *(self.last_write as *mut u32) as usize }
     }
 
     /// Returns the first byte of buffer.
@@ -155,7 +158,6 @@ impl<'instance> BufferMut<'instance> {
         }
     }
 
-    #[doc(hidden)]
     /// # Safety
     /// The pointer passed come from a previous call to `initiate_buffer` exported function from the contract.
     pub unsafe fn from_ptr(
@@ -302,8 +304,10 @@ impl<'instance> Buffer<'instance> {
 ///
 /// This buffer leaks it's own memory and will only be freed by the runtime when a contract instance is dropped.
 #[doc(hidden)]
+#[allow(non_snake_case)]
 #[no_mangle]
-pub fn initiate_buffer(capacity: u32) -> i64 {
+#[cfg(any(all(feature = "contract", target_family = "wasm"), test))]
+fn __frnt__initiate_buffer(capacity: u32) -> i64 {
     let buf: Vec<u8> = Vec::with_capacity(capacity as usize);
     let start = buf.as_ptr() as i64;
 
@@ -355,7 +359,7 @@ mod test {
         let mut store = Store::new(Cranelift::new());
         let module = Module::new(&store, wasm_bytes)?;
 
-        let init_buf_fn = Function::new_typed(&mut store, initiate_buffer);
+        let init_buf_fn = Function::new_typed(&mut store, __frnt__initiate_buffer);
         let imports = imports! {
             "freenet" => { "initiate_buffer" => init_buf_fn }
         };

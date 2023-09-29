@@ -762,7 +762,7 @@ pub(crate) mod wasm_interface {
     //! Contains all the types to interface between the host environment and
     //! the wasm module execution.
     use super::*;
-    use crate::WasmLinearMem;
+    use crate::memory::WasmLinearMem;
 
     #[repr(C)]
     #[derive(Debug, Clone, Copy)]
@@ -773,7 +773,7 @@ pub(crate) mod wasm_interface {
 
     impl DelegateInterfaceResult {
         pub unsafe fn from_raw(ptr: i64, mem: &WasmLinearMem) -> Self {
-            let result = Box::leak(Box::from_raw(crate::buf::compute_ptr(
+            let result = Box::leak(Box::from_raw(crate::memory::buf::compute_ptr(
                 ptr as *mut Self,
                 mem,
             )));
@@ -787,6 +787,7 @@ pub(crate) mod wasm_interface {
             *result
         }
 
+        #[cfg(all(feature = "contract", target_family = "wasm"))]
         pub fn into_raw(self) -> i64 {
             #[cfg(feature = "trace")]
             {
@@ -804,7 +805,7 @@ pub(crate) mod wasm_interface {
             self,
             mem: WasmLinearMem,
         ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
-            let ptr = crate::buf::compute_ptr(self.ptr as *mut u8, &mem);
+            let ptr = crate::memory::buf::compute_ptr(self.ptr as *mut u8, &mem);
             let serialized = std::slice::from_raw_parts(ptr as *const u8, self.size as _);
             let value: Result<Vec<OutboundDelegateMsg>, DelegateError> =
                 bincode::deserialize(serialized)

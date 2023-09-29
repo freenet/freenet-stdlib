@@ -1,12 +1,13 @@
 //! Standard library provided by the Freenet project to be able to write Locutus-compatible contracts.
-#[doc(hidden)]
-pub mod buf;
 mod code_hash;
 mod contract_interface;
 mod delegate_interface;
 pub(crate) mod global;
+pub mod memory;
 mod parameters;
 mod versioning;
+// #[doc(hidden)]
+// pub mod some;
 
 #[allow(dead_code, unused_imports, clippy::all)]
 pub(crate) mod client_request_generated;
@@ -24,7 +25,6 @@ pub mod time;
 
 /// Locutus stdlib prelude.
 pub mod prelude {
-    pub use super::WasmLinearMem;
     pub use crate::code_hash::*;
     pub use crate::contract_interface::wasm_interface::*;
     pub use crate::contract_interface::*;
@@ -39,11 +39,4 @@ pub mod prelude {
     pub use serde_json;
     pub use tracing;
     pub use tracing_subscriber;
-}
-
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy)]
-pub struct WasmLinearMem {
-    pub start_ptr: *const u8,
-    pub size: u64,
 }
