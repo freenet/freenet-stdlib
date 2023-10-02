@@ -1,13 +1,12 @@
 //! Standard library provided by the Freenet project to be able to write Locutus-compatible contracts.
 mod code_hash;
+mod composers;
 mod contract_interface;
 mod delegate_interface;
 pub(crate) mod global;
 pub mod memory;
 mod parameters;
 mod versioning;
-// #[doc(hidden)]
-// pub mod some;
 
 #[allow(dead_code, unused_imports, clippy::all)]
 pub(crate) mod client_request_generated;
