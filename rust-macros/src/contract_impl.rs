@@ -38,6 +38,7 @@ impl ImplStruct {
         let ret = self.ffi_ret_type();
         quote! {
             #[no_mangle]
+            #[cfg(feature = "freenet-main-contract")]
             pub extern "C" fn validate_state(parameters: i64, state: i64, related: i64) -> #ret {
                 ::freenet_stdlib::memory::wasm_interface::inner_validate_state::<#type_name>(parameters, state, related)
             }
@@ -49,6 +50,7 @@ impl ImplStruct {
         let ret = self.ffi_ret_type();
         quote! {
             #[no_mangle]
+            #[cfg(feature = "freenet-main-contract")]
             pub extern "C" fn validate_delta(parameters: i64, delta: i64) -> #ret {
                 ::freenet_stdlib::memory::wasm_interface::inner_validate_delta::<#type_name>(parameters, delta)
             }
@@ -60,6 +62,7 @@ impl ImplStruct {
         let ret = self.ffi_ret_type();
         quote! {
             #[no_mangle]
+            #[cfg(feature = "freenet-main-contract")]
             pub extern "C" fn update_state(parameters: i64, state: i64, delta: i64) -> #ret {
                 ::freenet_stdlib::memory::wasm_interface::inner_update_state::<#type_name>(parameters, state, delta)
             }
@@ -71,6 +74,7 @@ impl ImplStruct {
         let ret = self.ffi_ret_type();
         quote! {
             #[no_mangle]
+            #[cfg(feature = "freenet-main-contract")]
             pub extern "C" fn summarize_state(parameters: i64, state: i64) -> #ret {
                 ::freenet_stdlib::memory::wasm_interface::inner_summarize_state::<#type_name>(parameters, state)
             }
@@ -82,6 +86,7 @@ impl ImplStruct {
         let ret = self.ffi_ret_type();
         quote! {
             #[no_mangle]
+            #[cfg(feature = "freenet-main-contract")]
             pub extern "C" fn get_state_delta(parameters: i64, state: i64, summary: i64) -> #ret {
                 ::freenet_stdlib::memory::wasm_interface::inner_get_state_delta::<#type_name>(parameters, state, summary)
             }

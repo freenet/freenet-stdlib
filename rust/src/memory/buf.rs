@@ -19,7 +19,7 @@ impl BufferBuilder {
     }
 
     /// Returns the number of bytes written to the buffer.
-    #[cfg(any(windows, unix))]
+    #[cfg(not(feature = "contract"))]
     pub fn bytes_written(&self, mem: &WasmLinearMem) -> usize {
         unsafe {
             let ptr = compute_ptr(self.last_write as *mut u32, mem);
@@ -27,7 +27,7 @@ impl BufferBuilder {
         }
     }
 
-    #[cfg(all(target_family = "wasm", feature = "contract"))]
+    #[cfg(feature = "contract")]
     pub fn bytes_written(&self) -> usize {
         unsafe { *(self.last_write as *mut u32) as usize }
     }
@@ -306,7 +306,7 @@ impl<'instance> Buffer<'instance> {
 #[doc(hidden)]
 #[allow(non_snake_case)]
 #[no_mangle]
-#[cfg(any(all(feature = "contract", target_family = "wasm"), test))]
+#[cfg(any(feature = "contract", test))]
 fn __frnt__initiate_buffer(capacity: u32) -> i64 {
     let buf: Vec<u8> = Vec::with_capacity(capacity as usize);
     let start = buf.as_ptr() as i64;

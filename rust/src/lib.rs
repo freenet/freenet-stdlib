@@ -16,10 +16,10 @@ pub(crate) mod common_generated;
 pub(crate) mod host_response_generated;
 
 pub mod client_api;
-#[cfg(all(feature = "log", target_family = "wasm"))]
+#[cfg(feature = "contract")]
 pub mod log;
 pub mod rand;
-#[cfg(all(feature = "time", target_family = "wasm"))]
+#[cfg(feature = "contract")]
 pub mod time;
 
 /// Locutus stdlib prelude.

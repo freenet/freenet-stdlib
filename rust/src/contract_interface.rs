@@ -1433,7 +1433,7 @@ pub(crate) mod wasm_interface {
             }
         }
 
-        #[cfg(all(feature = "contract", target_family = "wasm"))]
+        #[cfg(feature = "contract")]
         pub fn into_raw(self) -> i64 {
             #[cfg(feature = "trace")]
             {
@@ -1474,7 +1474,7 @@ pub(crate) mod wasm_interface {
         }
     }
 
-    #[cfg(all(feature = "contract", target_family = "wasm"))]
+    #[cfg(feature = "contract")]
     macro_rules! conversion {
         ($value:ty: $kind:expr) => {
             impl From<$value> for ContractInterfaceResult {
@@ -1499,15 +1499,15 @@ pub(crate) mod wasm_interface {
         };
     }
 
-    #[cfg(all(feature = "contract", target_family = "wasm"))]
+    #[cfg(feature = "contract")]
     conversion!(Result<ValidateResult, ContractError>: ResultKind::ValidateState);
-    #[cfg(all(feature = "contract", target_family = "wasm"))]
+    #[cfg(feature = "contract")]
     conversion!(Result<bool, ContractError>: ResultKind::ValidateDelta);
-    #[cfg(all(feature = "contract", target_family = "wasm"))]
+    #[cfg(feature = "contract")]
     conversion!(Result<UpdateModification<'static>, ContractError>: ResultKind::UpdateState);
-    #[cfg(all(feature = "contract", target_family = "wasm"))]
+    #[cfg(feature = "contract")]
     conversion!(Result<StateSummary<'static>, ContractError>: ResultKind::SummarizeState);
-    #[cfg(all(feature = "contract", target_family = "wasm"))]
+    #[cfg(feature = "contract")]
     conversion!(Result<StateDelta<'static>, ContractError>: ResultKind::StateDelta);
 }
 
