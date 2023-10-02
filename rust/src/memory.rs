@@ -24,7 +24,7 @@ impl WasmLinearMem {
     }
 }
 
-#[cfg(all(feature = "contract", target_family = "wasm"))]
+#[cfg(feature = "contract")]
 pub mod wasm_interface {
     use crate::prelude::*;
 

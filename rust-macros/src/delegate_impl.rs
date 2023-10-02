@@ -27,6 +27,7 @@ impl ImplStruct {
         let set_logger = crate::common::set_logger();
         quote! {
             #[no_mangle]
+            #[cfg(feature = "freenet-main-delegate")]
             pub extern "C" fn process(parameters: i64, attested: i64, inbound: i64) -> #ret {
                 #set_logger
                 let parameters = unsafe {

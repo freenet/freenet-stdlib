@@ -787,7 +787,7 @@ pub(crate) mod wasm_interface {
             *result
         }
 
-        #[cfg(all(feature = "contract", target_family = "wasm"))]
+        #[cfg(feature = "contract")]
         pub fn into_raw(self) -> i64 {
             #[cfg(feature = "trace")]
             {
