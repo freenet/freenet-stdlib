@@ -1566,7 +1566,7 @@ mod test {
     }
 }
 
-mod serialization {
+pub(crate) mod serialization {
     //! Helper types to interaction between wasm and host boundaries.
     use serde::de::DeserializeOwned;
 

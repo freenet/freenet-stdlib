@@ -6,16 +6,122 @@ mod parent {
 
     use super::children::{self, *};
     use freenet_stdlib::{composers::*, prelude::*};
+    use serde::{Deserialize, Serialize};
 
+    use freenet_stdlib::memory::wasm_interface::inner_validate_state;
+
+    // todo: code in this mod should be derived
+    mod low_level_ffi_impl {
+        use super::*;
+        use freenet_stdlib::prelude::ContractInterface;
+
+        // todo: have a macro that can be snapped on top of `ComposableContract` that generates this?
+        impl SerializationAdapter for ParentContract {
+            type Parameters = ParentContractParams;
+            type State = ParentContract;
+            type StateDelta = ParentContractDelta;
+            type StateSummary = ParentContractSummary;
+        }
+
+        // todo: have an other macro that can be snapped on top of `impl SerializationAdapter`
+        // that generated all of below, it cna take a parameter (e.g. BincodeEncoder) to specify
+        // the encoder to use
+        impl BincodeEncoder for ParentContract {}
+        impl BincodeEncoder for ParentContractParams {}
+        impl BincodeEncoder for ParentContractDelta {}
+        impl BincodeEncoder for ParentContractSummary {}
+
+        #[no_mangle]
+        pub extern "C" fn validate_state(parameters: i64, state: i64, related: i64) -> i64 {
+            ::freenet_stdlib::memory::wasm_interface::inner_validate_state::<ParentContract>(
+                parameters, state, related,
+            )
+        }
+
+        impl ContractInterface for ParentContract {
+            fn validate_state(
+                parameters: freenet_stdlib::prelude::Parameters<'static>,
+                state: freenet_stdlib::prelude::State<'static>,
+                related: freenet_stdlib::prelude::RelatedContracts<'static>,
+            ) -> Result<
+                freenet_stdlib::prelude::ValidateResult,
+                freenet_stdlib::prelude::ContractError,
+            > {
+                let typed_params =
+                    <<Self as SerializationAdapter>::Parameters as Encoder>::deserialize(
+                        parameters.as_ref(),
+                    )?;
+                let typed_state = <<Self as SerializationAdapter>::State as Encoder>::deserialize(
+                    state.as_ref(),
+                )?;
+                let related_container = RelatedContractsContainer::from(related);
+                match typed_state.verify::<NoChild, NoContext>(
+                    &typed_params,
+                    &NoContext,
+                    &related_container,
+                )? {
+                    ValidateResult::Valid => {}
+                    ValidateResult::Invalid => return Ok(ValidateResult::Invalid),
+                    ValidateResult::RequestRelated(related) => {
+                        return Ok(ValidateResult::RequestRelated(related))
+                    }
+                }
+                Ok(ValidateResult::Valid)
+            }
+
+            fn validate_delta(
+                parameters: freenet_stdlib::prelude::Parameters<'static>,
+                delta: freenet_stdlib::prelude::StateDelta<'static>,
+            ) -> Result<bool, freenet_stdlib::prelude::ContractError> {
+                todo!()
+            }
+
+            fn update_state(
+                parameters: freenet_stdlib::prelude::Parameters<'static>,
+                state: freenet_stdlib::prelude::State<'static>,
+                data: Vec<freenet_stdlib::prelude::UpdateData<'static>>,
+            ) -> Result<
+                freenet_stdlib::prelude::UpdateModification<'static>,
+                freenet_stdlib::prelude::ContractError,
+            > {
+                todo!()
+            }
+
+            fn summarize_state(
+                parameters: freenet_stdlib::prelude::Parameters<'static>,
+                state: freenet_stdlib::prelude::State<'static>,
+            ) -> Result<
+                freenet_stdlib::prelude::StateSummary<'static>,
+                freenet_stdlib::prelude::ContractError,
+            > {
+                todo!()
+            }
+
+            fn get_state_delta(
+                parameters: freenet_stdlib::prelude::Parameters<'static>,
+                state: freenet_stdlib::prelude::State<'static>,
+                summary: freenet_stdlib::prelude::StateSummary<'static>,
+            ) -> Result<
+                freenet_stdlib::prelude::StateDelta<'static>,
+                freenet_stdlib::prelude::ContractError,
+            > {
+                todo!()
+            }
+        }
+    }
+
+    #[derive(Serialize, Deserialize)]
     pub struct ParentContract {
         contract_b_0: ChildContract,
         contract_b_1: ChildContract,
     }
 
+    #[derive(Serialize, Deserialize)]
     pub struct ParentContractParams {
         contract_b_0_params: ChildContractParams,
         contract_b_1_params: ChildContractParams,
     }
+
     impl ComposableParameters for ParentContractParams {
         fn contract_id(&self) -> Option<ContractInstanceId> {
             unimplemented!()
@@ -27,6 +133,7 @@ mod parent {
         }
     }
 
+    #[derive(Serialize, Deserialize)]
     pub struct ParentContractSummary {
         child_0_summary: ChildContractSummary,
         child_1_summary: ChildContractSummary,
@@ -37,6 +144,7 @@ mod parent {
         }
     }
 
+    #[derive(Serialize, Deserialize)]
     pub struct ParentContractDelta {
         contract_b_0: ChildContractDelta,
         contract_b_1: ChildContractDelta,
@@ -75,7 +183,7 @@ mod parent {
 
     // todo: this would be derived ideally
     impl ComposableContract for ParentContract {
-        type Context = Self;
+        type Context = NoContext;
         type Parameters = ParentContractParams;
         type Delta = ParentContractDelta;
         type Summary = ParentContractSummary;
@@ -85,7 +193,7 @@ mod parent {
             parameters: &Self::Parameters,
             context: &Ctx,
             related: &RelatedContractsContainer,
-        ) -> Result<(), Box<dyn std::error::Error>>
+        ) -> Result<ValidateResult, ContractError>
         where
             Child: ComposableContract,
             <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
@@ -97,7 +205,7 @@ mod parent {
                 self,
                 related,
             )?;
-            Ok(())
+            Ok(ValidateResult::Valid)
         }
 
         fn verify_delta<Child, Ctx>(
@@ -105,7 +213,7 @@ mod parent {
             parameters: &Self::Parameters,
             context: &Ctx,
             delta: &Self::Delta,
-        ) -> Result<(), Box<dyn Error>>
+        ) -> Result<(), ContractError>
         where
             Child: ComposableContract,
             <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
@@ -205,9 +313,12 @@ mod children {
     use std::error::Error;
 
     use freenet_stdlib::{composers::*, prelude::*};
+    use serde::{Deserialize, Serialize};
 
+    #[derive(Serialize, Deserialize)]
     pub struct ChildContract {}
 
+    #[derive(Serialize, Deserialize)]
     pub struct ChildContractParams;
     impl ComposableParameters for ChildContractParams {
         fn contract_id(&self) -> Option<ContractInstanceId> {
@@ -215,8 +326,10 @@ mod children {
         }
     }
 
+    #[derive(Serialize, Deserialize)]
     pub struct ChildContractSummary;
 
+    #[derive(Serialize, Deserialize)]
     pub struct ChildContractDelta;
 
     pub struct PubKey;
@@ -232,14 +345,14 @@ mod children {
             parameters: &Self::Parameters,
             context: &Ctx,
             related: &RelatedContractsContainer,
-        ) -> Result<(), Box<dyn std::error::Error>>
+        ) -> Result<ValidateResult, ContractError>
         where
             Child: ComposableContract,
             <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
             Self::Context: for<'x> From<&'x Ctx>,
         {
             let pub_key = PubKey::from(context);
-            Ok(())
+            Ok(ValidateResult::Valid)
         }
 
         fn verify_delta<Child, Ctx>(
@@ -247,7 +360,7 @@ mod children {
             parameters: &Self::Parameters,
             context: &Ctx,
             delta: &Self::Delta,
-        ) -> Result<(), Box<dyn Error>>
+        ) -> Result<(), ContractError>
         where
             Child: ComposableContract,
             <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,

@@ -1,6 +1,8 @@
 use std::error::Error;
 
-use crate::contract_interface::{ContractInstanceId, State};
+use crate::contract_interface::{
+    ContractError, ContractInstanceId, RelatedContracts, State, ValidateResult,
+};
 
 impl<'a> From<&'a State<'static>> for State<'static> {
     fn from(value: &'a State<'static>) -> Self {
@@ -24,7 +26,7 @@ pub trait ComposableContract: std::any::Any {
         parameters: &Self::Parameters,
         context: &Ctx,
         related: &RelatedContractsContainer,
-    ) -> Result<(), Box<dyn Error>>
+    ) -> Result<ValidateResult, ContractError>
     where
         Child: ComposableContract,
         <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
@@ -36,7 +38,7 @@ pub trait ComposableContract: std::any::Any {
         parameters: &Self::Parameters,
         context: &Ctx,
         delta: &Self::Delta,
-    ) -> Result<(), Box<dyn Error>>
+    ) -> Result<(), ContractError>
     where
         Child: ComposableContract,
         <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
@@ -89,13 +91,13 @@ impl ComposableContract for NoChild {
         _parameters: &Self::Parameters,
         _context: &Ctx,
         _related: &RelatedContractsContainer,
-    ) -> Result<(), Box<dyn std::error::Error>>
+    ) -> Result<ValidateResult, ContractError>
     where
         Children: ComposableContract,
         <Children as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
         Self::Context: for<'x> From<&'x Ctx>,
     {
-        Ok(())
+        Ok(ValidateResult::Valid)
     }
 
     fn verify_delta<Children, Ctx>(
@@ -103,7 +105,7 @@ impl ComposableContract for NoChild {
         _parameters: &Self::Parameters,
         _context: &Ctx,
         _delta: &Self::Delta,
-    ) -> Result<(), Box<dyn Error>>
+    ) -> Result<(), ContractError>
     where
         Children: ComposableContract,
         <Children as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
@@ -164,6 +166,14 @@ impl<'x, T> From<&'x T> for NoChild {
     }
 }
 
+pub struct NoContext;
+
+impl<'x, T> From<&'x T> for NoContext {
+    fn from(_: &'x T) -> Self {
+        NoContext
+    }
+}
+
 pub enum Related<C: ComposableContract> {
     /// The state was previously requested and found
     Found { state: C },
@@ -184,6 +194,12 @@ pub enum MergeResult {
 
 #[derive(Default)]
 pub struct RelatedContractsContainer {}
+
+impl From<RelatedContracts<'static>> for RelatedContractsContainer {
+    fn from(_value: RelatedContracts<'static>) -> Self {
+        todo!()
+    }
+}
 
 impl RelatedContractsContainer {
     pub fn get<C: ComposableContract>(&self, _id: &ContractInstanceId) -> Related<C> {
