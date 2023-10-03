@@ -1,6 +1,6 @@
 //! Standard library provided by the Freenet project to be able to write Locutus-compatible contracts.
 mod code_hash;
-mod composers;
+pub mod composers;
 mod contract_interface;
 mod delegate_interface;
 pub(crate) mod global;

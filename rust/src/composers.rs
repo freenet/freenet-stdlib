@@ -1,89 +1,162 @@
 use std::error::Error;
 
-use crate::contract_interface::{ContractInstanceId, StateDelta, StateSummary};
-use crate::parameters::Parameters;
+use crate::contract_interface::{ContractInstanceId, State};
 
-pub trait Encoding
-where
-    Self: Sized,
-{
-    fn from_bytes(bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
-        unimplemented!()
-    }
-
-    fn into_bytes(self) -> Result<Vec<u8>, Box<dyn Error>> {
-        unimplemented!()
+impl<'a> From<&'a State<'static>> for State<'static> {
+    fn from(value: &'a State<'static>) -> Self {
+        value.clone()
     }
 }
 
-pub trait ComposableParameters: Encoding {
-    fn contract_id(&self) -> ContractInstanceId {
-        unimplemented!()
-    }
+pub trait ComposableParameters {
+    fn contract_id(&self) -> Option<ContractInstanceId>;
 }
 
-pub trait Syncable: Encoding + std::any::Any {
-    // type Context: Syncable;
+pub trait ComposableContract: std::any::Any {
+    type Context;
     type Parameters: ComposableParameters;
-    type Summary: Encoding;
-    type Delta: Encoding;
+    type Delta;
+    type Summary;
 
-    /// corresponds to ContractInterface `validate_state`
-    fn verify(
+    /// Corresponds to ContractInterface `validate_state`
+    fn verify<Child, Ctx>(
         &self,
         parameters: &Self::Parameters,
-        // context: &Self::Context,
+        context: &Ctx,
         related: &RelatedContractsContainer,
-    ) -> Result<(), Box<dyn Error>> {
-        unimplemented!()
-    }
+    ) -> Result<(), Box<dyn Error>>
+    where
+        Child: ComposableContract,
+        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+        Self::Context: for<'x> From<&'x Ctx>;
 
-    /// corresponds to ContractInterface `validate_delta`
-    fn verify_delta(
+    /// Corresponds to ContractInterface `validate_delta`
+    fn verify_delta<Child, Ctx>(
         &self,
         parameters: &Self::Parameters,
+        context: &Ctx,
         delta: &Self::Delta,
-    ) -> Result<(), Box<dyn Error>> {
-        unimplemented!()
-    }
+    ) -> Result<(), Box<dyn Error>>
+    where
+        Child: ComposableContract,
+        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+        <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
+        Self::Context: for<'x> From<&'x Ctx>;
 
-    /// corresponds to ContractInterface `update_state`.
-    fn merge(
+    /// Corresponds to ContractInterface `update_state`
+    fn merge<Child>(
         &mut self,
-        parameters: &Self::Parameters,
-        // context: &Self::Context,
-        delta: &Self::Delta,
-        related: &RelatedContractsContainer,
-    ) -> MergeResult {
-        unimplemented!()
-    }
+        _parameters: &Self::Parameters,
+        _delta: &Self::Delta,
+        _related: &RelatedContractsContainer,
+    ) -> MergeResult
+    where
+        Child: ComposableContract,
+        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+        <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>;
 
-    /// corresponds to ContractInterface `summarize`
-    fn summarize(&self, params: &Self::Parameters) -> Result<Self::Summary, Box<dyn Error>> {
-        unimplemented!()
-    }
-
-    /// corresponds to ContractInterface `delta`
-    fn delta(
+    /// Corresponds to ContractInterface `summarize`
+    fn summarize<Child>(
         &self,
-        params: &Self::Parameters,
-        summary: &Self::Summary,
-    ) -> Result<Self::Delta, Box<dyn Error>> {
+        _parameters: Self::Parameters,
+    ) -> Result<Self::Summary, Box<dyn Error>>
+    where
+        Child: ComposableContract,
+        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+        <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
+    {
+        unimplemented!()
+    }
+
+    /// Corresponds to ContractInterface `delta`
+    fn delta<Child>(
+        &self,
+        _parameters: &Self::Parameters,
+        _summary: &Self::Summary,
+    ) -> Result<Self::Delta, Box<dyn Error>>
+    where
+        Child: ComposableContract,
+        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+        <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
+    {
         unimplemented!()
     }
 }
 
-// todo: including the parameters here doesn't serve any pourpouse
-pub enum Related<C: Syncable> {
+pub struct NoChild;
+
+impl ComposableContract for NoChild {
+    type Parameters = NoChild;
+    type Context = NoChild;
+    type Delta = NoChild;
+    type Summary = NoChild;
+
+    fn verify<Children, Ctx>(
+        &self,
+        _parameters: &Self::Parameters,
+        _context: &Ctx,
+        _related: &RelatedContractsContainer,
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        Children: ComposableContract,
+        <Children as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+        Self::Context: for<'x> From<&'x Ctx>,
+    {
+        Ok(())
+    }
+
+    fn verify_delta<Children, Ctx>(
+        &self,
+        _parameters: &Self::Parameters,
+        _context: &Ctx,
+        _delta: &Self::Delta,
+    ) -> Result<(), Box<dyn Error>>
+    where
+        Children: ComposableContract,
+        <Children as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+        <Children as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
+        Self::Context: for<'x> From<&'x Ctx>,
+    {
+        Ok(())
+    }
+
+    fn merge<Child>(
+        &mut self,
+        _parameters: &Self::Parameters,
+        _delta: &Self::Delta,
+        _related: &RelatedContractsContainer,
+    ) -> MergeResult
+    where
+        Child: ComposableContract,
+        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+        <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
+    {
+        MergeResult::Success
+    }
+}
+
+impl ComposableParameters for NoChild {
+    fn contract_id(&self) -> Option<ContractInstanceId> {
+        None
+    }
+}
+
+impl<'x, T> From<&'x T> for NoChild {
+    fn from(_: &'x T) -> Self {
+        NoChild
+    }
+}
+
+pub enum Related<C: ComposableContract> {
     /// The state was previously requested and found
-    Found { parameters: C::Parameters, state: C },
+    Found { state: C },
     /// The state was previously requested but not found
-    NotFound { parameters: C::Parameters },
+    NotFound,
     /// The state was previously requested but request is still in flight
-    RequestPending { parameters: C::Parameters },
+    RequestPending,
     /// The state was not previously requested, this enum can be included
     /// in the MergeResult return value which will request it
-    NotRequested { parameters: C::Parameters },
+    NotRequested,
 }
 
 pub enum MergeResult {
@@ -96,153 +169,15 @@ pub enum MergeResult {
 pub struct RelatedContractsContainer {}
 
 impl RelatedContractsContainer {
-    pub fn get<C: Syncable>(&self, id: &ContractInstanceId) -> Related<C> {
+    pub fn get<C: ComposableContract>(&self, _id: &ContractInstanceId) -> Related<C> {
         todo!()
     }
 
-    pub fn request<C: Syncable>(&mut self, request: ContractInstanceId) {
+    pub fn request<C: ComposableContract>(&mut self, _request: ContractInstanceId) {
         todo!()
     }
 
-    pub fn merge(&mut self, other: Self) {
+    pub fn merge(&mut self, _other: Self) {
         todo!()
     }
-}
-
-mod example {
-    use super::*;
-
-    struct ContractA {
-        contract_b_0: ContractB,
-        contract_b_1: ContractB,
-    }
-    impl Encoding for ContractA {}
-
-    struct ContractAParams {
-        contract_b_0_params: ContractBParams,
-        contract_b_1_params: ContractBParams,
-    }
-    impl Encoding for ContractAParams {}
-    impl ComposableParameters for ContractAParams {}
-
-    struct ContractASummary;
-    impl Encoding for ContractASummary {}
-
-    struct ContractADelta {
-        contract_b_0: ContractBDelta,
-        contract_b_1: ContractBDelta,
-    }
-    impl Encoding for ContractADelta {}
-
-    // todo: this would be derived
-    impl Syncable for ContractA {
-        // type Context = Self;
-        type Parameters = ContractAParams;
-        type Summary = ContractASummary;
-        type Delta = ContractADelta;
-
-        fn merge(
-            &mut self,
-            parameters: &Self::Parameters,
-            delta: &Self::Delta,
-            related: &RelatedContractsContainer,
-        ) -> MergeResult {
-            {
-                let contract_b_0_id = parameters.contract_b_0_params.contract_id();
-                let Related::Found {
-                    state: mut contract_b,
-                    ..
-                } = related.get::<ContractB>(&contract_b_0_id)
-                else {
-                    let mut req = RelatedContractsContainer::default();
-                    req.request::<ContractB>(contract_b_0_id);
-                    return MergeResult::RequestRelated(req);
-                };
-                contract_b.merge(
-                    &parameters.contract_b_0_params,
-                    &delta.contract_b_0,
-                    related,
-                );
-            }
-            {
-                let contract_b_1_id = parameters.contract_b_0_params.contract_id();
-                let Related::Found {
-                    state: mut contract_b,
-                    ..
-                } = related.get::<ContractB>(&contract_b_1_id)
-                else {
-                    let mut req = RelatedContractsContainer::default();
-                    req.request::<ContractB>(contract_b_1_id);
-                    return MergeResult::RequestRelated(req);
-                };
-                contract_b.merge(
-                    &parameters.contract_b_1_params,
-                    &delta.contract_b_1,
-                    related,
-                );
-            }
-            MergeResult::Success
-        }
-
-        fn verify(
-            &self,
-            parameters: &Self::Parameters,
-            related: &RelatedContractsContainer,
-        ) -> Result<(), Box<dyn Error>> {
-            {
-                self.contract_b_0
-                    .verify(&parameters.contract_b_0_params, related)?;
-            }
-            {
-                self.contract_b_1
-                    .verify(&parameters.contract_b_1_params, related)?;
-            }
-            Ok(())
-        }
-    }
-
-    struct ContractB {}
-    impl Encoding for ContractB {}
-
-    struct ContractBParams;
-    impl Encoding for ContractBParams {}
-    impl ComposableParameters for ContractBParams {}
-
-    struct ContractBSummary;
-    impl Encoding for ContractBSummary {}
-
-    struct ContractBDelta;
-    impl Encoding for ContractBDelta {}
-
-    impl Syncable for ContractB {
-        // type Context = ContractA;
-        type Parameters = ContractBParams;
-        type Summary = ContractBSummary;
-        type Delta = ContractBDelta;
-    }
-}
-
-mod default_impls {
-    use super::*;
-    use crate::contract_interface::State;
-
-    impl Syncable for State<'static> {
-        type Parameters = Parameters<'static>;
-        type Summary = StateSummary<'static>;
-        type Delta = StateDelta<'static>;
-    }
-
-    impl Encoding for State<'static> {
-        fn from_bytes(bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
-            Ok(State::from(bytes).into_owned())
-        }
-
-        fn into_bytes(self) -> Result<Vec<u8>, Box<dyn Error>> {
-            Ok(self.into_bytes())
-        }
-    }
-    impl<'a> Encoding for Parameters<'a> {}
-    impl<'a> ComposableParameters for Parameters<'a> {}
-    impl Encoding for StateSummary<'static> {}
-    impl Encoding for StateDelta<'static> {}
 }
