@@ -58,29 +58,22 @@ pub trait ComposableContract: std::any::Any {
     /// Corresponds to ContractInterface `summarize`
     fn summarize<Child>(
         &self,
-        _parameters: Self::Parameters,
+        parameters: &Self::Parameters,
     ) -> Result<Self::Summary, Box<dyn Error>>
     where
         Child: ComposableContract,
-        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-        <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
-    {
-        unimplemented!()
-    }
+        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>;
 
     /// Corresponds to ContractInterface `delta`
     fn delta<Child>(
         &self,
-        _parameters: &Self::Parameters,
-        _summary: &Self::Summary,
+        parameters: &Self::Parameters,
+        summary: &Self::Summary,
     ) -> Result<Self::Delta, Box<dyn Error>>
     where
         Child: ComposableContract,
         <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-        <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
-    {
-        unimplemented!()
-    }
+        <Child as ComposableContract>::Summary: for<'x> From<&'x Self::Summary>;
 }
 
 pub struct NoChild;
@@ -132,6 +125,30 @@ impl ComposableContract for NoChild {
         <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
     {
         MergeResult::Success
+    }
+
+    fn delta<Child>(
+        &self,
+        _parameters: &Self::Parameters,
+        _summary: &Self::Summary,
+    ) -> Result<Self::Delta, Box<dyn Error>>
+    where
+        Child: ComposableContract,
+        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+        <Child as ComposableContract>::Summary: for<'x> From<&'x Self::Summary>,
+    {
+        Ok(NoChild)
+    }
+
+    fn summarize<Child>(
+        &self,
+        _parameters: &Self::Parameters,
+    ) -> Result<Self::Summary, Box<dyn Error>>
+    where
+        Child: ComposableContract,
+        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+    {
+        Ok(NoChild)
     }
 }
 
