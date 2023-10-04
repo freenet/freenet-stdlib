@@ -274,6 +274,12 @@ impl UpdateData<'_> {
             },
         }
     }
+
+    pub(crate) fn get_self_states<'a>(
+        _updates: &[UpdateData<'a>],
+    ) -> Vec<(Option<State<'a>>, Option<StateDelta<'a>>)> {
+        todo!()
+    }
 }
 
 impl<'a> From<StateDelta<'a>> for UpdateData<'a> {
@@ -1572,11 +1578,12 @@ pub(crate) mod serialization {
 
     use super::*;
 
-    pub trait SerializationAdapter {
+    /// A contract state and it's associated types which can be encoded and decoded
+    /// via an specific encoder.
+    pub trait SerializationAdapter: Encoder {
         type Parameters: Encoder;
-        type State: Encoder;
-        type StateDelta: Encoder;
-        type StateSummary: Encoder;
+        type Delta: Encoder;
+        type Summary: Encoder;
     }
 
     pub trait Encoder

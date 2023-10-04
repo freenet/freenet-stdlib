@@ -18,9 +18,8 @@ mod parent {
         // todo: have a macro that can be snapped on top of `ComposableContract` that generates this?
         impl SerializationAdapter for ParentContract {
             type Parameters = ParentContractParams;
-            type State = ParentContract;
-            type StateDelta = ParentContractDelta;
-            type StateSummary = ParentContractSummary;
+            type Delta = ParentContractDelta;
+            type Summary = ParentContractSummary;
         }
 
         // todo: have an other macro that can be snapped on top of `impl SerializationAdapter`
@@ -38,6 +37,7 @@ mod parent {
             )
         }
 
+        // todo: if we create a macro we could take parent Child and Context as a macro attribute param
         impl ContractInterface for ParentContract {
             fn validate_state(
                 parameters: freenet_stdlib::prelude::Parameters<'static>,
@@ -47,33 +47,21 @@ mod parent {
                 freenet_stdlib::prelude::ValidateResult,
                 freenet_stdlib::prelude::ContractError,
             > {
-                let typed_params =
-                    <<Self as SerializationAdapter>::Parameters as Encoder>::deserialize(
-                        parameters.as_ref(),
-                    )?;
-                let typed_state = <<Self as SerializationAdapter>::State as Encoder>::deserialize(
-                    state.as_ref(),
-                )?;
-                let related_container = RelatedContractsContainer::from(related);
-                match typed_state.verify::<NoChild, NoContext>(
-                    &typed_params,
-                    &NoContext,
-                    &related_container,
-                )? {
-                    ValidateResult::Valid => {}
-                    ValidateResult::Invalid => return Ok(ValidateResult::Invalid),
-                    ValidateResult::RequestRelated(related) => {
-                        return Ok(ValidateResult::RequestRelated(related))
-                    }
-                }
-                Ok(ValidateResult::Valid)
+                freenet_stdlib::composers::from_bytes::inner_validate_state::<
+                    ParentContract,
+                    ChildContract,
+                    NoContext,
+                >(parameters, state, related)
             }
 
             fn validate_delta(
                 parameters: freenet_stdlib::prelude::Parameters<'static>,
                 delta: freenet_stdlib::prelude::StateDelta<'static>,
             ) -> Result<bool, freenet_stdlib::prelude::ContractError> {
-                todo!()
+                freenet_stdlib::composers::from_bytes::inner_validate_delta::<
+                    ParentContract,
+                    ChildContract,
+                >(parameters, delta)
             }
 
             fn update_state(
@@ -84,7 +72,10 @@ mod parent {
                 freenet_stdlib::prelude::UpdateModification<'static>,
                 freenet_stdlib::prelude::ContractError,
             > {
-                todo!()
+                freenet_stdlib::composers::from_bytes::inner_update_state::<
+                    ParentContract,
+                    ChildContract,
+                >(parameters, state, data)
             }
 
             fn summarize_state(
@@ -94,7 +85,10 @@ mod parent {
                 freenet_stdlib::prelude::StateSummary<'static>,
                 freenet_stdlib::prelude::ContractError,
             > {
-                todo!()
+                freenet_stdlib::composers::from_bytes::inner_summarize_state::<
+                    ParentContract,
+                    ChildContract,
+                >(parameters, state)
             }
 
             fn get_state_delta(
@@ -105,7 +99,10 @@ mod parent {
                 freenet_stdlib::prelude::StateDelta<'static>,
                 freenet_stdlib::prelude::ContractError,
             > {
-                todo!()
+                freenet_stdlib::composers::from_bytes::inner_state_delta::<
+                    ParentContract,
+                    ChildContract,
+                >(parameters, state, summary)
             }
         }
     }
@@ -208,31 +205,26 @@ mod parent {
             Ok(ValidateResult::Valid)
         }
 
-        fn verify_delta<Child, Ctx>(
-            &self,
+        fn verify_delta<Child>(
             parameters: &Self::Parameters,
-            context: &Ctx,
             delta: &Self::Delta,
-        ) -> Result<(), ContractError>
+        ) -> Result<bool, ContractError>
         where
             Child: ComposableContract,
             <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
             <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
-            Self::Context: for<'x> From<&'x Ctx>,
         {
-            <ChildContract as ComposableContract>::verify_delta::<NoChild, Self>(
-                &self.contract_b_0,
+            <ChildContract as ComposableContract>::verify_delta::<NoChild>(
                 &parameters.into(),
-                self,
                 &delta.into(),
             )?;
-            Ok(())
+            Ok(true)
         }
 
         fn merge<Child>(
             &mut self,
             parameters: &Self::Parameters,
-            delta: &Self::Delta,
+            update_data: &TypedUpdateData<Self>,
             related: &RelatedContractsContainer,
         ) -> MergeResult
         where
@@ -241,20 +233,22 @@ mod parent {
             <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
         {
             {
-                match self
-                    .contract_b_0
-                    .merge::<NoChild>(&parameters.into(), &delta.into(), related)
-                {
+                match self.contract_b_0.merge::<NoChild>(
+                    &parameters.into(),
+                    &TypedUpdateData::from_other(update_data),
+                    related,
+                ) {
                     MergeResult::Success => {}
                     MergeResult::RequestRelated(req) => return MergeResult::RequestRelated(req),
                     MergeResult::Error(e) => return MergeResult::Error(e),
                 }
             }
             {
-                match self
-                    .contract_b_1
-                    .merge::<NoChild>(&parameters.into(), &delta.into(), related)
-                {
+                match self.contract_b_1.merge::<NoChild>(
+                    &parameters.into(),
+                    &TypedUpdateData::from_other(update_data),
+                    related,
+                ) {
                     MergeResult::Success => {}
                     MergeResult::RequestRelated(req) => return MergeResult::RequestRelated(req),
                     MergeResult::Error(e) => return MergeResult::Error(e),
@@ -267,7 +261,7 @@ mod parent {
             &self,
             parameters: &Self::Parameters,
             summary: &Self::Summary,
-        ) -> Result<Self::Delta, Box<dyn Error>>
+        ) -> Result<Self::Delta, ContractError>
         where
             Child: ComposableContract,
             <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
@@ -288,7 +282,7 @@ mod parent {
         fn summarize<Child>(
             &self,
             parameters: &Self::Parameters,
-        ) -> Result<Self::Summary, Box<dyn Error>>
+        ) -> Result<Self::Summary, ContractError>
         where
             Child: ComposableContract,
             <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
@@ -318,7 +312,7 @@ mod children {
     #[derive(Serialize, Deserialize)]
     pub struct ChildContract {}
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct ChildContractParams;
     impl ComposableParameters for ChildContractParams {
         fn contract_id(&self) -> Option<ContractInstanceId> {
@@ -333,6 +327,12 @@ mod children {
     pub struct ChildContractDelta;
 
     pub struct PubKey;
+
+    impl From<ChildContractParams> for PubKey {
+        fn from(value: ChildContractParams) -> Self {
+            PubKey
+        }
+    }
 
     impl ComposableContract for ChildContract {
         type Context = PubKey;
@@ -355,26 +355,23 @@ mod children {
             Ok(ValidateResult::Valid)
         }
 
-        fn verify_delta<Child, Ctx>(
-            &self,
+        fn verify_delta<Child>(
             parameters: &Self::Parameters,
-            context: &Ctx,
             delta: &Self::Delta,
-        ) -> Result<(), ContractError>
+        ) -> Result<bool, ContractError>
         where
             Child: ComposableContract,
             <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
             <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
-            Self::Context: for<'x> From<&'x Ctx>,
         {
-            let pub_key = PubKey::from(context);
-            Ok(())
+            let pub_key = PubKey::from(parameters.clone());
+            Ok(true)
         }
 
         fn merge<Child>(
             &mut self,
             parameters: &Self::Parameters,
-            _delta: &Self::Delta,
+            _delta: &TypedUpdateData<Self>,
             related: &RelatedContractsContainer,
         ) -> MergeResult
         where
@@ -399,7 +396,7 @@ mod children {
             &self,
             _parameters: &Self::Parameters,
             _summary: &Self::Summary,
-        ) -> Result<Self::Delta, Box<dyn Error>>
+        ) -> Result<Self::Delta, ContractError>
         where
             Child: ComposableContract,
             <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
@@ -411,7 +408,7 @@ mod children {
         fn summarize<Child>(
             &self,
             _parameters: &Self::Parameters,
-        ) -> Result<Self::Summary, Box<dyn Error>>
+        ) -> Result<Self::Summary, ContractError>
         where
             Child: ComposableContract,
             <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
