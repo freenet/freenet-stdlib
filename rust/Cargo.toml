@@ -66,6 +66,7 @@ rand = { version = "0.8", features = ["small_rng"] }
 [features]
 default = []
 contract = []
+freenet-main-contract = []
 net = ["dep:tokio", "dep:tokio-tungstenite", "dep:wasm-bindgen", "dep:web-sys", "dep:js-sys", "dep:serde-wasm-bindgen"]
 testing = ["arbitrary"]
 trace = []

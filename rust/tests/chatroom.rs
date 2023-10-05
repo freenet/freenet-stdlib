@@ -129,5 +129,3 @@ mod example_2 {
     }
 }
 */
-
-fn main() {}

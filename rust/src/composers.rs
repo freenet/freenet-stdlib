@@ -12,6 +12,10 @@ pub trait ComposableParameters {
     fn contract_id(&self) -> Option<ContractInstanceId>;
 }
 
+pub trait ComposableSummary<ChildSummary> {
+    fn merge(&mut self, _child_summary: ChildSummary);
+}
+
 pub trait ComposableContract: std::any::Any + Sized {
     type Context;
     type Parameters: ComposableParameters;
@@ -27,7 +31,6 @@ pub trait ComposableContract: std::any::Any + Sized {
     ) -> Result<ValidateResult, ContractError>
     where
         Child: ComposableContract,
-        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
         Self::Context: for<'x> From<&'x Ctx>;
 
     /// Corresponds to ContractInterface `validate_delta`
@@ -36,44 +39,32 @@ pub trait ComposableContract: std::any::Any + Sized {
         delta: &Self::Delta,
     ) -> Result<bool, ContractError>
     where
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-        <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>;
+        Child: ComposableContract;
 
     /// Corresponds to ContractInterface `update_state`
-    fn merge<Child>(
+    fn merge(
         &mut self,
         _parameters: &Self::Parameters,
         _delta: &TypedUpdateData<Self>,
         _related: &RelatedContractsContainer,
-    ) -> MergeResult
-    where
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-        <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>;
+    ) -> MergeResult;
 
     /// Corresponds to ContractInterface `summarize`
-    fn summarize<Child>(
+    fn summarize<ParentSummary>(
         &self,
         parameters: &Self::Parameters,
-    ) -> Result<Self::Summary, ContractError>
+        summary: &mut ParentSummary,
+    ) -> Result<(), ContractError>
     where
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>;
+        ParentSummary: ComposableSummary<<Self as ComposableContract>::Summary>;
 
     /// Corresponds to ContractInterface `delta`
-    fn delta<Child>(
+    fn delta(
         &self,
         parameters: &Self::Parameters,
         summary: &Self::Summary,
-    ) -> Result<Self::Delta, ContractError>
-    where
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-        <Child as ComposableContract>::Summary: for<'x> From<&'x Self::Summary>;
+    ) -> Result<Self::Delta, ContractError>;
 }
-
-pub struct NoChild;
 
 pub enum TypedUpdateData<T: ComposableContract> {
     RelatedState { state: T },
@@ -98,88 +89,79 @@ impl<T: ComposableContract> From<(Option<T>, Option<T::Delta>)> for TypedUpdateD
     }
 }
 
-impl ComposableContract for NoChild {
-    type Parameters = NoChild;
-    type Context = NoChild;
-    type Delta = NoChild;
-    type Summary = NoChild;
+// pub struct NoChild;
 
-    fn verify<Children, Ctx>(
-        &self,
-        _parameters: &Self::Parameters,
-        _context: &Ctx,
-        _related: &RelatedContractsContainer,
-    ) -> Result<ValidateResult, ContractError>
-    where
-        Children: ComposableContract,
-        <Children as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-        Self::Context: for<'x> From<&'x Ctx>,
-    {
-        Ok(ValidateResult::Valid)
-    }
+// impl ComposableContract for NoChild {
+//     type Parameters = NoChild;
+//     type Context = NoChild;
+//     type Delta = NoChild;
+//     type Summary = NoChild;
 
-    fn verify_delta<Children>(
-        _parameters: &Self::Parameters,
-        _delta: &Self::Delta,
-    ) -> Result<bool, ContractError>
-    where
-        Children: ComposableContract,
-        <Children as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-        <Children as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
-    {
-        Ok(true)
-    }
+//     fn verify<Children, Ctx>(
+//         &self,
+//         _parameters: &Self::Parameters,
+//         _context: &Ctx,
+//         _related: &RelatedContractsContainer,
+//     ) -> Result<ValidateResult, ContractError>
+//     where
+//         Children: ComposableContract,
+//         // <Children as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+//         Self::Context: for<'x> From<&'x Ctx>,
+//     {
+//         Ok(ValidateResult::Valid)
+//     }
 
-    fn merge<Child>(
-        &mut self,
-        _parameters: &Self::Parameters,
-        _delta: &TypedUpdateData<Self>,
-        _related: &RelatedContractsContainer,
-    ) -> MergeResult
-    where
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-        <Child as ComposableContract>::Delta: for<'x> From<&'x Self::Delta>,
-    {
-        MergeResult::Success
-    }
+//     fn verify_delta<Children>(
+//         _parameters: &Self::Parameters,
+//         _delta: &Self::Delta,
+//     ) -> Result<bool, ContractError>
+//     where
+//         Children: ComposableContract,
+//     {
+//         Ok(true)
+//     }
 
-    fn delta<Child>(
-        &self,
-        _parameters: &Self::Parameters,
-        _summary: &Self::Summary,
-    ) -> Result<Self::Delta, ContractError>
-    where
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-        <Child as ComposableContract>::Summary: for<'x> From<&'x Self::Summary>,
-    {
-        Ok(NoChild)
-    }
+//     fn merge(
+//         &mut self,
+//         _parameters: &Self::Parameters,
+//         _delta: &TypedUpdateData<Self>,
+//         _related: &RelatedContractsContainer,
+//     ) -> MergeResult {
+//         MergeResult::Success
+//     }
 
-    fn summarize<Child>(
-        &self,
-        _parameters: &Self::Parameters,
-    ) -> Result<Self::Summary, ContractError>
-    where
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-    {
-        Ok(NoChild)
-    }
-}
+//     fn delta(
+//         &self,
+//         _parameters: &Self::Parameters,
+//         _summary: &Self::Summary,
+//     ) -> Result<Self::Delta, ContractError> {
+//         Ok(NoChild)
+//     }
 
-impl ComposableParameters for NoChild {
-    fn contract_id(&self) -> Option<ContractInstanceId> {
-        None
-    }
-}
+//     fn summarize<ParentSummary>(
+//         &self,
+//         _parameters: &Self::Parameters,
+//         _summary: &mut ParentSummary,
+//     ) -> Result<(), ContractError>
+//     where
+//         // <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
+//         ParentSummary: ComposableSummary<<Self as ComposableContract>::Summary>,
+//     {
+//         Ok(())
+//     }
+// }
 
-impl<'x, T> From<&'x T> for NoChild {
-    fn from(_: &'x T) -> Self {
-        NoChild
-    }
-}
+// impl ComposableParameters for NoChild {
+//     fn contract_id(&self) -> Option<ContractInstanceId> {
+//         None
+//     }
+// }
+
+// impl<'x, T> From<&'x T> for NoChild {
+//     fn from(_: &'x T) -> Self {
+//         NoChild
+//     }
+// }
 
 pub struct NoContext;
 
@@ -339,7 +321,7 @@ pub mod from_bytes {
         let related_container = RelatedContractsContainer::from(data);
         for (state, delta) in self_updates {
             let state = state
-                .map(|s| <T as Encoder>::deserialize(s.as_ref()).map(Into::into))
+                .map(|s| <T as Encoder>::deserialize(s.as_ref()))
                 .transpose()?;
             let delta = delta
                 .map(|d| {
@@ -348,10 +330,10 @@ pub mod from_bytes {
                 })
                 .transpose()?;
             let typed_update = TypedUpdateData::from((state, delta));
-            match typed_state.merge::<Child>(&typed_params, &typed_update, &related_container) {
+            match typed_state.merge(&typed_params, &typed_update, &related_container) {
                 MergeResult::Success => {}
                 MergeResult::RequestRelated(req) => {
-                    return Ok(UpdateModification::requires(req.into()))
+                    return UpdateModification::requires(req.into());
                 }
                 MergeResult::Error(err) => return Err(err),
             }
@@ -360,49 +342,47 @@ pub mod from_bytes {
         Ok(UpdateModification::valid(encoded.into()))
     }
 
-    pub fn inner_summarize_state<T, Child>(
+    pub fn inner_summarize_state<T>(
         parameters: Parameters<'static>,
         state: State<'static>,
-    ) -> Result<StateSummary<'static>, ContractError>
+    ) -> Result<<T as ComposableContract>::Summary, ContractError>
     where
         T: ComposableContract + SerializationAdapter,
         <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
-        <T as SerializationAdapter>::Summary: From<<T as ComposableContract>::Summary>,
+        <T as ComposableContract>::Summary:
+            for<'x> From<&'x T> + ComposableSummary<<T as ComposableContract>::Summary>,
         ContractError: From<<<T as SerializationAdapter>::Parameters as Encoder>::Error>,
-        ContractError: From<<<T as SerializationAdapter>::Summary as Encoder>::Error>,
         ContractError: From<<T as Encoder>::Error>,
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters:
-            for<'x> From<&'x <T as ComposableContract>::Parameters>,
+        // Child: ComposableContract,
+        // <Child as ComposableContract>::Parameters:
+        //     for<'x> From<&'x <T as ComposableContract>::Parameters>,
     {
         let typed_params =
             <<T as SerializationAdapter>::Parameters as Encoder>::deserialize(parameters.as_ref())?
                 .into();
         let typed_state: T = <T as Encoder>::deserialize(state.as_ref())?;
-        let summary = typed_state.summarize::<Child>(&typed_params)?;
-        let encoded_summary = <T as SerializationAdapter>::Summary::from(summary).serialize()?;
-        Ok(encoded_summary.into())
+        let mut summary = <<T as ComposableContract>::Summary>::from(&typed_state);
+        typed_state.summarize(&typed_params, &mut summary)?;
+        Ok(summary)
     }
 
-    pub fn inner_state_delta<T, Child>(
+    pub fn inner_state_delta<T>(
         parameters: Parameters<'static>,
         state: State<'static>,
         summary: StateSummary<'static>,
-    ) -> Result<StateDelta<'static>, ContractError>
+    ) -> Result<<T as ComposableContract>::Delta, ContractError>
     where
         T: ComposableContract + SerializationAdapter,
         <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
         <T as SerializationAdapter>::Summary: Into<<T as ComposableContract>::Summary>,
-        <T as SerializationAdapter>::Delta: From<<T as ComposableContract>::Delta>,
         ContractError: From<<T as Encoder>::Error>,
         ContractError: From<<<T as SerializationAdapter>::Parameters as Encoder>::Error>,
         ContractError: From<<<T as SerializationAdapter>::Summary as Encoder>::Error>,
-        ContractError: From<<<T as SerializationAdapter>::Delta as Encoder>::Error>,
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters:
-            for<'x> From<&'x <T as ComposableContract>::Parameters>,
-        <Child as ComposableContract>::Summary:
-            for<'x> From<&'x <T as ComposableContract>::Summary>,
+        // Child: ComposableContract,
+        // <Child as ComposableContract>::Parameters:
+        //     for<'x> From<&'x <T as ComposableContract>::Parameters>,
+        // <Child as ComposableContract>::Summary:
+        //     for<'x> From<&'x <T as ComposableContract>::Summary>,
     {
         let typed_params =
             <<T as SerializationAdapter>::Parameters as Encoder>::deserialize(parameters.as_ref())?
@@ -411,8 +391,6 @@ pub mod from_bytes {
         let typed_summary =
             <<T as SerializationAdapter>::Summary as Encoder>::deserialize(summary.as_ref())?
                 .into();
-        let delta = typed_state.delta::<Child>(&typed_params, &typed_summary)?;
-        let encoded_delta = <T as SerializationAdapter>::Delta::from(delta).serialize()?;
-        Ok(encoded_delta.into())
+        typed_state.delta(&typed_params, &typed_summary)
     }
 }
