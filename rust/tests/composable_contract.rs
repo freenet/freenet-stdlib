@@ -10,27 +10,6 @@ mod parent {
 
     use freenet_stdlib::memory::wasm_interface::inner_validate_state;
 
-    // todo: code in this mod should be derived
-    mod low_level_ffi_impl {
-        use super::*;
-        use freenet_stdlib::prelude::ContractInterface;
-
-        // todo: have a macro that can be snapped on top of `ComposableContract` that generates this?
-        impl SerializationAdapter for ParentContract {
-            type Parameters = ParentContractParams;
-            type Delta = ParentContractDelta;
-            type Summary = ParentContractSummary;
-        }
-
-        // todo: have an other macro that can be snapped on top of `impl SerializationAdapter`
-        // that generated all of below, it can take a parameter (e.g. BincodeEncoder) to specify
-        // the encoder to use
-        impl BincodeEncoder for ParentContract {}
-        impl BincodeEncoder for ParentContractParams {}
-        impl BincodeEncoder for ParentContractDelta {}
-        impl BincodeEncoder for ParentContractSummary {}
-    }
-
     #[derive(Serialize, Deserialize)]
     pub struct ParentContract {
         contract_b_0: ChildContract,
@@ -92,7 +71,7 @@ mod parent {
         }
     }
 
-    #[contract(children(ChildContract, ChildContract))]
+    #[contract(children(ChildContract, ChildContract), encoder = BincodeEncoder)]
     // todo: this would be derived ideally
     impl ComposableContract for ParentContract {
         type Context = NoContext;

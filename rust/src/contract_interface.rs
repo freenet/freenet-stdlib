@@ -1614,6 +1614,22 @@ pub(crate) mod serialization {
         fn serialize(&self) -> Result<Vec<u8>, Self::Error>;
     }
 
+    pub trait JsonEncoder: Serialize + DeserializeOwned {
+        fn deserialize(_bytes: &[u8]) -> Result<Self, serde_json::Error> {
+            todo!()
+        }
+
+        fn serialize(&self) -> Result<Vec<u8>, serde_json::Error> {
+            todo!()
+        }
+    }
+
+    impl From<serde_json::Error> for ContractError {
+        fn from(value: serde_json::Error) -> Self {
+            ContractError::Deser(format!("{value}"))
+        }
+    }
+
     pub trait BincodeEncoder: Serialize + DeserializeOwned {
         fn deserialize(bytes: &[u8]) -> Result<Self, bincode::Error> {
             bincode::deserialize(bytes)
@@ -1642,4 +1658,17 @@ pub(crate) mod serialization {
             <C as BincodeEncoder>::serialize(self)
         }
     }
+
+    // impl<C> Encoder for C
+    // where
+    //     C: JsonEncoder,
+    // {
+    //     type Error = bincode::Error;
+    //     fn deserialize(bytes: &[u8]) -> Result<C, bincode::Error> {
+    //         <C as BincodeEncoder>::deserialize(bytes)
+    //     }
+    //     fn serialize(&self) -> Result<Vec<u8>, bincode::Error> {
+    //         <C as BincodeEncoder>::serialize(self)
+    //     }
+    // }
 }
