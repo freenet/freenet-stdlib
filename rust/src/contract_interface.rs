@@ -49,6 +49,7 @@ pub enum ContractError {
 }
 
 /// An update to a contract state or any required related contracts to update that state.
+// todo: this should be an enum probably
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateModification<'a> {
@@ -67,15 +68,6 @@ impl<'a> UpdateModification<'a> {
         }
     }
 
-    /// Constructor for self when this contract still is missing some [`RelatedContract`]
-    /// to proceed with any verification or updates.
-    pub fn requires(related: Vec<RelatedContract>) -> Self {
-        Self {
-            new_state: None,
-            related,
-        }
-    }
-
     /// Unwraps self returning a [`State`].
     ///
     /// Panics if self does not contain a state.
@@ -84,6 +76,22 @@ impl<'a> UpdateModification<'a> {
             Some(s) => s,
             _ => panic!("failed unwrapping state in modification"),
         }
+    }
+}
+
+impl UpdateModification<'_> {
+    /// Constructor for self when this contract still is missing some [`RelatedContract`]
+    /// to proceed with any verification or updates.
+    pub fn requires(related: Vec<RelatedContract>) -> Result<Self, ContractError> {
+        if related.is_empty() {
+            return Err(ContractError::InvalidUpdateWithInfo {
+                reason: "At least one related contract is required".into(),
+            });
+        }
+        Ok(Self {
+            new_state: None,
+            related,
+        })
     }
 
     /// Gets the pending related contracts.
@@ -95,10 +103,21 @@ impl<'a> UpdateModification<'a> {
     pub fn into_owned(self) -> UpdateModification<'static> {
         let Self { new_state, related } = self;
         UpdateModification {
-            new_state: new_state.map(|s| State::from(s.into_bytes())),
+            new_state: new_state.map(State::into_owned),
             related,
         }
     }
+
+    pub fn requires_dependencies(&self) -> bool {
+        !self.related.is_empty()
+    }
+
+    // pub fn empty() -> UpdateModification<'static> {
+    //     UpdateModification {
+    //         new_state: None,
+    //         related: vec![],
+    //     }
+    // }
 }
 
 /// The contracts related to a parent or root contract. Tipically this means
@@ -447,7 +466,7 @@ pub trait ContractInterface {
 /// A complete contract specification requires a `parameters` section
 /// and a `contract` section.
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct Contract<'a> {
     #[serde(borrow)]
     pub parameters: Parameters<'a>,
@@ -536,7 +555,7 @@ impl std::fmt::Display for Contract<'_> {
 /// For efficiency and flexibility, contract state is represented as a simple [u8] byte array.
 #[serde_as]
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct State<'a>(
     // TODO: conver this to Arc<[u8]> instead
     #[serde_as(as = "serde_with::Bytes")]
@@ -614,7 +633,7 @@ impl<'a> std::io::Read for State<'a> {
 /// Synchronization mechanism.
 #[serde_as]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct StateDelta<'a>(
     // TODO: conver this to Arc<[u8]> instead
     #[serde_as(as = "serde_with::Bytes")]
@@ -680,7 +699,7 @@ impl<'a> DerefMut for StateDelta<'a> {
 /// summary is determined by the state's contract.
 #[serde_as]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct StateSummary<'a>(
     // TODO: conver this to Arc<[u8]> instead
     #[serde_as(as = "serde_with::Bytes")]
@@ -745,7 +764,7 @@ impl<'a> DerefMut for StateSummary<'a> {
 /// and does not include any other metadata (like the parameters).
 #[serde_as]
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct ContractCode<'a> {
     // TODO: conver this to Arc<[u8]> instead
     #[serde_as(as = "serde_with::Bytes")]
@@ -870,7 +889,7 @@ impl std::fmt::Display for ContractCode<'_> {
 /// The key representing the hash of the contract executable code hash and a set of `parameters`.
 #[serde_as]
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 #[repr(transparent)]
 pub struct ContractInstanceId(#[serde_as(as = "[_; CONTRACT_KEY_SIZE]")] [u8; CONTRACT_KEY_SIZE]);
 
@@ -936,7 +955,7 @@ impl Display for ContractInstanceId {
 /// A complete key specification, that represents a cryptographic hash that identifies the contract.
 #[serde_as]
 #[derive(Debug, Eq, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct ContractKey {
     instance: ContractInstanceId,
     code: Option<CodeHash>,
@@ -1102,7 +1121,7 @@ fn internal_fmt_key(
 // TODO:  get rid of this when State is internally an Arc<[u8]>
 /// The state for a contract.
 #[derive(Debug, PartialEq, Eq, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct WrappedState(
     #[serde(
         serialize_with = "WrappedState::ser_state",
