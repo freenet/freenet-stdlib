@@ -1,8 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
-use syn::{spanned::Spanned, ItemImpl, Token, Type, TypePath};
+use syn::{spanned::Spanned, ImplItem, ItemImpl, MetaNameValue, Token, Type, TypePath};
 
-use crate::AttributeArgs;
+use crate::{AttributeArgs, ContractType};
 
 #[derive(Debug)]
 struct ChildrenPaths {
@@ -30,33 +30,104 @@ impl syn::parse::Parse for ChildrenPaths {
     }
 }
 
-pub(crate) fn composable_contract_ffi_impl(
+struct AsocTypes {
+    params: Type,
+    delta: Type,
+    summary: Type,
+}
+
+pub(crate) fn contract_ffi_impl(
     input: &ItemImpl,
     args: &AttributeArgs,
+    c_type: ContractType,
 ) -> proc_macro::TokenStream {
+    let attr_span = args.args.span();
     let type_name = match &*input.self_ty {
         Type::Path(p) => p.clone(),
         _ => panic!(),
     };
+    let mut impl_trait = ImplTrait {
+        type_name,
+        children: vec![],
+    };
+
+    match c_type {
+        ContractType::Raw => {
+            let ffi = impl_trait.gen_extern_functions();
+            return quote! {
+                #input
+                #ffi
+            }
+            .into();
+        }
+        ContractType::Composable => {}
+    }
+
+    #[derive(Default)]
+    struct AsocTypesParse {
+        params: Option<Type>,
+        delta: Option<Type>,
+        summary: Option<Type>,
+    }
+    let mut asoc_types_opt = AsocTypesParse::default();
+    for item in &input.items {
+        if let ImplItem::Type(asoc_type) = item {
+            match asoc_type.ident.to_string().as_str() {
+                "Parameters" => {
+                    asoc_types_opt.params = Some(asoc_type.ty.clone());
+                }
+                "Delta" => {
+                    asoc_types_opt.delta = Some(asoc_type.ty.clone());
+                }
+                "Summary" => {
+                    asoc_types_opt.summary = Some(asoc_type.ty.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let asoc_types = AsocTypes {
+        params: {
+            let Some(p) = asoc_types_opt.params else {
+                return quote_spanned! {
+                    attr_span =>
+                    compile_error!("missing Parameters associated type");
+                }
+                .into();
+            };
+            p
+        },
+        delta: {
+            let Some(p) = asoc_types_opt.delta else {
+                return quote_spanned! {
+                    attr_span =>
+                    compile_error!("missing Delta associated type");
+                }
+                .into();
+            };
+            p
+        },
+        summary: {
+            let Some(p) = asoc_types_opt.summary else {
+                return quote_spanned! {
+                    attr_span =>
+                    compile_error!("missing Summary associated type");
+                }
+                .into();
+            };
+            p
+        },
+    };
 
     let mut children: Vec<TypePath> = vec![];
-    let mut attr_span = args.args.span();
     let mut found_children = false;
+    let mut encoder = None;
+
     for m in args.args.iter() {
         match m {
-            syn::Meta::List(list) => {
-                if !list
-                    .path
-                    .get_ident()
-                    .map(|id| id == "children")
-                    .unwrap_or(false)
-                {
-                    return quote_spanned! {
-                        list.span() =>
-                        compile_error!("only a `children` list argument allowed");
-                    }
-                    .into();
-                } else {
+            syn::Meta::List(list) => match list.path.get_ident() {
+                Some(id) if id == "children" => {
                     if found_children {
                         return quote_spanned! {
                             list.span() =>
@@ -68,70 +139,119 @@ pub(crate) fn composable_contract_ffi_impl(
                     let tokens: proc_macro::TokenStream = list.tokens.clone().into();
                     let children_paths = syn::parse_macro_input!(tokens as ChildrenPaths);
                     children.extend(children_paths.paths);
-                    attr_span = list.span();
                 }
+                Some(other) => {
+                    return quote_spanned! {
+                        other.span() =>
+                        compile_error!("this argument list is not allowed, must be: `children`");
+                    }
+                    .into();
+                }
+                None => {
+                    return quote_spanned! {
+                        list.span() =>
+                        compile_error!("expected a list identifier");
+                    }
+                    .into();
+                }
+            },
+            syn::Meta::NameValue(MetaNameValue {
+                path,
+                value: syn::Expr::Path(type_path),
+                ..
+            }) if path.get_ident().map(|id| id == "encoder").unwrap_or(false) => {
+                if encoder.is_some() {
+                    return quote_spanned! {
+                        path.span() =>
+                        compile_error!("only one encoder protocol can be specified");
+                    }
+                    .into();
+                }
+                encoder = Some(&type_path.path);
             }
             other => {
                 return quote_spanned! {
                     other.span() =>
-                    compile_error!("only list arguments allowed");
+                    compile_error!("argument not allowed");
                 }
                 .into()
             }
         }
     }
 
-    if children.is_empty() {
+    impl_trait.children = children;
+
+    if encoder.is_none() {
+        return quote_spanned! {
+            attr_span =>
+            compile_error!("at least one encoder must be specified, possible protocols: BincodeEncoder");
+        }
+        .into();
+    }
+    let encoder = encoder.unwrap();
+
+    if !found_children {
+        todo!("impl encoder only")
+    } else if impl_trait.children.is_empty() {
         return quote_spanned! {
             attr_span =>
             compile_error!("at least one ComposableContract child is required");
         }
         .into();
+    } else {
+        let contract_iface = impl_trait.gen_contract_iface(encoder);
+        let ffi = impl_trait.gen_extern_functions();
+        let encoder_impl = impl_trait.encoder_impl(encoder, &asoc_types);
+        let serialization_adapter = impl_trait.gen_serialization_adapter(&asoc_types);
+        quote! {
+            #input
+            #contract_iface
+            #ffi
+            #encoder_impl
+            #serialization_adapter
+        }
+        .into()
     }
-
-    let s = ImplStruct {
-        type_name,
-        children,
-    };
-
-    let ffi = s.gen_extern_functions();
-    let contract_iface = s.gen_contract_iface();
-    quote! {
-        #input
-        #contract_iface
-        #ffi
-    }
-    .into()
 }
 
-pub(crate) fn raw_contract_ffi_impl(input: &ItemImpl) -> proc_macro::TokenStream {
-    let type_name = match &*input.self_ty {
-        Type::Path(p) => p.clone(),
-        _ => panic!(),
-    };
-    let s = ImplStruct {
-        type_name,
-        children: vec![],
-    };
-    let ffi = s.gen_extern_functions();
-    quote! {
-        #input
-        #ffi
-    }
-    .into()
-}
-
-struct ImplStruct {
+struct ImplTrait {
     type_name: TypePath,
     children: Vec<TypePath>,
 }
 
-impl ImplStruct {
+impl ImplTrait {
     fn ffi_ret_type(&self) -> TokenStream {
         quote!(i64)
     }
 
-    fn gen_contract_iface(&self) -> TokenStream {
+    fn gen_serialization_adapter(&self, asoc_types: &AsocTypes) -> TokenStream {
+        let type_name = &self.type_name;
+        let params = &asoc_types.params;
+        let delta = &asoc_types.delta;
+        let summary = &asoc_types.summary;
+        quote! {
+            impl ::freenet_stdlib::prelude::SerializationAdapter for #type_name {
+                type Parameters = #params;
+                type Delta = #delta;
+                type Summary = #summary;
+            }
+        }
+    }
+
+    fn encoder_impl(&self, encoder: &syn::Path, asoc_types: &AsocTypes) -> TokenStream {
+        let type_name = &self.type_name;
+        let params = &asoc_types.params;
+        let delta = &asoc_types.delta;
+        let summary = &asoc_types.summary;
+        quote! {
+            impl #encoder for #type_name {}
+            impl #encoder for #params {}
+            impl #encoder for #delta {}
+            impl #encoder for #summary {}
+        }
+    }
+
+    fn gen_contract_iface(&self, encoder: &syn::Path) -> TokenStream {
         let type_name = &self.type_name;
 
         let validate_state_impl = self.children.iter().map(|child| {
@@ -224,7 +344,7 @@ impl ImplStruct {
                         #type_name,
                     >(parameters.clone(), state.clone())?;
                     let serializable_summary = <#type_name as ::freenet_stdlib::prelude::SerializationAdapter>::Summary::from(summary);
-                    let encoded_summary = ::freenet_stdlib::prelude::Encoder::serialize(&serializable_summary)?;
+                    let encoded_summary = #encoder::serialize(&serializable_summary)?;
                     Ok(encoded_summary.into())
                 }
 
@@ -240,7 +360,7 @@ impl ImplStruct {
                         #type_name,
                     >(parameters.clone(), state.clone(), summary.clone())?;
                     let serializable_delta = <#type_name as SerializationAdapter>::Delta::from(delta);
-                    let encoded_delta = ::freenet_stdlib::prelude::Encoder::serialize(&serializable_delta)?;
+                    let encoded_delta = #encoder::serialize(&serializable_delta)?;
                     Ok(encoded_delta.into())
                 }
             }
