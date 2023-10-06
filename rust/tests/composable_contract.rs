@@ -87,7 +87,7 @@ mod parent {
             Child: ComposableContract,
             Self::Context: for<'x> From<&'x Ctx>,
         {
-            <ChildContract as ComposableContract>::verify::<ChildContract, Self>(
+            <ChildContract as ComposableContract>::verify::<ChildContract, _>(
                 &self.contract_b_0,
                 &<ChildContract as ComposableContract>::Parameters::from(parameters),
                 self,
