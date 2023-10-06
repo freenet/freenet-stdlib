@@ -225,6 +225,8 @@ impl RelatedContractsContainer {
 }
 
 pub mod from_bytes {
+    use serde::de::DeserializeOwned;
+
     use crate::{
         contract_interface::{
             serialization::{Encoder, SerializationAdapter},
@@ -235,18 +237,22 @@ pub mod from_bytes {
 
     use super::*;
 
+    // <<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error
     pub fn inner_validate_state<T, Child, Ctx>(
         parameters: Parameters<'static>,
         state: State<'static>,
         related: RelatedContracts<'static>,
     ) -> Result<ValidateResult, ContractError>
     where
-        T: ComposableContract + SerializationAdapter,
-        <T as ComposableContract>::Parameters: Encoder,
+        T: ComposableContract + SerializationAdapter + DeserializeOwned,
         <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
         for<'x> <T as ComposableContract>::Context: From<&'x Ctx>,
-        ContractError: From<<<T as SerializationAdapter>::Parameters as Encoder>::Error>,
-        ContractError: From<<T as Encoder>::Error>,
+        ContractError: From<
+            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
+                <T as SerializationAdapter>::Parameters,
+            >>::Error,
+        >,
+        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
         Child: ComposableContract,
         <Child as ComposableContract>::Parameters:
             for<'x> From<&'x <T as ComposableContract>::Parameters>,
@@ -254,9 +260,10 @@ pub mod from_bytes {
         Ctx: for<'x> From<&'x T>,
     {
         let typed_params: <T as ComposableContract>::Parameters =
-            <<T as SerializationAdapter>::Parameters as Encoder>::deserialize(parameters.as_ref())?
+            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?
                 .into();
-        let typed_state: T = <T as Encoder>::deserialize(state.as_ref())?;
+        let typed_state: T =
+            <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
         let related_container = RelatedContractsContainer::from(related);
         let ctx = Ctx::from(&typed_state);
         match typed_state.verify::<Child, Ctx>(&typed_params, &ctx, &related_container)? {
@@ -275,22 +282,28 @@ pub mod from_bytes {
     ) -> Result<bool, ContractError>
     where
         T: ComposableContract + SerializationAdapter,
-        <T as SerializationAdapter>::Delta: Encoder,
-        <T as ComposableContract>::Parameters: Encoder,
         <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
         <T as SerializationAdapter>::Delta: Into<<T as ComposableContract>::Delta>,
-        ContractError: From<<<T as SerializationAdapter>::Parameters as Encoder>::Error>,
-        ContractError: From<<<T as SerializationAdapter>::Delta as Encoder>::Error>,
+        ContractError: From<
+            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
+                <T as SerializationAdapter>::Parameters,
+            >>::Error,
+        >,
+        ContractError: From<
+            <<T as SerializationAdapter>::DeltaEncoder as Encoder<
+                <T as SerializationAdapter>::Delta,
+            >>::Error,
+        >,
         Child: ComposableContract,
         <Child as ComposableContract>::Parameters:
             for<'x> From<&'x <T as ComposableContract>::Parameters>,
         <Child as ComposableContract>::Delta: for<'x> From<&'x <T as ComposableContract>::Delta>,
     {
         let typed_params =
-            <<T as SerializationAdapter>::Parameters as Encoder>::deserialize(parameters.as_ref())?
+            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?
                 .into();
         let typed_delta =
-            <<T as SerializationAdapter>::Delta as Encoder>::deserialize(delta.as_ref())?.into();
+            <<T as SerializationAdapter>::DeltaEncoder>::deserialize(delta.as_ref())?.into();
         <T as ComposableContract>::verify_delta::<Child>(&typed_params, &typed_delta)
     }
 
@@ -301,31 +314,38 @@ pub mod from_bytes {
     ) -> Result<UpdateModification<'static>, ContractError>
     where
         T: ComposableContract + SerializationAdapter,
-        <T as SerializationAdapter>::Delta: Encoder,
-        <T as ComposableContract>::Parameters: Encoder,
         <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
         <T as SerializationAdapter>::Delta: Into<<T as ComposableContract>::Delta>,
-        ContractError: From<<<T as SerializationAdapter>::Parameters as Encoder>::Error>,
-        ContractError: From<<<T as SerializationAdapter>::Delta as Encoder>::Error>,
-        ContractError: From<<T as Encoder>::Error>,
+        ContractError: From<
+            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
+                <T as SerializationAdapter>::Parameters,
+            >>::Error,
+        >,
+        ContractError: From<
+            <<T as SerializationAdapter>::DeltaEncoder as Encoder<
+                <T as SerializationAdapter>::Delta,
+            >>::Error,
+        >,
+        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
         Child: ComposableContract,
         <Child as ComposableContract>::Parameters:
             for<'x> From<&'x <T as ComposableContract>::Parameters>,
         <Child as ComposableContract>::Delta: for<'x> From<&'x <T as ComposableContract>::Delta>,
     {
         let typed_params =
-            <<T as SerializationAdapter>::Parameters as Encoder>::deserialize(parameters.as_ref())?
+            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?
                 .into();
-        let mut typed_state: T = <T as Encoder>::deserialize(state.as_ref())?;
+        let mut typed_state: T =
+            <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
         let self_updates = UpdateData::get_self_states(&data);
         let related_container = RelatedContractsContainer::from(data);
         for (state, delta) in self_updates {
             let state = state
-                .map(|s| <T as Encoder>::deserialize(s.as_ref()))
+                .map(|s| <<T as SerializationAdapter>::SelfEncoder>::deserialize(s.as_ref()))
                 .transpose()?;
             let delta = delta
                 .map(|d| {
-                    <<T as SerializationAdapter>::Delta as Encoder>::deserialize(d.as_ref())
+                    <<T as SerializationAdapter>::DeltaEncoder>::deserialize(d.as_ref())
                         .map(Into::into)
                 })
                 .transpose()?;
@@ -338,7 +358,7 @@ pub mod from_bytes {
                 MergeResult::Error(err) => return Err(err),
             }
         }
-        let encoded = typed_state.serialize()?;
+        let encoded = <<T as SerializationAdapter>::SelfEncoder>::serialize(&typed_state)?;
         Ok(UpdateModification::valid(encoded.into()))
     }
 
@@ -351,16 +371,18 @@ pub mod from_bytes {
         <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
         <T as ComposableContract>::Summary:
             for<'x> From<&'x T> + ComposableSummary<<T as ComposableContract>::Summary>,
-        ContractError: From<<<T as SerializationAdapter>::Parameters as Encoder>::Error>,
-        ContractError: From<<T as Encoder>::Error>,
-        // Child: ComposableContract,
-        // <Child as ComposableContract>::Parameters:
-        //     for<'x> From<&'x <T as ComposableContract>::Parameters>,
+        ContractError: From<
+            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
+                <T as SerializationAdapter>::Parameters,
+            >>::Error,
+        >,
+        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
     {
         let typed_params =
-            <<T as SerializationAdapter>::Parameters as Encoder>::deserialize(parameters.as_ref())?
+            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?
                 .into();
-        let typed_state: T = <T as Encoder>::deserialize(state.as_ref())?;
+        let typed_state: T =
+            <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
         let mut summary = <<T as ComposableContract>::Summary>::from(&typed_state);
         typed_state.summarize(&typed_params, &mut summary)?;
         Ok(summary)
@@ -375,22 +397,25 @@ pub mod from_bytes {
         T: ComposableContract + SerializationAdapter,
         <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
         <T as SerializationAdapter>::Summary: Into<<T as ComposableContract>::Summary>,
-        ContractError: From<<T as Encoder>::Error>,
-        ContractError: From<<<T as SerializationAdapter>::Parameters as Encoder>::Error>,
-        ContractError: From<<<T as SerializationAdapter>::Summary as Encoder>::Error>,
-        // Child: ComposableContract,
-        // <Child as ComposableContract>::Parameters:
-        //     for<'x> From<&'x <T as ComposableContract>::Parameters>,
-        // <Child as ComposableContract>::Summary:
-        //     for<'x> From<&'x <T as ComposableContract>::Summary>,
+        ContractError: From<
+            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
+                <T as SerializationAdapter>::Parameters,
+            >>::Error,
+        >,
+        ContractError: From<
+            <<T as SerializationAdapter>::SummaryEncoder as Encoder<
+                <T as SerializationAdapter>::Summary,
+            >>::Error,
+        >,
+        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
     {
         let typed_params =
-            <<T as SerializationAdapter>::Parameters as Encoder>::deserialize(parameters.as_ref())?
+            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?
                 .into();
-        let typed_state: T = <T as Encoder>::deserialize(state.as_ref())?;
+        let typed_state: T =
+            <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
         let typed_summary =
-            <<T as SerializationAdapter>::Summary as Encoder>::deserialize(summary.as_ref())?
-                .into();
+            <<T as SerializationAdapter>::SummaryEncoder>::deserialize(summary.as_ref())?.into();
         typed_state.delta(&typed_params, &typed_summary)
     }
 }

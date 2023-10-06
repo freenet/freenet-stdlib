@@ -1593,34 +1593,48 @@ mod test {
 
 pub(crate) mod serialization {
     //! Helper types to interaction between wasm and host boundaries.
+    use std::marker::PhantomData;
+
     use serde::de::DeserializeOwned;
 
     use super::*;
 
     /// A contract state and it's associated types which can be encoded and decoded
     /// via an specific encoder.
-    pub trait SerializationAdapter: Encoder {
-        type Parameters: Encoder;
-        type Delta: Encoder;
-        type Summary: Encoder;
-    }
-
-    pub trait Encoder
+    pub trait SerializationAdapter
     where
         Self: Sized,
     {
-        type Error: Into<ContractError>;
-        fn deserialize(bytes: &[u8]) -> Result<Self, Self::Error>;
-        fn serialize(&self) -> Result<Vec<u8>, Self::Error>;
+        type Parameters;
+        type Delta;
+        type Summary;
+
+        type SelfEncoder: Encoder<Self>;
+        type ParametersEncoder: Encoder<Self::Parameters>;
+        type DeltaEncoder: Encoder<Self::Delta>;
+        type SummaryEncoder: Encoder<Self::Summary>;
     }
 
-    pub trait JsonEncoder: Serialize + DeserializeOwned {
-        fn deserialize(_bytes: &[u8]) -> Result<Self, serde_json::Error> {
-            todo!()
+    pub trait Encoder<T> {
+        type Error: Into<ContractError>;
+        fn deserialize(bytes: &[u8]) -> Result<T, Self::Error>;
+        fn serialize(value: &T) -> Result<Vec<u8>, Self::Error>;
+    }
+
+    pub struct JsonEncoder<T>(PhantomData<T>);
+
+    impl<T> Encoder<T> for JsonEncoder<T>
+    where
+        T: DeserializeOwned + Serialize,
+    {
+        type Error = serde_json::Error;
+
+        fn deserialize(bytes: &[u8]) -> Result<T, Self::Error> {
+            serde_json::from_slice(bytes)
         }
 
-        fn serialize(&self) -> Result<Vec<u8>, serde_json::Error> {
-            todo!()
+        fn serialize(value: &T) -> Result<Vec<u8>, Self::Error> {
+            serde_json::to_vec(value)
         }
     }
 
@@ -1630,13 +1644,20 @@ pub(crate) mod serialization {
         }
     }
 
-    pub trait BincodeEncoder: Serialize + DeserializeOwned {
-        fn deserialize(bytes: &[u8]) -> Result<Self, bincode::Error> {
+    pub struct BincodeEncoder<T>(PhantomData<T>);
+
+    impl<T> Encoder<T> for BincodeEncoder<T>
+    where
+        T: DeserializeOwned + Serialize,
+    {
+        type Error = bincode::Error;
+
+        fn deserialize(bytes: &[u8]) -> Result<T, Self::Error> {
             bincode::deserialize(bytes)
         }
 
-        fn serialize(&self) -> Result<Vec<u8>, bincode::Error> {
-            bincode::serialize(self)
+        fn serialize(value: &T) -> Result<Vec<u8>, Self::Error> {
+            bincode::serialize(value)
         }
     }
 
@@ -1645,30 +1666,4 @@ pub(crate) mod serialization {
             ContractError::Deser(format!("{value}"))
         }
     }
-
-    impl<C> Encoder for C
-    where
-        C: BincodeEncoder,
-    {
-        type Error = bincode::Error;
-        fn deserialize(bytes: &[u8]) -> Result<C, bincode::Error> {
-            <C as BincodeEncoder>::deserialize(bytes)
-        }
-        fn serialize(&self) -> Result<Vec<u8>, bincode::Error> {
-            <C as BincodeEncoder>::serialize(self)
-        }
-    }
-
-    // impl<C> Encoder for C
-    // where
-    //     C: JsonEncoder,
-    // {
-    //     type Error = bincode::Error;
-    //     fn deserialize(bytes: &[u8]) -> Result<C, bincode::Error> {
-    //         <C as BincodeEncoder>::deserialize(bytes)
-    //     }
-    //     fn serialize(&self) -> Result<Vec<u8>, bincode::Error> {
-    //         <C as BincodeEncoder>::serialize(self)
-    //     }
-    // }
 }

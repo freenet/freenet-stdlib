@@ -201,13 +201,11 @@ pub(crate) fn contract_ffi_impl(
     } else {
         let contract_iface = impl_trait.gen_contract_iface(encoder);
         let ffi = impl_trait.gen_extern_functions();
-        let encoder_impl = impl_trait.encoder_impl(encoder, &asoc_types);
-        let serialization_adapter = impl_trait.gen_serialization_adapter(&asoc_types);
+        let serialization_adapter = impl_trait.gen_serialization_adapter(&asoc_types, encoder);
         quote! {
             #input
             #contract_iface
             #ffi
-            #encoder_impl
             #serialization_adapter
         }
         .into()
@@ -224,7 +222,11 @@ impl ImplTrait {
         quote!(i64)
     }
 
-    fn gen_serialization_adapter(&self, asoc_types: &AsocTypes) -> TokenStream {
+    fn gen_serialization_adapter(
+        &self,
+        asoc_types: &AsocTypes,
+        encoder: &syn::Path,
+    ) -> TokenStream {
         let type_name = &self.type_name;
         let params = &asoc_types.params;
         let delta = &asoc_types.delta;
@@ -234,20 +236,12 @@ impl ImplTrait {
                 type Parameters = #params;
                 type Delta = #delta;
                 type Summary = #summary;
-            }
-        }
-    }
 
-    fn encoder_impl(&self, encoder: &syn::Path, asoc_types: &AsocTypes) -> TokenStream {
-        let type_name = &self.type_name;
-        let params = &asoc_types.params;
-        let delta = &asoc_types.delta;
-        let summary = &asoc_types.summary;
-        quote! {
-            impl #encoder for #type_name {}
-            impl #encoder for #params {}
-            impl #encoder for #delta {}
-            impl #encoder for #summary {}
+                type SelfEncoder = #encoder<Self>;
+                type ParametersEncoder = #encoder<Self::Parameters>;
+                type DeltaEncoder = #encoder<Self::Delta>;
+                type SummaryEncoder = #encoder<Self::Summary>;
+            }
         }
     }
 
