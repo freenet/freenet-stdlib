@@ -34,7 +34,7 @@ impl ImplStruct {
                     let param_buf = &*(parameters as *const ::freenet_stdlib::memory::buf::BufferBuilder);
                     let bytes = &*std::ptr::slice_from_raw_parts(
                         param_buf.start(),
-                        param_buf.written(None),
+                        param_buf.bytes_written(),
                     );
                     Parameters::from(bytes)
                 };
@@ -42,7 +42,7 @@ impl ImplStruct {
                     let attested_buf = &*(attested as *const ::freenet_stdlib::memory::buf::BufferBuilder);
                     let bytes = &*std::ptr::slice_from_raw_parts(
                         attested_buf.start(),
-                        attested_buf.written(None),
+                        attested_buf.bytes_written(),
                     );
                     if bytes.is_empty() {
                         None
@@ -53,7 +53,7 @@ impl ImplStruct {
                 let inbound = unsafe {
                     let inbound_buf = &mut *(inbound as *mut ::freenet_stdlib::memory::buf::BufferBuilder);
                     let bytes =
-                        &*std::ptr::slice_from_raw_parts(inbound_buf.start(), inbound_buf.written(None));
+                        &*std::ptr::slice_from_raw_parts(inbound_buf.start(), inbound_buf.bytes_written());
                     match ::freenet_stdlib::prelude::bincode::deserialize(bytes) {
                         Ok(v) => v,
                         Err(err) => return ::freenet_stdlib::prelude::DelegateInterfaceResult::from(

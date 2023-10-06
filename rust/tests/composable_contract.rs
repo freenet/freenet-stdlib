@@ -1,14 +1,11 @@
-#![allow(dead_code, unused)]
-use std::error::Error;
-
 mod parent {
-    use std::error::Error;
+    //! This would be the end crate.
 
+    // children would be like a different dependency crate which implements composable types
     use super::children::{self, *};
+
     use freenet_stdlib::{composers::*, prelude::*};
     use serde::{Deserialize, Serialize};
-
-    use freenet_stdlib::memory::wasm_interface::inner_validate_state;
 
     #[derive(Serialize, Deserialize)]
     pub struct ParentContract {
@@ -30,23 +27,23 @@ mod parent {
     #[derive(Serialize, Deserialize)]
     pub struct ParentContractSummary;
     impl<'a> From<&'a ParentContract> for ParentContractSummary {
-        fn from(value: &'a ParentContract) -> Self {
-            todo!()
+        fn from(_: &'a ParentContract) -> Self {
+            unimplemented!()
         }
     }
     impl<'a> From<&'a ParentContractSummary> for ChildContractSummary {
-        fn from(value: &'a ParentContractSummary) -> Self {
-            todo!()
+        fn from(_: &'a ParentContractSummary) -> Self {
+            unimplemented!()
         }
     }
     impl ComposableSummary<ChildContractSummary> for ParentContractSummary {
-        fn merge(&mut self, _value: ChildContractSummary) {
-            todo!()
+        fn merge(&mut self, _: ChildContractSummary) {
+            unimplemented!()
         }
     }
     impl ComposableSummary<ParentContractSummary> for ParentContractSummary {
-        fn merge(&mut self, _value: ParentContractSummary) {
-            todo!()
+        fn merge(&mut self, _: ParentContractSummary) {
+            unimplemented!()
         }
     }
 
@@ -56,23 +53,24 @@ mod parent {
         contract_b_1: ChildContractDelta,
     }
     impl<'a> From<&'a ParentContract> for ChildContract {
-        fn from(value: &'a ParentContract) -> Self {
-            todo!()
+        fn from(_: &'a ParentContract) -> Self {
+            unimplemented!()
         }
     }
     impl<'a> From<&'a ParentContractDelta> for ChildContractDelta {
-        fn from(value: &'a ParentContractDelta) -> Self {
-            todo!()
+        fn from(_: &'a ParentContractDelta) -> Self {
+            unimplemented!()
         }
     }
     impl<'a> From<&'a ParentContractParams> for ChildContractParams {
-        fn from(value: &'a ParentContractParams) -> Self {
-            todo!()
+        fn from(_: &'a ParentContractParams) -> Self {
+            unimplemented!()
         }
     }
 
     #[contract(children(ChildContract, ChildContract), encoder = BincodeEncoder)]
-    // todo: this would be derived ideally
+    // todo: this impl block would be derived ideally, we can have a derive macro
+    // in the struct where the associated types need to be specified
     impl ComposableContract for ParentContract {
         type Context = NoContext;
         type Parameters = ParentContractParams;
@@ -82,7 +80,7 @@ mod parent {
         fn verify<Child, Ctx>(
             &self,
             parameters: &Self::Parameters,
-            context: &Ctx,
+            _ctx: &Ctx,
             related: &RelatedContractsContainer,
         ) -> Result<ValidateResult, ContractError>
         where
@@ -157,10 +155,13 @@ mod parent {
         where
             ParentSummary: ComposableSummary<<Self as ComposableContract>::Summary>,
         {
+            // todo: probably need ParentSummary to impl From<&Self>?
+            let mut this_summary = ParentContractSummary;
             self.contract_b_0
-                .summarize(&parameters.into(), &mut ParentContractSummary)?;
+                .summarize(&parameters.into(), &mut this_summary)?;
             self.contract_b_1
-                .summarize(&parameters.into(), &mut ParentContractSummary)?;
+                .summarize(&parameters.into(), &mut this_summary)?;
+            summary.merge(this_summary);
             Ok(())
         }
 
@@ -169,6 +170,8 @@ mod parent {
             parameters: &Self::Parameters,
             summary: &Self::Summary,
         ) -> Result<Self::Delta, ContractError> {
+            // todo: this impl may be probematic to derive, specially getting the return type
+            // maybe requires adding an other transformation bound
             let contract_b_0 = self
                 .contract_b_0
                 .delta(&parameters.into(), &summary.into())?;
@@ -183,14 +186,14 @@ mod parent {
     }
 
     impl<'x> From<&'x ParentContract> for children::PubKey {
-        fn from(value: &'x ParentContract) -> Self {
+        fn from(_: &'x ParentContract) -> Self {
             children::PubKey
         }
     }
 }
 
 mod children {
-    use std::error::Error;
+    //! This would be a depebdency crate.
 
     use freenet_stdlib::{composers::*, prelude::*};
     use serde::{Deserialize, Serialize};
@@ -215,7 +218,7 @@ mod children {
     pub struct PubKey;
 
     impl From<ChildContractParams> for PubKey {
-        fn from(value: ChildContractParams) -> Self {
+        fn from(_: ChildContractParams) -> Self {
             PubKey
         }
     }
@@ -228,26 +231,28 @@ mod children {
 
         fn verify<Child, Ctx>(
             &self,
-            parameters: &Self::Parameters,
+            _parameters: &Self::Parameters,
             context: &Ctx,
-            related: &RelatedContractsContainer,
+            _related: &RelatedContractsContainer,
         ) -> Result<ValidateResult, ContractError>
         where
             Child: ComposableContract,
             Self::Context: for<'x> From<&'x Ctx>,
         {
-            let pub_key = PubKey::from(context);
+            let _pub_key = PubKey::from(context);
+            // assert something in self/context is signed with pub key
             Ok(ValidateResult::Valid)
         }
 
         fn verify_delta<Child>(
             parameters: &Self::Parameters,
-            delta: &Self::Delta,
+            _delta: &Self::Delta,
         ) -> Result<bool, ContractError>
         where
             Child: ComposableContract,
         {
-            let pub_key = PubKey::from(parameters.clone());
+            let _pub_key = PubKey::from(parameters.clone());
+            // assert something in Self::Delta is signed with pub key
             Ok(true)
         }
 
@@ -259,7 +264,7 @@ mod children {
         ) -> MergeResult {
             let contract_id = parameters.contract_id().unwrap();
             let Related::Found {
-                state: mut contract_b,
+                state: _other_contract,
                 ..
             } = related.get::<ChildContract>(&contract_id)
             else {
@@ -275,7 +280,7 @@ mod children {
             _parameters: &Self::Parameters,
             _summary: &Self::Summary,
         ) -> Result<Self::Delta, ContractError> {
-            todo!()
+            Ok(ChildContractDelta)
         }
 
         fn summarize<ParentSummary>(
@@ -287,7 +292,7 @@ mod children {
             ParentSummary: ComposableSummary<<Self as ComposableContract>::Summary>,
         {
             summary.merge(ChildContractSummary);
-            todo!()
+            Ok(())
         }
     }
 }

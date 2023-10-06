@@ -34,6 +34,7 @@ impl syn::parse::Parse for AttributeArgs {
 
 enum ContractType {
     Raw,
+    Typed,
     Composable,
 }
 
@@ -52,34 +53,25 @@ pub fn contract(
         });
     };
     match path.segments.last() {
-        Some(segment)
-            if segment.ident == "ContractInterface" || segment.ident == "ComposableContract" =>
-        {
+        Some(segment) => {
             let c_type = match segment.ident.to_string().as_str() {
                 "ContractInterface" => ContractType::Raw,
+                "TypedContract" => ContractType::Typed,
                 "ComposableContract" => ContractType::Composable,
-                _ => unreachable!(),
+                _ => {
+                    return proc_macro::TokenStream::from(quote_spanned! {
+                        segment.ident.span() =>
+                        compile_error!("trait not supported for contract interaction");
+                    })
+                }
             };
             contract_impl::contract_ffi_impl(&input, &args, c_type)
         }
-        // Some(segment) if segment.ident == "ComposableContract" => {
-        //     contract_impl::composable_contract_ffi_impl(&input, &args)
-        // }
-        Some(segment) => proc_macro::TokenStream::from(quote_spanned! {
-            segment.ident.span() =>
-            compile_error!("trait not supported for contract interaction");
-        }),
         None => proc_macro::TokenStream::from(quote_spanned! {
             path.span() =>
             compile_error!("missing trait identifier");
         }),
     }
-    // println!("{}", quote!(#input));
-    // println!("{output}");
-    // proc_macro::TokenStream::from(quote! {
-    //     #input
-    //     #output
-    // })
 }
 
 /// Generate the necessary code for the WASM runtime to interact with your contract ergonomically and safely.

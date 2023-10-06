@@ -36,6 +36,50 @@ struct AsocTypes {
     summary: Type,
 }
 
+impl syn::parse::Parse for AsocTypes {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut params = None;
+        let mut delta = None;
+        let mut summary = None;
+        while !input.is_empty() {
+            input.parse::<Token![type]>()?;
+            let asoc_type = input.parse::<syn::Ident>()?;
+            input.parse::<Token![=]>()?;
+            let type_def = input.parse::<syn::Type>()?;
+            input.parse::<Token![;]>()?;
+            match asoc_type.to_string().as_str() {
+                "Parameters" => params = Some(type_def),
+                "Delta" => delta = Some(type_def),
+                "Summary" => summary = Some(type_def),
+                _ => return Err(syn::Error::new(asoc_type.span(), "unknown associated type")),
+            }
+        }
+        if params.is_none() {
+            return Err(syn::Error::new(
+                input.span(),
+                "missing Parameters associated type",
+            ));
+        }
+        if delta.is_none() {
+            return Err(syn::Error::new(
+                input.span(),
+                "missing Delta associated type",
+            ));
+        }
+        if summary.is_none() {
+            return Err(syn::Error::new(
+                input.span(),
+                "Summary Parameters associated type",
+            ));
+        }
+        Ok(AsocTypes {
+            params: params.unwrap(),
+            delta: delta.unwrap(),
+            summary: summary.unwrap(),
+        })
+    }
+}
+
 pub(crate) fn contract_ffi_impl(
     input: &ItemImpl,
     args: &AttributeArgs,
@@ -51,78 +95,19 @@ pub(crate) fn contract_ffi_impl(
         children: vec![],
     };
 
-    match c_type {
-        ContractType::Raw => {
-            let ffi = impl_trait.gen_extern_functions();
-            return quote! {
-                #input
-                #ffi
-            }
-            .into();
+    if let ContractType::Raw = c_type {
+        let ffi = impl_trait.gen_extern_functions();
+        return quote! {
+            #input
+            #ffi
         }
-        ContractType::Composable => {}
+        .into();
     }
-
-    #[derive(Default)]
-    struct AsocTypesParse {
-        params: Option<Type>,
-        delta: Option<Type>,
-        summary: Option<Type>,
-    }
-    let mut asoc_types_opt = AsocTypesParse::default();
-    for item in &input.items {
-        if let ImplItem::Type(asoc_type) = item {
-            match asoc_type.ident.to_string().as_str() {
-                "Parameters" => {
-                    asoc_types_opt.params = Some(asoc_type.ty.clone());
-                }
-                "Delta" => {
-                    asoc_types_opt.delta = Some(asoc_type.ty.clone());
-                }
-                "Summary" => {
-                    asoc_types_opt.summary = Some(asoc_type.ty.clone());
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let asoc_types = AsocTypes {
-        params: {
-            let Some(p) = asoc_types_opt.params else {
-                return quote_spanned! {
-                    attr_span =>
-                    compile_error!("missing Parameters associated type");
-                }
-                .into();
-            };
-            p
-        },
-        delta: {
-            let Some(p) = asoc_types_opt.delta else {
-                return quote_spanned! {
-                    attr_span =>
-                    compile_error!("missing Delta associated type");
-                }
-                .into();
-            };
-            p
-        },
-        summary: {
-            let Some(p) = asoc_types_opt.summary else {
-                return quote_spanned! {
-                    attr_span =>
-                    compile_error!("missing Summary associated type");
-                }
-                .into();
-            };
-            p
-        },
-    };
 
     let mut children: Vec<TypePath> = vec![];
     let mut found_children = false;
     let mut encoder = None;
+    let mut found_asoc = None;
 
     for m in args.args.iter() {
         match m {
@@ -139,6 +124,18 @@ pub(crate) fn contract_ffi_impl(
                     let tokens: proc_macro::TokenStream = list.tokens.clone().into();
                     let children_paths = syn::parse_macro_input!(tokens as ChildrenPaths);
                     children.extend(children_paths.paths);
+                }
+                Some(id) if id == "types" => {
+                    if found_asoc.is_some() {
+                        return quote_spanned! {
+                            list.span() =>
+                            compile_error!("only one `types` list allowed");
+                        }
+                        .into();
+                    }
+                    let tokens = list.tokens.clone().into();
+                    let asoc_types = syn::parse_macro_input!(tokens as AsocTypes);
+                    found_asoc = Some(asoc_types);
                 }
                 Some(other) => {
                     return quote_spanned! {
@@ -179,34 +176,129 @@ pub(crate) fn contract_ffi_impl(
         }
     }
 
-    impl_trait.children = children;
-
-    if encoder.is_none() {
-        return quote_spanned! {
-            attr_span =>
-            compile_error!("at least one encoder must be specified, possible protocols: BincodeEncoder");
+    if let ContractType::Typed = c_type {
+        let serialization_adapter = if let Some(asoc) = found_asoc {
+            let Some(encoder) = encoder else {
+                return quote_spanned! {
+                    attr_span =>
+                    compile_error!("at least one Encoder must be specified, possible default protocols: BincodeEncoder, JsonEncoder");
+                }
+                .into();
+            };
+            impl_trait.gen_serialization_adapter(&asoc, encoder)
+        } else {
+            if encoder.is_some() {
+                return quote_spanned! {
+                    attr_span =>
+                    compile_error!("encoder specified but SerializationAdapter is already implemented");
+                }
+                .into();
+            }
+            quote!()
+        };
+        let contract_iface = impl_trait.gen_typed_contract_iface();
+        let ffi = impl_trait.gen_extern_functions();
+        return quote! {
+            #input
+            #serialization_adapter
+            #contract_iface
+            #ffi
         }
         .into();
     }
-    let encoder = encoder.unwrap();
 
-    if !found_children {
-        todo!("impl encoder only")
-    } else if impl_trait.children.is_empty() {
+    let Some(encoder) = encoder else {
         return quote_spanned! {
+            attr_span =>
+            compile_error!("at least one Encoder must be specified, possible default protocols: BincodeEncoder, JsonEncoder");
+        }
+        .into();
+    };
+
+    let asoc_types = {
+        #[derive(Default)]
+        struct AsocTypesParse {
+            params: Option<Type>,
+            delta: Option<Type>,
+            summary: Option<Type>,
+        }
+        let mut asoc_types_opt = AsocTypesParse::default();
+        for item in &input.items {
+            if let ImplItem::Type(asoc_type) = item {
+                match asoc_type.ident.to_string().as_str() {
+                    "Parameters" => {
+                        asoc_types_opt.params = Some(asoc_type.ty.clone());
+                    }
+                    "Delta" => {
+                        asoc_types_opt.delta = Some(asoc_type.ty.clone());
+                    }
+                    "Summary" => {
+                        asoc_types_opt.summary = Some(asoc_type.ty.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        AsocTypes {
+            params: {
+                let Some(p) = asoc_types_opt.params else {
+                    return quote_spanned! {
+                        attr_span =>
+                        compile_error!("missing Parameters associated type");
+                    }
+                    .into();
+                };
+                p
+            },
+            delta: {
+                let Some(p) = asoc_types_opt.delta else {
+                    return quote_spanned! {
+                        attr_span =>
+                        compile_error!("missing Delta associated type");
+                    }
+                    .into();
+                };
+                p
+            },
+            summary: {
+                let Some(p) = asoc_types_opt.summary else {
+                    return quote_spanned! {
+                        attr_span =>
+                        compile_error!("missing Summary associated type");
+                    }
+                    .into();
+                };
+                p
+            },
+        }
+    };
+
+    impl_trait.children = children;
+
+    if let ContractType::Composable = c_type {
+        let contract_iface = impl_trait.gen_composer_contract_iface(encoder);
+        let ffi = impl_trait.gen_extern_functions();
+        let serialization_adapter = impl_trait.gen_serialization_adapter(&asoc_types, encoder);
+        return quote! {
+            #input
+            #contract_iface
+            #serialization_adapter
+            #ffi
+        }
+        .into();
+    }
+
+    if impl_trait.children.is_empty() {
+        quote_spanned! {
             attr_span =>
             compile_error!("at least one ComposableContract child is required");
         }
-        .into();
+        .into()
     } else {
-        let contract_iface = impl_trait.gen_contract_iface(encoder);
-        let ffi = impl_trait.gen_extern_functions();
-        let serialization_adapter = impl_trait.gen_serialization_adapter(&asoc_types, encoder);
-        quote! {
-            #input
-            #contract_iface
-            #ffi
-            #serialization_adapter
+        quote_spanned! {
+            attr_span =>
+            compile_error!("missing required parameters for this con");
         }
         .into()
     }
@@ -245,7 +337,64 @@ impl ImplTrait {
         }
     }
 
-    fn gen_contract_iface(&self, encoder: &syn::Path) -> TokenStream {
+    fn gen_typed_contract_iface(&self) -> TokenStream {
+        let type_name = &self.type_name;
+        quote! {
+            impl ::freenet_stdlib::prelude::ContractInterface for #type_name {
+                fn validate_state(
+                    parameters: ::freenet_stdlib::prelude::Parameters<'static>,
+                    state: ::freenet_stdlib::prelude::State<'static>,
+                    related: ::freenet_stdlib::prelude::RelatedContracts<'static>,
+                ) -> ::core::result::Result<
+                    ::freenet_stdlib::prelude::ValidateResult,
+                    ::freenet_stdlib::prelude::ContractError,
+                > {
+                    ::freenet_stdlib::typed_contract::inner_validate_state::<#type_name>(parameters, state, related)
+                }
+
+                fn validate_delta(
+                    parameters: ::freenet_stdlib::prelude::Parameters<'static>,
+                    delta: ::freenet_stdlib::prelude::StateDelta<'static>,
+                ) -> ::core::result::Result<bool, ::freenet_stdlib::prelude::ContractError> {
+                    ::freenet_stdlib::typed_contract::inner_validate_delta::<#type_name>(parameters, delta)
+                }
+
+                fn update_state(
+                    parameters: ::freenet_stdlib::prelude::Parameters<'static>,
+                    state: ::freenet_stdlib::prelude::State<'static>,
+                    data: Vec<freenet_stdlib::prelude::UpdateData<'static>>,
+                ) -> ::core::result::Result<
+                    ::freenet_stdlib::prelude::UpdateModification<'static>,
+                    ::freenet_stdlib::prelude::ContractError,
+                > {
+                    ::freenet_stdlib::typed_contract::inner_update_state::<#type_name>(parameters, state, data)
+                }
+
+                fn summarize_state(
+                    parameters: ::freenet_stdlib::prelude::Parameters<'static>,
+                    state: ::freenet_stdlib::prelude::State<'static>,
+                ) -> ::core::result::Result<
+                    ::freenet_stdlib::prelude::StateSummary<'static>,
+                    ::freenet_stdlib::prelude::ContractError,
+                > {
+                    ::freenet_stdlib::typed_contract::inner_summarize_state::<#type_name>(parameters, state)
+                }
+
+                fn get_state_delta(
+                    parameters: ::freenet_stdlib::prelude::Parameters<'static>,
+                    state: ::freenet_stdlib::prelude::State<'static>,
+                    summary: ::freenet_stdlib::prelude::StateSummary<'static>,
+                ) -> ::core::result::Result<
+                    ::freenet_stdlib::prelude::StateDelta<'static>,
+                    ::freenet_stdlib::prelude::ContractError,
+                > {
+                    ::freenet_stdlib::typed_contract::inner_state_delta::<#type_name>(parameters, state, summary)
+                }
+            }
+        }
+    }
+
+    fn gen_composer_contract_iface(&self, encoder: &syn::Path) -> TokenStream {
         let type_name = &self.type_name;
 
         let validate_state_impl = self.children.iter().map(|child| {

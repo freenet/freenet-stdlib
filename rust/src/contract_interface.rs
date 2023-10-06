@@ -1591,11 +1591,13 @@ mod test {
     }
 }
 
-pub(crate) mod serialization {
-    //! Helper types to interaction between wasm and host boundaries.
+pub mod serialization {
+    //! Helper types for interaction between wasm and host boundaries.
     use std::marker::PhantomData;
 
     use serde::de::DeserializeOwned;
+
+    use crate::composers::{MergeResult, RelatedContractsContainer};
 
     use super::*;
 
@@ -1613,6 +1615,56 @@ pub(crate) mod serialization {
         type ParametersEncoder: Encoder<Self::Parameters>;
         type DeltaEncoder: Encoder<Self::Delta>;
         type SummaryEncoder: Encoder<Self::Summary>;
+    }
+
+    pub enum TypedUpdateData<T: SerializationAdapter> {
+        RelatedState { state: T },
+        RelatedDelta { delta: T::Delta },
+        RelatedStateAndDelta { state: T, delta: T::Delta },
+    }
+
+    impl<T: SerializationAdapter> TypedUpdateData<T> {
+        pub fn from_other<Parent>(_value: &TypedUpdateData<Parent>) -> Self
+        where
+            Parent: SerializationAdapter,
+            T: for<'x> From<&'x Parent>,
+        {
+            todo!()
+        }
+    }
+
+    impl<T: SerializationAdapter> From<(Option<T>, Option<T::Delta>)> for TypedUpdateData<T> {
+        fn from((_state, _delta): (Option<T>, Option<T::Delta>)) -> Self {
+            todo!()
+        }
+    }
+
+    pub trait TypedContract: SerializationAdapter {
+        fn verify(
+            &self,
+            parameters: Self::Parameters,
+            related: RelatedContractsContainer,
+        ) -> Result<ValidateResult, ContractError>;
+
+        fn verify_delta(
+            parameters: Self::Parameters,
+            delta: Self::Delta,
+        ) -> Result<bool, ContractError>;
+
+        fn merge(
+            &mut self,
+            parameters: &Self::Parameters,
+            update: TypedUpdateData<Self>,
+            related: &RelatedContractsContainer,
+        ) -> MergeResult;
+
+        fn summarize(&self, parameters: Self::Parameters) -> Result<Self::Summary, ContractError>;
+
+        fn delta(
+            &self,
+            parameters: Self::Parameters,
+            summary: Self::Summary,
+        ) -> Result<Self::Delta, ContractError>;
     }
 
     pub trait Encoder<T> {
@@ -1665,5 +1717,157 @@ pub(crate) mod serialization {
         fn from(value: bincode::Error) -> Self {
             ContractError::Deser(format!("{value}"))
         }
+    }
+
+    pub fn inner_validate_state<T>(
+        parameters: Parameters<'static>,
+        state: State<'static>,
+        related: RelatedContracts<'static>,
+    ) -> Result<ValidateResult, ContractError>
+    where
+        T: SerializationAdapter + TypedContract,
+        ContractError: From<
+            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
+                <T as SerializationAdapter>::Parameters,
+            >>::Error,
+        >,
+        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
+    {
+        let typed_params =
+            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
+        let typed_state = <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
+        let related_container = RelatedContractsContainer::from(related);
+        typed_state.verify(typed_params, related_container)
+    }
+
+    pub fn inner_validate_delta<T>(
+        parameters: Parameters<'static>,
+        delta: StateDelta<'static>,
+    ) -> Result<bool, ContractError>
+    where
+        T: SerializationAdapter + TypedContract,
+        ContractError: From<
+            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
+                <T as SerializationAdapter>::Parameters,
+            >>::Error,
+        >,
+        ContractError: From<
+            <<T as SerializationAdapter>::DeltaEncoder as Encoder<
+                <T as SerializationAdapter>::Delta,
+            >>::Error,
+        >,
+    {
+        let typed_params =
+            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
+        let typed_delta = <<T as SerializationAdapter>::DeltaEncoder>::deserialize(delta.as_ref())?;
+        <T as TypedContract>::verify_delta(typed_params, typed_delta)
+    }
+
+    pub fn inner_update_state<T>(
+        parameters: Parameters<'static>,
+        state: State<'static>,
+        data: Vec<UpdateData<'static>>,
+    ) -> Result<UpdateModification<'static>, ContractError>
+    where
+        T: SerializationAdapter + TypedContract,
+        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
+        ContractError: From<
+            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
+                <T as SerializationAdapter>::Parameters,
+            >>::Error,
+        >,
+        ContractError: From<
+            <<T as SerializationAdapter>::DeltaEncoder as Encoder<
+                <T as SerializationAdapter>::Delta,
+            >>::Error,
+        >,
+    {
+        let typed_params =
+            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
+        let mut typed_state =
+            <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
+        let self_updates = UpdateData::get_self_states(&data);
+        let related_container = RelatedContractsContainer::from(data);
+        for (state, delta) in self_updates {
+            let state = state
+                .map(|s| <<T as SerializationAdapter>::SelfEncoder>::deserialize(s.as_ref()))
+                .transpose()?;
+            let delta = delta
+                .map(|d| {
+                    <<T as SerializationAdapter>::DeltaEncoder>::deserialize(d.as_ref())
+                        .map(Into::into)
+                })
+                .transpose()?;
+            let typed_update = TypedUpdateData::from((state, delta));
+            match typed_state.merge(&typed_params, typed_update, &related_container) {
+                MergeResult::Success => {}
+                MergeResult::RequestRelated(req) => {
+                    return UpdateModification::requires(req.into());
+                }
+                MergeResult::Error(err) => return Err(err),
+            }
+        }
+        let encoded = <<T as SerializationAdapter>::SelfEncoder>::serialize(&typed_state)?;
+        Ok(UpdateModification::valid(encoded.into()))
+    }
+
+    pub fn inner_summarize_state<T>(
+        parameters: Parameters<'static>,
+        state: State<'static>,
+    ) -> Result<StateSummary<'static>, ContractError>
+    where
+        T: SerializationAdapter + TypedContract,
+        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
+        ContractError: From<
+            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
+                <T as SerializationAdapter>::Parameters,
+            >>::Error,
+        >,
+        ContractError: From<
+            <<T as SerializationAdapter>::SummaryEncoder as Encoder<
+                <T as SerializationAdapter>::Summary,
+            >>::Error,
+        >,
+    {
+        let typed_params =
+            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
+        let typed_state = <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
+        let summary = typed_state.summarize(typed_params)?;
+        let encoded = <<T as SerializationAdapter>::SummaryEncoder>::serialize(&summary)?;
+        Ok(encoded.into())
+    }
+
+    pub fn inner_state_delta<T>(
+        parameters: Parameters<'static>,
+        state: State<'static>,
+        summary: StateSummary<'static>,
+    ) -> Result<StateDelta<'static>, ContractError>
+    where
+        T: SerializationAdapter + TypedContract,
+        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
+        ContractError: From<
+            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
+                <T as SerializationAdapter>::Parameters,
+            >>::Error,
+        >,
+        ContractError: From<
+            <<T as SerializationAdapter>::SummaryEncoder as Encoder<
+                <T as SerializationAdapter>::Summary,
+            >>::Error,
+        >,
+        ContractError: From<
+            <<T as SerializationAdapter>::DeltaEncoder as Encoder<
+                <T as SerializationAdapter>::Delta,
+            >>::Error,
+        >,
+    {
+        let typed_params =
+            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
+        let typed_state = <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
+        let typed_summary =
+            <<T as SerializationAdapter>::SummaryEncoder>::deserialize(summary.as_ref())?;
+        let summary = typed_state.delta(typed_params, typed_summary)?;
+        let encoded = <<T as SerializationAdapter>::DeltaEncoder>::serialize(&summary)?;
+        Ok(encoded.into())
     }
 }
