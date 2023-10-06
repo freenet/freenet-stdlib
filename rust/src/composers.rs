@@ -89,6 +89,65 @@ impl<T: ComposableContract> From<(Option<T>, Option<T::Delta>)> for TypedUpdateD
     }
 }
 
+#[allow(unused)]
+impl<T: ComposableContract> ComposableContract for Vec<T> {
+    type Context = T::Context;
+    type Parameters = T::Parameters;
+    type Delta = T::Delta;
+    type Summary = T::Summary;
+
+    fn verify<Child, Ctx>(
+        &self,
+        parameters: &Self::Parameters,
+        context: &Ctx,
+        related: &RelatedContractsContainer,
+    ) -> Result<ValidateResult, ContractError>
+    where
+        Child: ComposableContract,
+        Self::Context: for<'x> From<&'x Ctx>,
+    {
+        todo!()
+    }
+
+    fn verify_delta<Child>(
+        parameters: &Self::Parameters,
+        delta: &Self::Delta,
+    ) -> Result<bool, ContractError>
+    where
+        Child: ComposableContract,
+    {
+        todo!()
+    }
+
+    fn merge(
+        &mut self,
+        parameters: &Self::Parameters,
+        update: &TypedUpdateData<Self>,
+        related: &RelatedContractsContainer,
+    ) -> MergeResult {
+        todo!()
+    }
+
+    fn summarize<ParentSummary>(
+        &self,
+        parameters: &Self::Parameters,
+        summary: &mut ParentSummary,
+    ) -> Result<(), ContractError>
+    where
+        ParentSummary: ComposableSummary<<Self as ComposableContract>::Summary>,
+    {
+        todo!()
+    }
+
+    fn delta(
+        &self,
+        parameters: &Self::Parameters,
+        summary: &Self::Summary,
+    ) -> Result<Self::Delta, ContractError> {
+        todo!()
+    }
+}
+
 pub struct NoContext;
 
 impl<'x, T> From<&'x T> for NoContext {

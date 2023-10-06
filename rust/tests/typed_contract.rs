@@ -44,7 +44,7 @@ impl TypedContract for Contract {
         _: Self::Parameters,
         _: Self::Delta,
     ) -> Result<bool, freenet_stdlib::prelude::ContractError> {
-        unimplemented!()
+        Ok(true)
     }
 
     fn merge(

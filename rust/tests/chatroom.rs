@@ -1,131 +1,190 @@
-/*
-mod example_2 {
-    use crate::parameters;
+use freenet_stdlib::composers::{ComposableContract, ComposableParameters};
 
-    use super::*;
+pub struct ChatRoom {
+    pub members: Vec<dependency_2::ChatRoomMember>,
+    pub messages: Vec<dependency_1::SignedComposable<dependency_2::ChatRoomMessage>>,
+}
 
-    pub struct PublicKey {}
-    pub struct Signature {}
+pub struct ChatRoomParameters {
+    pub owner_public_key: dependency_2::PublicKey,
+}
 
-    impl<T: ComposableContract> ComposableContract for Vec<T>
+impl ComposableParameters for ChatRoomParameters {
+    fn contract_id(&self) -> Option<freenet_stdlib::prelude::ContractInstanceId> {
+        unimplemented!()
+    }
+}
+
+impl<'x> From<&'x ChatRoomParameters> for dependency_2::ChatRoomMsgParameters {
+    fn from(_: &'x ChatRoomParameters) -> Self {
+        unimplemented!()
+    }
+}
+
+impl<'x> From<&'x ChatRoom> for dependency_2::PublicKey {
+    fn from(_: &'x ChatRoom) -> Self {
+        unimplemented!()
+    }
+}
+
+impl ComposableContract for ChatRoom {
+    type Context = ();
+    type Parameters = ChatRoomParameters;
+    type Delta = ();
+    type Summary = ();
+
+    fn verify<Child, Ctx>(
+        &self,
+        parameters: &Self::Parameters,
+        _: &Ctx,
+        related: &freenet_stdlib::prelude::RelatedContractsContainer,
+    ) -> Result<freenet_stdlib::prelude::ValidateResult, freenet_stdlib::prelude::ContractError>
     where
-        T: ComposableContract,
+        Child: ComposableContract,
+        Self::Context: for<'x> From<&'x Ctx>,
     {
-        type Context = T;
-        type Parameters = T::Parameters;
-        type Summary = T::Summary;
-        type Delta = T::Delta;
-
-        fn verify(
-            &self,
-            parameters: &Self::Parameters,
-            context: &Self::Context,
-            related: &RelatedContractsContainer,
-        ) -> Result<(), Box<dyn Error>> {
-            unimplemented!()
-        }
+        self.messages
+            .verify::<Vec<dependency_1::SignedComposable<dependency_2::ChatRoomMessage>>, _>(
+                &parameters.into(),
+                self,
+                related,
+            )?;
+        unimplemented!()
     }
 
-    pub struct ChatRoomParameters {
-        pub owner_public_key: PublicKey,
+    fn verify_delta<Child>(
+        _: &Self::Parameters,
+        _: &Self::Delta,
+    ) -> Result<bool, freenet_stdlib::prelude::ContractError>
+    where
+        Child: ComposableContract,
+    {
+        unimplemented!()
     }
 
-    impl ComposableParameters for ChatRoomParameters {}
-
-    /// Contract 0
-    pub struct ChatRoom {
-        pub members: Vec<ChatRoomMember>,
-        pub messages: Vec<SignedSyncable<ChatRoomMessage>>,
+    fn merge(
+        &mut self,
+        _: &Self::Parameters,
+        _: &freenet_stdlib::composers::TypedUpdateData<Self>,
+        _: &freenet_stdlib::prelude::RelatedContractsContainer,
+    ) -> freenet_stdlib::composers::MergeResult {
+        unimplemented!()
     }
 
-    impl ComposableContract for ChatRoom {
-        type Context = ();
-        type Parameters = ChatRoomParameters;
-        type Summary = ();
-        type Delta = ();
-
-        fn verify(
-            &self,
-            parameters: &Self::Parameters,
-            context: &Self::Context,
-            related: &RelatedContractsContainer,
-        ) -> Result<(), Box<dyn Error>> {
-            // automatically generated
-            {
-                self.members.verify(&parameters, self, related)?;
-            }
-            {
-                self.messages.verify(&parameters, self, related)?;
-            }
-            Ok(())
-        }
+    fn summarize<ParentSummary>(
+        &self,
+        _: &Self::Parameters,
+        _: &mut ParentSummary,
+    ) -> Result<(), freenet_stdlib::prelude::ContractError>
+    where
+        ParentSummary:
+            freenet_stdlib::composers::ComposableSummary<<Self as ComposableContract>::Summary>,
+    {
+        unimplemented!()
     }
+
+    fn delta(
+        &self,
+        _: &Self::Parameters,
+        _: &Self::Summary,
+    ) -> Result<Self::Delta, freenet_stdlib::prelude::ContractError> {
+        unimplemented!()
+    }
+}
+
+pub mod dependency_1 {
+    pub struct Signature {}
+    pub struct SignedComposable<S> {
+        pub value: S,
+        pub signature: Signature,
+    }
+}
+
+pub mod dependency_2 {
+    use freenet_stdlib::composers::{ComposableContract, ComposableParameters};
+
+    #[derive(Clone, Copy)]
+    pub struct PublicKey {}
 
     pub struct ChatRoomMember {
         pub name: String,
         pub public_key: PublicKey,
     }
 
-    impl ComposableContract for ChatRoomMember {
-        type Context = ();
-        type Parameters = ();
-        type Summary = ();
-        type Delta = ();
-    }
-
     pub struct ChatRoomMessage {
         pub message: String,
         pub author: String,
-        pub signature: String,
     }
 
-    impl ComposableContract for ChatRoomMessage {
-        type Context = ();
-        type Parameters = ();
-        type Summary = ();
+    pub struct ChatRoomMsgParameters {
+        pub owner_public_key: PublicKey,
+    }
+
+    impl ComposableParameters for ChatRoomMsgParameters {
+        fn contract_id(&self) -> Option<freenet_stdlib::prelude::ContractInstanceId> {
+            unimplemented!()
+        }
+    }
+
+    impl ComposableContract for super::dependency_1::SignedComposable<ChatRoomMessage> {
+        type Context = PublicKey;
+        type Parameters = ChatRoomMsgParameters;
         type Delta = ();
-    }
-
-    pub struct SignedSyncable<S> {
-        pub value: S,
-        pub signature: Signature,
-        // extractor: EXTRACTOR,
-    }
-
-    impl<S: ComposableContract> SignedSyncable<S> {}
-
-    trait ParametersWithPublicKey: ComposableParameters {
-        fn public_key(&self) -> PublicKey;
-    }
-
-    // manually implemented
-    impl<S: ComposableContract> ComposableContract for SignedSyncable<S> {
-        type Context = ();
-        // type Parameters<T: ParametersWithPublicKey>;
         type Summary = ();
-        type Delta = ();
 
-        fn verify(
+        fn verify<Child, Ctx>(
             &self,
             parameters: &Self::Parameters,
-            context: &Self::Context,
-            related: &RelatedContractsContainer,
-        ) -> Result<(), Box<dyn Error>> {
-            // Extracts a public key either from the context or the parameters using a
-            // function passed as a generic type or associated type
-            let public_key = parameters.public_key();
-            context.extract::<PublicKey>();
-            todo!()
+            context: &Ctx,
+            _: &freenet_stdlib::prelude::RelatedContractsContainer,
+        ) -> Result<freenet_stdlib::prelude::ValidateResult, freenet_stdlib::prelude::ContractError>
+        where
+            Child: ComposableContract,
+            Self::Context: for<'x> From<&'x Ctx>,
+        {
+            let _public_key = parameters.owner_public_key;
+            let _public_key = PublicKey::from(context);
+            // do stuff with pub key
+            unimplemented!()
+        }
+
+        fn verify_delta<Child>(
+            _: &Self::Parameters,
+            _: &Self::Delta,
+        ) -> Result<bool, freenet_stdlib::prelude::ContractError>
+        where
+            Child: ComposableContract,
+        {
+            unimplemented!()
         }
 
         fn merge(
             &mut self,
-            parameters: &Self::Parameters,
-            delta: &Self::Delta,
-            related: &RelatedContractsContainer,
-        ) -> MergeResult {
+            _: &Self::Parameters,
+            _: &freenet_stdlib::composers::TypedUpdateData<Self>,
+            _: &freenet_stdlib::prelude::RelatedContractsContainer,
+        ) -> freenet_stdlib::composers::MergeResult {
+            unimplemented!()
+        }
+
+        fn summarize<ParentSummary>(
+            &self,
+            _: &Self::Parameters,
+            _: &mut ParentSummary,
+        ) -> Result<(), freenet_stdlib::prelude::ContractError>
+        where
+            ParentSummary:
+                freenet_stdlib::composers::ComposableSummary<<Self as ComposableContract>::Summary>,
+        {
+            unimplemented!()
+        }
+
+        fn delta(
+            &self,
+            _: &Self::Parameters,
+            _: &Self::Summary,
+        ) -> Result<Self::Delta, freenet_stdlib::prelude::ContractError> {
             unimplemented!()
         }
     }
 }
-*/
