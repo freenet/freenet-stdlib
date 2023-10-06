@@ -8,6 +8,8 @@ pub mod memory;
 mod parameters;
 mod versioning;
 
+pub use contract_interface::serialization as typed_contract;
+
 #[allow(dead_code, unused_imports, clippy::all)]
 pub(crate) mod client_request_generated;
 #[allow(dead_code, unused_imports, clippy::all)]
@@ -25,12 +27,13 @@ pub mod time;
 /// Locutus stdlib prelude.
 pub mod prelude {
     pub use crate::code_hash::*;
+    pub use crate::composers::RelatedContractsContainer;
     pub use crate::contract_interface::serialization::{
         BincodeEncoder, Encoder, JsonEncoder, SerializationAdapter,
     };
-    pub use crate::contract_interface::wasm_interface::*;
+    pub use crate::contract_interface::wasm_interface::ContractInterfaceResult;
     pub use crate::contract_interface::*;
-    pub use crate::delegate_interface::wasm_interface::*;
+    pub use crate::delegate_interface::wasm_interface::DelegateInterfaceResult;
     pub use crate::delegate_interface::*;
     pub use crate::parameters::*;
     pub use crate::versioning::*;

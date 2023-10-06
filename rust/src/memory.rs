@@ -26,7 +26,7 @@ impl WasmLinearMem {
 
 #[cfg(feature = "contract")]
 pub mod wasm_interface {
-    use crate::prelude::*;
+    use crate::{contract_interface::wasm_interface::ContractInterfaceResult, prelude::*};
 
     fn set_logger() -> Result<(), ContractInterfaceResult> {
         #[cfg(feature = "trace")]

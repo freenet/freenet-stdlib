@@ -44,9 +44,9 @@ pub trait ComposableContract: std::any::Any + Sized {
     /// Corresponds to ContractInterface `update_state`
     fn merge(
         &mut self,
-        _parameters: &Self::Parameters,
-        _delta: &TypedUpdateData<Self>,
-        _related: &RelatedContractsContainer,
+        parameters: &Self::Parameters,
+        update: &TypedUpdateData<Self>,
+        related: &RelatedContractsContainer,
     ) -> MergeResult;
 
     /// Corresponds to ContractInterface `summarize`
@@ -88,80 +88,6 @@ impl<T: ComposableContract> From<(Option<T>, Option<T::Delta>)> for TypedUpdateD
         todo!()
     }
 }
-
-// pub struct NoChild;
-
-// impl ComposableContract for NoChild {
-//     type Parameters = NoChild;
-//     type Context = NoChild;
-//     type Delta = NoChild;
-//     type Summary = NoChild;
-
-//     fn verify<Children, Ctx>(
-//         &self,
-//         _parameters: &Self::Parameters,
-//         _context: &Ctx,
-//         _related: &RelatedContractsContainer,
-//     ) -> Result<ValidateResult, ContractError>
-//     where
-//         Children: ComposableContract,
-//         // <Children as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-//         Self::Context: for<'x> From<&'x Ctx>,
-//     {
-//         Ok(ValidateResult::Valid)
-//     }
-
-//     fn verify_delta<Children>(
-//         _parameters: &Self::Parameters,
-//         _delta: &Self::Delta,
-//     ) -> Result<bool, ContractError>
-//     where
-//         Children: ComposableContract,
-//     {
-//         Ok(true)
-//     }
-
-//     fn merge(
-//         &mut self,
-//         _parameters: &Self::Parameters,
-//         _delta: &TypedUpdateData<Self>,
-//         _related: &RelatedContractsContainer,
-//     ) -> MergeResult {
-//         MergeResult::Success
-//     }
-
-//     fn delta(
-//         &self,
-//         _parameters: &Self::Parameters,
-//         _summary: &Self::Summary,
-//     ) -> Result<Self::Delta, ContractError> {
-//         Ok(NoChild)
-//     }
-
-//     fn summarize<ParentSummary>(
-//         &self,
-//         _parameters: &Self::Parameters,
-//         _summary: &mut ParentSummary,
-//     ) -> Result<(), ContractError>
-//     where
-//         // <Child as ComposableContract>::Parameters: for<'x> From<&'x Self::Parameters>,
-//         ParentSummary: ComposableSummary<<Self as ComposableContract>::Summary>,
-//     {
-//         Ok(())
-//     }
-// }
-
-// impl ComposableParameters for NoChild {
-//     fn contract_id(&self) -> Option<ContractInstanceId> {
-//         None
-//     }
-// }
-
-// impl<'x, T> From<&'x T> for NoChild {
-//     fn from(_: &'x T) -> Self {
-//         NoChild
-//     }
-// }
 
 pub struct NoContext;
 
@@ -237,7 +163,6 @@ pub mod from_bytes {
 
     use super::*;
 
-    // <<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error
     pub fn inner_validate_state<T, Child, Ctx>(
         parameters: Parameters<'static>,
         state: State<'static>,
