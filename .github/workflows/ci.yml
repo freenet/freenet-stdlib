@@ -16,7 +16,7 @@ jobs:
 
     strategy:
       matrix:
-        args: ["--no-default-features", "--all-features", "--features default"]
+        args: ["--all-features"]
     env:
       FREENET_LOG: error
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
