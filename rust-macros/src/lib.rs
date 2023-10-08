@@ -57,7 +57,7 @@ pub fn contract(
             let c_type = match segment.ident.to_string().as_str() {
                 "ContractInterface" => ContractType::Raw,
                 "TypedContract" => ContractType::Typed,
-                "ComposableContract" => ContractType::Composable,
+                "ContractComponent" => ContractType::Composable,
                 _ => {
                     return proc_macro::TokenStream::from(quote_spanned! {
                         segment.ident.span() =>

@@ -1,6 +1,7 @@
 //! Standard library provided by the Freenet project to be able to write Locutus-compatible contracts.
 mod code_hash;
-pub mod composers;
+#[cfg(feature = "unstable")]
+pub mod contract_composition;
 mod contract_interface;
 mod delegate_interface;
 pub(crate) mod global;
@@ -27,7 +28,7 @@ pub mod time;
 /// Locutus stdlib prelude.
 pub mod prelude {
     pub use crate::code_hash::*;
-    pub use crate::composers::RelatedContractsContainer;
+    pub use crate::contract_composition::RelatedContractsContainer;
     pub use crate::contract_interface::serialization::{
         BincodeEncoder, Encoder, JsonEncoder, SerializationAdapter,
     };

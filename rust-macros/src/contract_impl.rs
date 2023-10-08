@@ -292,7 +292,7 @@ pub(crate) fn contract_ffi_impl(
     if impl_trait.children.is_empty() {
         quote_spanned! {
             attr_span =>
-            compile_error!("at least one ComposableContract child is required");
+            compile_error!("at least one ContractComponent child is required");
         }
         .into()
     } else {
@@ -399,10 +399,10 @@ impl ImplTrait {
 
         let validate_state_impl = self.children.iter().map(|child| {
             quote! {
-                match ::freenet_stdlib::composers::from_bytes::inner_validate_state::<
+                match ::freenet_stdlib::contract_composition::from_bytes::inner_validate_state::<
                     #type_name,
                     #child,
-                    <#type_name as ::freenet_stdlib::composers::ComposableContract>::Context,
+                    <#type_name as ::freenet_stdlib::contract_composition::ContractComponent>::Context,
                 >(parameters.clone(), state.clone(), related.clone())? {
                     ::freenet_stdlib::prelude::ValidateResult::Valid => {}
                     ::freenet_stdlib::prelude::ValidateResult::Invalid => {
@@ -417,7 +417,7 @@ impl ImplTrait {
 
         let validate_delta_impl = self.children.iter().map(|child| {
             quote! {
-                if !::freenet_stdlib::composers::from_bytes::inner_validate_delta::<
+                if !::freenet_stdlib::contract_composition::from_bytes::inner_validate_delta::<
                     #type_name,
                     #child,
                 >(parameters.clone(), delta.clone())? {
@@ -428,7 +428,7 @@ impl ImplTrait {
 
         let update_state_impl = self.children.iter().map(|child| {
             quote! {{
-                let modification = ::freenet_stdlib::composers::from_bytes::inner_update_state::<
+                let modification = ::freenet_stdlib::contract_composition::from_bytes::inner_update_state::<
                     #type_name,
                     #child,
                 >(parameters.clone(), final_update.clone(), data.clone())?;
@@ -482,8 +482,8 @@ impl ImplTrait {
                     ::freenet_stdlib::prelude::StateSummary<'static>,
                     ::freenet_stdlib::prelude::ContractError,
                 > {
-                    let mut summary: ::core::option::Option<<#type_name as ::freenet_stdlib::composers::ComposableContract>::Summary> = ::core::option::Option::None;
-                    let summary = ::freenet_stdlib::composers::from_bytes::inner_summarize_state::<
+                    let mut summary: ::core::option::Option<<#type_name as ::freenet_stdlib::contract_composition::ContractComponent>::Summary> = ::core::option::Option::None;
+                    let summary = ::freenet_stdlib::contract_composition::from_bytes::inner_summarize_state::<
                         #type_name,
                     >(parameters.clone(), state.clone())?;
                     let serializable_summary = <#type_name as ::freenet_stdlib::prelude::SerializationAdapter>::Summary::from(summary);
@@ -499,10 +499,10 @@ impl ImplTrait {
                     ::freenet_stdlib::prelude::StateDelta<'static>,
                     ::freenet_stdlib::prelude::ContractError,
                 > {
-                    let delta = ::freenet_stdlib::composers::from_bytes::inner_state_delta::<
+                    let delta = ::freenet_stdlib::contract_composition::from_bytes::inner_state_delta::<
                         #type_name,
                     >(parameters.clone(), state.clone(), summary.clone())?;
-                    let serializable_delta = <#type_name as SerializationAdapter>::Delta::from(delta);
+                    let serializable_delta = <#type_name as ::freenet_stdlib::prelude::SerializationAdapter>::Delta::from(delta);
                     let encoded_delta = #encoder::serialize(&serializable_delta)?;
                     Ok(encoded_delta.into())
                 }

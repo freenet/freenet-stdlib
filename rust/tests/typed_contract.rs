@@ -1,9 +1,12 @@
 use freenet_macros::contract;
-use freenet_stdlib::{composers::MergeResult, prelude::*, typed_contract::TypedContract};
+use freenet_stdlib::{
+    contract_composition::MergeResult, prelude::*, typed_contract::TypedContract,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-pub struct Contract;
+pub struct Contract {}
+
 #[derive(Serialize, Deserialize)]
 pub struct CParams;
 #[derive(Serialize, Deserialize)]
@@ -34,7 +37,7 @@ impl TypedContract for Contract {
     fn verify(
         &self,
         _: Self::Parameters,
-        _: freenet_stdlib::composers::RelatedContractsContainer,
+        _: freenet_stdlib::contract_composition::RelatedContractsContainer,
     ) -> Result<freenet_stdlib::prelude::ValidateResult, freenet_stdlib::prelude::ContractError>
     {
         unimplemented!()
@@ -52,7 +55,7 @@ impl TypedContract for Contract {
         _: &Self::Parameters,
         _: freenet_stdlib::typed_contract::TypedUpdateData<Self>,
         _: &RelatedContractsContainer,
-    ) -> freenet_stdlib::composers::MergeResult {
+    ) -> freenet_stdlib::contract_composition::MergeResult {
         MergeResult::Success
     }
 
