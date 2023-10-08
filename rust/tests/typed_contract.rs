@@ -1,6 +1,7 @@
 use freenet_macros::contract;
 use freenet_stdlib::{
-    contract_composition::MergeResult, prelude::*, typed_contract::TypedContract,
+    prelude::*,
+    typed_contract::{MergeResult, TypedContract},
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,7 +38,7 @@ impl TypedContract for Contract {
     fn verify(
         &self,
         _: Self::Parameters,
-        _: freenet_stdlib::contract_composition::RelatedContractsContainer,
+        _: freenet_stdlib::typed_contract::RelatedContractsContainer,
     ) -> Result<freenet_stdlib::prelude::ValidateResult, freenet_stdlib::prelude::ContractError>
     {
         unimplemented!()
@@ -55,7 +56,7 @@ impl TypedContract for Contract {
         _: &Self::Parameters,
         _: freenet_stdlib::typed_contract::TypedUpdateData<Self>,
         _: &RelatedContractsContainer,
-    ) -> freenet_stdlib::contract_composition::MergeResult {
+    ) -> freenet_stdlib::typed_contract::MergeResult {
         MergeResult::Success
     }
 

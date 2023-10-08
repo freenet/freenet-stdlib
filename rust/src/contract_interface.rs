@@ -111,13 +111,6 @@ impl UpdateModification<'_> {
     pub fn requires_dependencies(&self) -> bool {
         !self.related.is_empty()
     }
-
-    // pub fn empty() -> UpdateModification<'static> {
-    //     UpdateModification {
-    //         new_state: None,
-    //         related: vec![],
-    //     }
-    // }
 }
 
 /// The contracts related to a parent or root contract. Tipically this means
@@ -1597,9 +1590,60 @@ pub mod serialization {
 
     use serde::de::DeserializeOwned;
 
-    use crate::contract_composition::{MergeResult, RelatedContractsContainer};
-
     use super::*;
+
+    pub enum MergeResult {
+        Success,
+        RequestRelated(RelatedContractsContainer),
+        Error(ContractError),
+    }
+
+    #[derive(Default)]
+    pub struct RelatedContractsContainer {}
+
+    impl From<RelatedContracts<'static>> for RelatedContractsContainer {
+        fn from(_value: RelatedContracts<'static>) -> Self {
+            todo!()
+        }
+    }
+
+    impl From<RelatedContractsContainer> for Vec<crate::contract_interface::RelatedContract> {
+        fn from(_value: RelatedContractsContainer) -> Self {
+            todo!()
+        }
+    }
+
+    impl From<Vec<UpdateData<'static>>> for RelatedContractsContainer {
+        fn from(_value: Vec<UpdateData<'static>>) -> Self {
+            todo!()
+        }
+    }
+
+    impl RelatedContractsContainer {
+        pub fn get<C: TypedContract>(&self, _id: &ContractInstanceId) -> Related<C> {
+            todo!()
+        }
+
+        pub fn request<C: TypedContract>(&mut self, _request: ContractInstanceId) {
+            todo!()
+        }
+
+        pub fn merge(&mut self, _other: Self) {
+            todo!()
+        }
+    }
+
+    pub enum Related<C: TypedContract> {
+        /// The state was previously requested and found
+        Found { state: C },
+        /// The state was previously requested but not found
+        NotFound,
+        /// The state was previously requested but request is still in flight
+        RequestPending,
+        /// The state was not previously requested, this enum can be included
+        /// in the MergeResult return value which will request it
+        NotRequested,
+    }
 
     /// A contract state and it's associated types which can be encoded and decoded
     /// via an specific encoder.

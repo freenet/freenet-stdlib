@@ -28,15 +28,14 @@ pub mod time;
 /// Locutus stdlib prelude.
 pub mod prelude {
     pub use crate::code_hash::*;
-    pub use crate::contract_composition::RelatedContractsContainer;
-    pub use crate::contract_interface::serialization::{
-        BincodeEncoder, Encoder, JsonEncoder, SerializationAdapter,
-    };
     pub use crate::contract_interface::wasm_interface::ContractInterfaceResult;
     pub use crate::contract_interface::*;
     pub use crate::delegate_interface::wasm_interface::DelegateInterfaceResult;
     pub use crate::delegate_interface::*;
     pub use crate::parameters::*;
+    pub use crate::typed_contract::{
+        BincodeEncoder, Encoder, JsonEncoder, RelatedContractsContainer, SerializationAdapter,
+    };
     pub use crate::versioning::*;
     pub use freenet_macros::{contract, delegate};
 
