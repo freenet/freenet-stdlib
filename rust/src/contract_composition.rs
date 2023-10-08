@@ -1,5 +1,8 @@
-use crate::contract_interface::{
-    ContractError, ContractInstanceId, RelatedContracts, State, UpdateData, ValidateResult,
+use crate::{
+    contract_interface::{
+        ContractError, ContractInstanceId, RelatedContracts, State, UpdateData, ValidateResult,
+    },
+    typed_contract::{MergeResult, RelatedContractsContainer},
 };
 
 impl<'a> From<&'a State<'static>> for State<'static> {
@@ -153,59 +156,6 @@ pub struct NoContext;
 impl<'x, T> From<&'x T> for NoContext {
     fn from(_: &'x T) -> Self {
         NoContext
-    }
-}
-
-pub enum Related<C: ContractComponent> {
-    /// The state was previously requested and found
-    Found { state: C },
-    /// The state was previously requested but not found
-    NotFound,
-    /// The state was previously requested but request is still in flight
-    RequestPending,
-    /// The state was not previously requested, this enum can be included
-    /// in the MergeResult return value which will request it
-    NotRequested,
-}
-
-pub enum MergeResult {
-    Success,
-    RequestRelated(RelatedContractsContainer),
-    Error(ContractError),
-}
-
-#[derive(Default)]
-pub struct RelatedContractsContainer {}
-
-impl From<RelatedContracts<'static>> for RelatedContractsContainer {
-    fn from(_value: RelatedContracts<'static>) -> Self {
-        todo!()
-    }
-}
-
-impl From<RelatedContractsContainer> for Vec<crate::contract_interface::RelatedContract> {
-    fn from(_value: RelatedContractsContainer) -> Self {
-        todo!()
-    }
-}
-
-impl From<Vec<UpdateData<'static>>> for RelatedContractsContainer {
-    fn from(_value: Vec<UpdateData<'static>>) -> Self {
-        todo!()
-    }
-}
-
-impl RelatedContractsContainer {
-    pub fn get<C: ContractComponent>(&self, _id: &ContractInstanceId) -> Related<C> {
-        todo!()
-    }
-
-    pub fn request<C: ContractComponent>(&mut self, _request: ContractInstanceId) {
-        todo!()
-    }
-
-    pub fn merge(&mut self, _other: Self) {
-        todo!()
     }
 }
 

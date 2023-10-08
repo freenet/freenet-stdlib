@@ -1,3 +1,6 @@
+#[cfg(not(feature = "unstable"))]
+compile_error!("requires \"unstable\" feature");
+
 use freenet_stdlib::contract_composition::{
     ContractComponent, ParametersComponent, SummaryComponent,
 };
@@ -88,7 +91,7 @@ impl ContractComponent for ChatRoom {
         _: &Self::Parameters,
         _: &freenet_stdlib::contract_composition::TypedUpdateData<Self>,
         _: &freenet_stdlib::prelude::RelatedContractsContainer,
-    ) -> freenet_stdlib::contract_composition::MergeResult {
+    ) -> freenet_stdlib::typed_contract::MergeResult {
         unimplemented!()
     }
 
@@ -196,7 +199,7 @@ pub mod dependency_2 {
             _: &Self::Parameters,
             _: &freenet_stdlib::contract_composition::TypedUpdateData<Self>,
             _: &freenet_stdlib::prelude::RelatedContractsContainer,
-        ) -> freenet_stdlib::contract_composition::MergeResult {
+        ) -> freenet_stdlib::typed_contract::MergeResult {
             unimplemented!()
         }
 

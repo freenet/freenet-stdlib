@@ -1,10 +1,13 @@
+#[cfg(not(feature = "unstable"))]
+compile_error!("requires \"unstable\" feature");
+
 mod parent {
     //! This would be the end crate.
 
     // children would be like a different dependency crate which implements composable types
     use super::children::{self, *};
 
-    use freenet_stdlib::{contract_composition::*, prelude::*};
+    use freenet_stdlib::{contract_composition::*, prelude::*, typed_contract::MergeResult};
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]
@@ -195,7 +198,11 @@ mod parent {
 mod children {
     //! This would be a depebdency crate.
 
-    use freenet_stdlib::{contract_composition::*, prelude::*};
+    use freenet_stdlib::{
+        contract_composition::*,
+        prelude::*,
+        typed_contract::{MergeResult, Related, TypedContract},
+    };
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]
@@ -266,10 +273,10 @@ mod children {
             let Related::Found {
                 state: _other_contract,
                 ..
-            } = related.get::<ChildComponent>(&contract_id)
+            } = related.get::<Contract>(&contract_id)
             else {
                 let mut req = RelatedContractsContainer::default();
-                req.request::<ChildComponent>(contract_id);
+                req.request::<Contract>(contract_id);
                 return MergeResult::RequestRelated(req);
             };
             MergeResult::Success
@@ -293,6 +300,62 @@ mod children {
         {
             summary.merge(ChildComponentSummary);
             Ok(())
+        }
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct Contract {}
+
+    #[derive(Serialize, Deserialize)]
+    pub struct CParams;
+    #[derive(Serialize, Deserialize)]
+    pub struct CDelta;
+    #[derive(Serialize, Deserialize)]
+    pub struct CSummary;
+
+    use freenet_stdlib::prelude::SerializationAdapter;
+    impl SerializationAdapter for Contract {
+        type Parameters = CParams;
+        type Delta = CDelta;
+        type Summary = CSummary;
+        type SelfEncoder = BincodeEncoder<Self>;
+        type ParametersEncoder = BincodeEncoder<Self::Parameters>;
+        type DeltaEncoder = BincodeEncoder<Self::Delta>;
+        type SummaryEncoder = BincodeEncoder<Self::Summary>;
+    }
+
+    impl TypedContract for Contract {
+        fn verify(
+            &self,
+            _: Self::Parameters,
+            _: RelatedContractsContainer,
+        ) -> Result<ValidateResult, ContractError> {
+            todo!()
+        }
+
+        fn verify_delta(_: Self::Parameters, _: Self::Delta) -> Result<bool, ContractError> {
+            todo!()
+        }
+
+        fn merge(
+            &mut self,
+            _: &Self::Parameters,
+            _: serialization::TypedUpdateData<Self>,
+            _: &RelatedContractsContainer,
+        ) -> MergeResult {
+            todo!()
+        }
+
+        fn summarize(&self, _: Self::Parameters) -> Result<Self::Summary, ContractError> {
+            todo!()
+        }
+
+        fn delta(
+            &self,
+            _: Self::Parameters,
+            _: Self::Summary,
+        ) -> Result<Self::Delta, ContractError> {
+            todo!()
         }
     }
 }
