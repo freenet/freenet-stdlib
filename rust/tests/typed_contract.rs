@@ -27,7 +27,7 @@ pub struct CSummary;
 // }
 
 #[contract(
-    encoder = BincodeEncoder, 
+    encoder = BincodeEncoder,
     types(
         type Parameters = CParams;
         type Delta = CDelta;
@@ -72,6 +72,10 @@ impl TypedContract for Contract {
         _: Self::Parameters,
         _: Self::Summary,
     ) -> Result<Self::Delta, freenet_stdlib::prelude::ContractError> {
+        unimplemented!()
+    }
+
+    fn instance_id(_: &Self::Parameters) -> ContractInstanceId {
         unimplemented!()
     }
 }

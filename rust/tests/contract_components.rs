@@ -209,7 +209,10 @@ mod children {
     pub struct ChildComponent {}
 
     #[derive(Serialize, Deserialize, Clone)]
-    pub struct ChildComponentParams;
+    pub struct ChildComponentParams {
+        other_params: CParams,
+    }
+
     impl ParametersComponent for ChildComponentParams {
         fn contract_id(&self) -> Option<ContractInstanceId> {
             unimplemented!()
@@ -270,14 +273,16 @@ mod children {
             related: &RelatedContractsContainer,
         ) -> MergeResult {
             let contract_id = parameters.contract_id().unwrap();
-            let Related::Found {
-                state: _other_contract,
-                ..
-            } = related.get::<Contract>(&contract_id)
-            else {
-                let mut req = RelatedContractsContainer::default();
-                req.request::<Contract>(contract_id);
-                return MergeResult::RequestRelated(req);
+            let _other_contract = match related.get::<Contract>(&parameters.other_params) {
+                Ok(r) => {
+                    let Related::Found { state, .. } = r else {
+                        let mut req = RelatedContractsContainer::default();
+                        req.request::<Contract>(contract_id);
+                        return MergeResult::RequestRelated(req);
+                    };
+                    state
+                }
+                Err(e) => return MergeResult::Error(e.into()),
             };
             MergeResult::Success
         }
@@ -305,16 +310,15 @@ mod children {
 
     #[derive(Serialize, Deserialize)]
     pub struct Contract {}
-
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, Clone, Copy)]
     pub struct CParams;
     #[derive(Serialize, Deserialize)]
     pub struct CDelta;
     #[derive(Serialize, Deserialize)]
     pub struct CSummary;
 
-    use freenet_stdlib::prelude::SerializationAdapter;
-    impl SerializationAdapter for Contract {
+    use freenet_stdlib::prelude::EncodingAdapter;
+    impl EncodingAdapter for Contract {
         type Parameters = CParams;
         type Delta = CDelta;
         type Summary = CSummary;
@@ -340,7 +344,7 @@ mod children {
         fn merge(
             &mut self,
             _: &Self::Parameters,
-            _: serialization::TypedUpdateData<Self>,
+            _: encoding::TypedUpdateData<Self>,
             _: &RelatedContractsContainer,
         ) -> MergeResult {
             todo!()
@@ -356,6 +360,10 @@ mod children {
             _: Self::Summary,
         ) -> Result<Self::Delta, ContractError> {
             todo!()
+        }
+
+        fn instance_id(_: &Self::Parameters) -> ContractInstanceId {
+            unimplemented!()
         }
     }
 }
