@@ -1584,9 +1584,9 @@ mod test {
     }
 }
 
-pub mod serialization {
+pub mod encoding {
     //! Helper types for interaction between wasm and host boundaries.
-    use std::marker::PhantomData;
+    use std::{collections::HashSet, marker::PhantomData};
 
     use serde::de::DeserializeOwned;
 
@@ -1599,17 +1599,44 @@ pub mod serialization {
     }
 
     #[derive(Default)]
-    pub struct RelatedContractsContainer {}
+    pub struct RelatedContractsContainer {
+        contracts: HashMap<ContractInstanceId, State<'static>>,
+        pending: HashSet<ContractInstanceId>,
+        not_found: HashSet<ContractInstanceId>,
+    }
 
     impl From<RelatedContracts<'static>> for RelatedContractsContainer {
-        fn from(_value: RelatedContracts<'static>) -> Self {
-            todo!()
+        fn from(found: RelatedContracts<'static>) -> Self {
+            let mut not_found = HashSet::new();
+            let mut contracts = HashMap::with_capacity(found.map.len());
+            for (id, state) in found.map.into_iter() {
+                match state {
+                    Some(state) => {
+                        contracts.insert(id, state);
+                    }
+                    None => {
+                        not_found.insert(id);
+                    }
+                }
+            }
+            RelatedContractsContainer {
+                contracts,
+                pending: HashSet::new(),
+                not_found,
+            }
         }
     }
 
     impl From<RelatedContractsContainer> for Vec<crate::contract_interface::RelatedContract> {
-        fn from(_value: RelatedContractsContainer) -> Self {
-            todo!()
+        fn from(related: RelatedContractsContainer) -> Self {
+            related
+                .pending
+                .into_iter()
+                .map(|id| RelatedContract {
+                    contract_instance_id: id,
+                    mode: RelatedMode::StateOnce,
+                })
+                .collect()
         }
     }
 
@@ -1620,12 +1647,29 @@ pub mod serialization {
     }
 
     impl RelatedContractsContainer {
-        pub fn get<C: TypedContract>(&self, _id: &ContractInstanceId) -> Related<C> {
-            todo!()
+        pub fn get<C: TypedContract>(
+            &self,
+            params: &C::Parameters,
+        ) -> Result<Related<C>, <<C as EncodingAdapter>::SelfEncoder as Encoder<C>>::Error>
+        {
+            let id = <C as TypedContract>::instance_id(params);
+            if let Some(res) = self.contracts.get(&id) {
+                match <<C as EncodingAdapter>::SelfEncoder>::deserialize(res.as_ref()) {
+                    Ok(state) => return Ok(Related::Found { state }),
+                    Err(err) => return Err(err),
+                }
+            }
+            if self.pending.contains(&id) {
+                return Ok(Related::RequestPending);
+            }
+            if self.not_found.contains(&id) {
+                return Ok(Related::NotFound);
+            }
+            Ok(Related::NotRequested)
         }
 
-        pub fn request<C: TypedContract>(&mut self, _request: ContractInstanceId) {
-            todo!()
+        pub fn request<C: TypedContract>(&mut self, id: ContractInstanceId) {
+            self.pending.insert(id);
         }
 
         pub fn merge(&mut self, _other: Self) {
@@ -1647,7 +1691,7 @@ pub mod serialization {
 
     /// A contract state and it's associated types which can be encoded and decoded
     /// via an specific encoder.
-    pub trait SerializationAdapter
+    pub trait EncodingAdapter
     where
         Self: Sized,
     {
@@ -1661,29 +1705,31 @@ pub mod serialization {
         type SummaryEncoder: Encoder<Self::Summary>;
     }
 
-    pub enum TypedUpdateData<T: SerializationAdapter> {
+    pub enum TypedUpdateData<T: EncodingAdapter> {
         RelatedState { state: T },
         RelatedDelta { delta: T::Delta },
         RelatedStateAndDelta { state: T, delta: T::Delta },
     }
 
-    impl<T: SerializationAdapter> TypedUpdateData<T> {
+    impl<T: EncodingAdapter> TypedUpdateData<T> {
         pub fn from_other<Parent>(_value: &TypedUpdateData<Parent>) -> Self
         where
-            Parent: SerializationAdapter,
+            Parent: EncodingAdapter,
             T: for<'x> From<&'x Parent>,
         {
             todo!()
         }
     }
 
-    impl<T: SerializationAdapter> From<(Option<T>, Option<T::Delta>)> for TypedUpdateData<T> {
+    impl<T: EncodingAdapter> From<(Option<T>, Option<T::Delta>)> for TypedUpdateData<T> {
         fn from((_state, _delta): (Option<T>, Option<T::Delta>)) -> Self {
             todo!()
         }
     }
 
-    pub trait TypedContract: SerializationAdapter {
+    pub trait TypedContract: EncodingAdapter {
+        fn instance_id(params: &Self::Parameters) -> ContractInstanceId;
+
         fn verify(
             &self,
             parameters: Self::Parameters,
@@ -1769,17 +1815,17 @@ pub mod serialization {
         related: RelatedContracts<'static>,
     ) -> Result<ValidateResult, ContractError>
     where
-        T: SerializationAdapter + TypedContract,
+        T: EncodingAdapter + TypedContract,
         ContractError: From<
-            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
-                <T as SerializationAdapter>::Parameters,
+            <<T as EncodingAdapter>::ParametersEncoder as Encoder<
+                <T as EncodingAdapter>::Parameters,
             >>::Error,
         >,
-        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
+        ContractError: From<<<T as EncodingAdapter>::SelfEncoder as Encoder<T>>::Error>,
     {
         let typed_params =
-            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
-        let typed_state = <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
+            <<T as EncodingAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
+        let typed_state = <<T as EncodingAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
         let related_container = RelatedContractsContainer::from(related);
         typed_state.verify(typed_params, related_container)
     }
@@ -1789,21 +1835,19 @@ pub mod serialization {
         delta: StateDelta<'static>,
     ) -> Result<bool, ContractError>
     where
-        T: SerializationAdapter + TypedContract,
+        T: EncodingAdapter + TypedContract,
         ContractError: From<
-            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
-                <T as SerializationAdapter>::Parameters,
+            <<T as EncodingAdapter>::ParametersEncoder as Encoder<
+                <T as EncodingAdapter>::Parameters,
             >>::Error,
         >,
         ContractError: From<
-            <<T as SerializationAdapter>::DeltaEncoder as Encoder<
-                <T as SerializationAdapter>::Delta,
-            >>::Error,
+            <<T as EncodingAdapter>::DeltaEncoder as Encoder<<T as EncodingAdapter>::Delta>>::Error,
         >,
     {
         let typed_params =
-            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
-        let typed_delta = <<T as SerializationAdapter>::DeltaEncoder>::deserialize(delta.as_ref())?;
+            <<T as EncodingAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
+        let typed_delta = <<T as EncodingAdapter>::DeltaEncoder>::deserialize(delta.as_ref())?;
         <T as TypedContract>::verify_delta(typed_params, typed_delta)
     }
 
@@ -1813,33 +1857,29 @@ pub mod serialization {
         data: Vec<UpdateData<'static>>,
     ) -> Result<UpdateModification<'static>, ContractError>
     where
-        T: SerializationAdapter + TypedContract,
-        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
+        T: EncodingAdapter + TypedContract,
+        ContractError: From<<<T as EncodingAdapter>::SelfEncoder as Encoder<T>>::Error>,
         ContractError: From<
-            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
-                <T as SerializationAdapter>::Parameters,
+            <<T as EncodingAdapter>::ParametersEncoder as Encoder<
+                <T as EncodingAdapter>::Parameters,
             >>::Error,
         >,
         ContractError: From<
-            <<T as SerializationAdapter>::DeltaEncoder as Encoder<
-                <T as SerializationAdapter>::Delta,
-            >>::Error,
+            <<T as EncodingAdapter>::DeltaEncoder as Encoder<<T as EncodingAdapter>::Delta>>::Error,
         >,
     {
         let typed_params =
-            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
-        let mut typed_state =
-            <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
+            <<T as EncodingAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
+        let mut typed_state = <<T as EncodingAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
         let self_updates = UpdateData::get_self_states(&data);
         let related_container = RelatedContractsContainer::from(data);
         for (state, delta) in self_updates {
             let state = state
-                .map(|s| <<T as SerializationAdapter>::SelfEncoder>::deserialize(s.as_ref()))
+                .map(|s| <<T as EncodingAdapter>::SelfEncoder>::deserialize(s.as_ref()))
                 .transpose()?;
             let delta = delta
                 .map(|d| {
-                    <<T as SerializationAdapter>::DeltaEncoder>::deserialize(d.as_ref())
-                        .map(Into::into)
+                    <<T as EncodingAdapter>::DeltaEncoder>::deserialize(d.as_ref()).map(Into::into)
                 })
                 .transpose()?;
             let typed_update = TypedUpdateData::from((state, delta));
@@ -1851,7 +1891,7 @@ pub mod serialization {
                 MergeResult::Error(err) => return Err(err),
             }
         }
-        let encoded = <<T as SerializationAdapter>::SelfEncoder>::serialize(&typed_state)?;
+        let encoded = <<T as EncodingAdapter>::SelfEncoder>::serialize(&typed_state)?;
         Ok(UpdateModification::valid(encoded.into()))
     }
 
@@ -1860,24 +1900,25 @@ pub mod serialization {
         state: State<'static>,
     ) -> Result<StateSummary<'static>, ContractError>
     where
-        T: SerializationAdapter + TypedContract,
-        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
+        T: EncodingAdapter + TypedContract,
+        ContractError: From<<<T as EncodingAdapter>::SelfEncoder as Encoder<T>>::Error>,
         ContractError: From<
-            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
-                <T as SerializationAdapter>::Parameters,
+            <<T as EncodingAdapter>::ParametersEncoder as Encoder<
+                <T as EncodingAdapter>::Parameters,
             >>::Error,
         >,
-        ContractError: From<
-            <<T as SerializationAdapter>::SummaryEncoder as Encoder<
-                <T as SerializationAdapter>::Summary,
-            >>::Error,
-        >,
+        ContractError:
+            From<
+                <<T as EncodingAdapter>::SummaryEncoder as Encoder<
+                    <T as EncodingAdapter>::Summary,
+                >>::Error,
+            >,
     {
         let typed_params =
-            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
-        let typed_state = <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
+            <<T as EncodingAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
+        let typed_state = <<T as EncodingAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
         let summary = typed_state.summarize(typed_params)?;
-        let encoded = <<T as SerializationAdapter>::SummaryEncoder>::serialize(&summary)?;
+        let encoded = <<T as EncodingAdapter>::SummaryEncoder>::serialize(&summary)?;
         Ok(encoded.into())
     }
 
@@ -1887,31 +1928,30 @@ pub mod serialization {
         summary: StateSummary<'static>,
     ) -> Result<StateDelta<'static>, ContractError>
     where
-        T: SerializationAdapter + TypedContract,
-        ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
+        T: EncodingAdapter + TypedContract,
+        ContractError: From<<<T as EncodingAdapter>::SelfEncoder as Encoder<T>>::Error>,
         ContractError: From<
-            <<T as SerializationAdapter>::ParametersEncoder as Encoder<
-                <T as SerializationAdapter>::Parameters,
+            <<T as EncodingAdapter>::ParametersEncoder as Encoder<
+                <T as EncodingAdapter>::Parameters,
             >>::Error,
         >,
+        ContractError:
+            From<
+                <<T as EncodingAdapter>::SummaryEncoder as Encoder<
+                    <T as EncodingAdapter>::Summary,
+                >>::Error,
+            >,
         ContractError: From<
-            <<T as SerializationAdapter>::SummaryEncoder as Encoder<
-                <T as SerializationAdapter>::Summary,
-            >>::Error,
-        >,
-        ContractError: From<
-            <<T as SerializationAdapter>::DeltaEncoder as Encoder<
-                <T as SerializationAdapter>::Delta,
-            >>::Error,
+            <<T as EncodingAdapter>::DeltaEncoder as Encoder<<T as EncodingAdapter>::Delta>>::Error,
         >,
     {
         let typed_params =
-            <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
-        let typed_state = <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
+            <<T as EncodingAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
+        let typed_state = <<T as EncodingAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
         let typed_summary =
-            <<T as SerializationAdapter>::SummaryEncoder>::deserialize(summary.as_ref())?;
+            <<T as EncodingAdapter>::SummaryEncoder>::deserialize(summary.as_ref())?;
         let summary = typed_state.delta(typed_params, typed_summary)?;
-        let encoded = <<T as SerializationAdapter>::DeltaEncoder>::serialize(&summary)?;
+        let encoded = <<T as EncodingAdapter>::DeltaEncoder>::serialize(&summary)?;
         Ok(encoded.into())
     }
 }

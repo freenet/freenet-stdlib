@@ -190,7 +190,7 @@ pub(crate) fn contract_ffi_impl(
             if encoder.is_some() {
                 return quote_spanned! {
                     attr_span =>
-                    compile_error!("encoder specified but SerializationAdapter is already implemented");
+                    compile_error!("encoder specified but EncodingAdapter is already implemented");
                 }
                 .into();
             }
@@ -324,7 +324,7 @@ impl ImplTrait {
         let delta = &asoc_types.delta;
         let summary = &asoc_types.summary;
         quote! {
-            impl ::freenet_stdlib::prelude::SerializationAdapter for #type_name {
+            impl ::freenet_stdlib::prelude::EncodingAdapter for #type_name {
                 type Parameters = #params;
                 type Delta = #delta;
                 type Summary = #summary;
@@ -486,7 +486,7 @@ impl ImplTrait {
                     let summary = ::freenet_stdlib::contract_composition::from_bytes::inner_summarize_state::<
                         #type_name,
                     >(parameters.clone(), state.clone())?;
-                    let serializable_summary = <#type_name as ::freenet_stdlib::prelude::SerializationAdapter>::Summary::from(summary);
+                    let serializable_summary = <#type_name as ::freenet_stdlib::prelude::EncodingAdapter>::Summary::from(summary);
                     let encoded_summary = #encoder::serialize(&serializable_summary)?;
                     Ok(encoded_summary.into())
                 }
@@ -502,7 +502,7 @@ impl ImplTrait {
                     let delta = ::freenet_stdlib::contract_composition::from_bytes::inner_state_delta::<
                         #type_name,
                     >(parameters.clone(), state.clone(), summary.clone())?;
-                    let serializable_delta = <#type_name as ::freenet_stdlib::prelude::SerializationAdapter>::Delta::from(delta);
+                    let serializable_delta = <#type_name as ::freenet_stdlib::prelude::EncodingAdapter>::Delta::from(delta);
                     let encoded_delta = #encoder::serialize(&serializable_delta)?;
                     Ok(encoded_delta.into())
                 }

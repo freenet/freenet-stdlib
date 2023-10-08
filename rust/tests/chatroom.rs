@@ -35,12 +35,6 @@ impl<'x> From<&'x ChatRoom> for dependency_2::PublicKey {
     }
 }
 
-// impl<'x> From<&'x ChatRoom> for dependency_2::PublicKey {
-//     fn from(_: &'x ChatRoom) -> Self {
-//         unimplemented!()
-//     }
-// }
-
 #[derive(Serialize, Deserialize)]
 pub struct ChatRoomSummary;
 

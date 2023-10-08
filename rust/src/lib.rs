@@ -9,7 +9,7 @@ pub mod memory;
 mod parameters;
 mod versioning;
 
-pub use contract_interface::serialization as typed_contract;
+pub use contract_interface::encoding as typed_contract;
 
 #[allow(dead_code, unused_imports, clippy::all)]
 pub(crate) mod client_request_generated;
@@ -34,7 +34,7 @@ pub mod prelude {
     pub use crate::delegate_interface::*;
     pub use crate::parameters::*;
     pub use crate::typed_contract::{
-        BincodeEncoder, Encoder, JsonEncoder, RelatedContractsContainer, SerializationAdapter,
+        BincodeEncoder, Encoder, EncodingAdapter, JsonEncoder, RelatedContractsContainer,
     };
     pub use crate::versioning::*;
     pub use freenet_macros::{contract, delegate};
