@@ -8,17 +8,17 @@ impl<'a> From<&'a State<'static>> for State<'static> {
     }
 }
 
-pub trait ComposableParameters {
+pub trait ParametersComponent {
     fn contract_id(&self) -> Option<ContractInstanceId>;
 }
 
-pub trait ComposableSummary<ChildSummary> {
+pub trait SummaryComponent<ChildSummary> {
     fn merge(&mut self, _child_summary: ChildSummary);
 }
 
-pub trait ComposableContract: std::any::Any + Sized {
+pub trait ContractComponent: std::any::Any + Sized {
     type Context;
-    type Parameters: ComposableParameters;
+    type Parameters: ParametersComponent;
     type Delta;
     type Summary;
 
@@ -30,7 +30,7 @@ pub trait ComposableContract: std::any::Any + Sized {
         related: &RelatedContractsContainer,
     ) -> Result<ValidateResult, ContractError>
     where
-        Child: ComposableContract,
+        Child: ContractComponent,
         Self::Context: for<'x> From<&'x Ctx>;
 
     /// Corresponds to ContractInterface `validate_delta`
@@ -39,7 +39,7 @@ pub trait ComposableContract: std::any::Any + Sized {
         delta: &Self::Delta,
     ) -> Result<bool, ContractError>
     where
-        Child: ComposableContract;
+        Child: ContractComponent;
 
     /// Corresponds to ContractInterface `update_state`
     fn merge(
@@ -56,7 +56,7 @@ pub trait ComposableContract: std::any::Any + Sized {
         summary: &mut ParentSummary,
     ) -> Result<(), ContractError>
     where
-        ParentSummary: ComposableSummary<<Self as ComposableContract>::Summary>;
+        ParentSummary: SummaryComponent<<Self as ContractComponent>::Summary>;
 
     /// Corresponds to ContractInterface `delta`
     fn delta(
@@ -66,31 +66,31 @@ pub trait ComposableContract: std::any::Any + Sized {
     ) -> Result<Self::Delta, ContractError>;
 }
 
-pub enum TypedUpdateData<T: ComposableContract> {
+pub enum TypedUpdateData<T: ContractComponent> {
     RelatedState { state: T },
     RelatedDelta { delta: T::Delta },
     RelatedStateAndDelta { state: T, delta: T::Delta },
 }
 
-impl<T: ComposableContract> TypedUpdateData<T> {
+impl<T: ContractComponent> TypedUpdateData<T> {
     pub fn from_other<Parent>(_value: &TypedUpdateData<Parent>) -> Self
     where
-        Parent: ComposableContract,
-        <T as ComposableContract>::Delta: for<'x> From<&'x Parent::Delta>,
+        Parent: ContractComponent,
+        <T as ContractComponent>::Delta: for<'x> From<&'x Parent::Delta>,
         T: for<'x> From<&'x Parent>,
     {
         todo!()
     }
 }
 
-impl<T: ComposableContract> From<(Option<T>, Option<T::Delta>)> for TypedUpdateData<T> {
+impl<T: ContractComponent> From<(Option<T>, Option<T::Delta>)> for TypedUpdateData<T> {
     fn from((_state, _delta): (Option<T>, Option<T::Delta>)) -> Self {
         todo!()
     }
 }
 
 #[allow(unused)]
-impl<T: ComposableContract> ComposableContract for Vec<T> {
+impl<T: ContractComponent> ContractComponent for Vec<T> {
     type Context = T::Context;
     type Parameters = T::Parameters;
     type Delta = T::Delta;
@@ -103,7 +103,7 @@ impl<T: ComposableContract> ComposableContract for Vec<T> {
         related: &RelatedContractsContainer,
     ) -> Result<ValidateResult, ContractError>
     where
-        Child: ComposableContract,
+        Child: ContractComponent,
         Self::Context: for<'x> From<&'x Ctx>,
     {
         todo!()
@@ -114,7 +114,7 @@ impl<T: ComposableContract> ComposableContract for Vec<T> {
         delta: &Self::Delta,
     ) -> Result<bool, ContractError>
     where
-        Child: ComposableContract,
+        Child: ContractComponent,
     {
         todo!()
     }
@@ -134,7 +134,7 @@ impl<T: ComposableContract> ComposableContract for Vec<T> {
         summary: &mut ParentSummary,
     ) -> Result<(), ContractError>
     where
-        ParentSummary: ComposableSummary<<Self as ComposableContract>::Summary>,
+        ParentSummary: SummaryComponent<<Self as ContractComponent>::Summary>,
     {
         todo!()
     }
@@ -156,7 +156,7 @@ impl<'x, T> From<&'x T> for NoContext {
     }
 }
 
-pub enum Related<C: ComposableContract> {
+pub enum Related<C: ContractComponent> {
     /// The state was previously requested and found
     Found { state: C },
     /// The state was previously requested but not found
@@ -196,11 +196,11 @@ impl From<Vec<UpdateData<'static>>> for RelatedContractsContainer {
 }
 
 impl RelatedContractsContainer {
-    pub fn get<C: ComposableContract>(&self, _id: &ContractInstanceId) -> Related<C> {
+    pub fn get<C: ContractComponent>(&self, _id: &ContractInstanceId) -> Related<C> {
         todo!()
     }
 
-    pub fn request<C: ComposableContract>(&mut self, _request: ContractInstanceId) {
+    pub fn request<C: ContractComponent>(&mut self, _request: ContractInstanceId) {
         todo!()
     }
 
@@ -228,22 +228,22 @@ pub mod from_bytes {
         related: RelatedContracts<'static>,
     ) -> Result<ValidateResult, ContractError>
     where
-        T: ComposableContract + SerializationAdapter + DeserializeOwned,
-        <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
-        for<'x> <T as ComposableContract>::Context: From<&'x Ctx>,
+        T: ContractComponent + SerializationAdapter + DeserializeOwned,
+        <T as SerializationAdapter>::Parameters: Into<<T as ContractComponent>::Parameters>,
+        for<'x> <T as ContractComponent>::Context: From<&'x Ctx>,
         ContractError: From<
             <<T as SerializationAdapter>::ParametersEncoder as Encoder<
                 <T as SerializationAdapter>::Parameters,
             >>::Error,
         >,
         ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters:
-            for<'x> From<&'x <T as ComposableContract>::Parameters>,
-        <Child as ComposableContract>::Context: for<'x> From<&'x T>,
+        Child: ContractComponent,
+        <Child as ContractComponent>::Parameters:
+            for<'x> From<&'x <T as ContractComponent>::Parameters>,
+        <Child as ContractComponent>::Context: for<'x> From<&'x T>,
         Ctx: for<'x> From<&'x T>,
     {
-        let typed_params: <T as ComposableContract>::Parameters =
+        let typed_params: <T as ContractComponent>::Parameters =
             <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?
                 .into();
         let typed_state: T =
@@ -265,9 +265,9 @@ pub mod from_bytes {
         delta: StateDelta<'static>,
     ) -> Result<bool, ContractError>
     where
-        T: ComposableContract + SerializationAdapter,
-        <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
-        <T as SerializationAdapter>::Delta: Into<<T as ComposableContract>::Delta>,
+        T: ContractComponent + SerializationAdapter,
+        <T as SerializationAdapter>::Parameters: Into<<T as ContractComponent>::Parameters>,
+        <T as SerializationAdapter>::Delta: Into<<T as ContractComponent>::Delta>,
         ContractError: From<
             <<T as SerializationAdapter>::ParametersEncoder as Encoder<
                 <T as SerializationAdapter>::Parameters,
@@ -278,17 +278,17 @@ pub mod from_bytes {
                 <T as SerializationAdapter>::Delta,
             >>::Error,
         >,
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters:
-            for<'x> From<&'x <T as ComposableContract>::Parameters>,
-        <Child as ComposableContract>::Delta: for<'x> From<&'x <T as ComposableContract>::Delta>,
+        Child: ContractComponent,
+        <Child as ContractComponent>::Parameters:
+            for<'x> From<&'x <T as ContractComponent>::Parameters>,
+        <Child as ContractComponent>::Delta: for<'x> From<&'x <T as ContractComponent>::Delta>,
     {
         let typed_params =
             <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?
                 .into();
         let typed_delta =
             <<T as SerializationAdapter>::DeltaEncoder>::deserialize(delta.as_ref())?.into();
-        <T as ComposableContract>::verify_delta::<Child>(&typed_params, &typed_delta)
+        <T as ContractComponent>::verify_delta::<Child>(&typed_params, &typed_delta)
     }
 
     pub fn inner_update_state<T, Child>(
@@ -297,9 +297,9 @@ pub mod from_bytes {
         data: Vec<UpdateData<'static>>,
     ) -> Result<UpdateModification<'static>, ContractError>
     where
-        T: ComposableContract + SerializationAdapter,
-        <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
-        <T as SerializationAdapter>::Delta: Into<<T as ComposableContract>::Delta>,
+        T: ContractComponent + SerializationAdapter,
+        <T as SerializationAdapter>::Parameters: Into<<T as ContractComponent>::Parameters>,
+        <T as SerializationAdapter>::Delta: Into<<T as ContractComponent>::Delta>,
         ContractError: From<
             <<T as SerializationAdapter>::ParametersEncoder as Encoder<
                 <T as SerializationAdapter>::Parameters,
@@ -311,10 +311,10 @@ pub mod from_bytes {
             >>::Error,
         >,
         ContractError: From<<<T as SerializationAdapter>::SelfEncoder as Encoder<T>>::Error>,
-        Child: ComposableContract,
-        <Child as ComposableContract>::Parameters:
-            for<'x> From<&'x <T as ComposableContract>::Parameters>,
-        <Child as ComposableContract>::Delta: for<'x> From<&'x <T as ComposableContract>::Delta>,
+        Child: ContractComponent,
+        <Child as ContractComponent>::Parameters:
+            for<'x> From<&'x <T as ContractComponent>::Parameters>,
+        <Child as ContractComponent>::Delta: for<'x> From<&'x <T as ContractComponent>::Delta>,
     {
         let typed_params =
             <<T as SerializationAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?
@@ -349,12 +349,12 @@ pub mod from_bytes {
     pub fn inner_summarize_state<T>(
         parameters: Parameters<'static>,
         state: State<'static>,
-    ) -> Result<<T as ComposableContract>::Summary, ContractError>
+    ) -> Result<<T as ContractComponent>::Summary, ContractError>
     where
-        T: ComposableContract + SerializationAdapter,
-        <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
-        <T as ComposableContract>::Summary:
-            for<'x> From<&'x T> + ComposableSummary<<T as ComposableContract>::Summary>,
+        T: ContractComponent + SerializationAdapter,
+        <T as SerializationAdapter>::Parameters: Into<<T as ContractComponent>::Parameters>,
+        <T as ContractComponent>::Summary:
+            for<'x> From<&'x T> + SummaryComponent<<T as ContractComponent>::Summary>,
         ContractError: From<
             <<T as SerializationAdapter>::ParametersEncoder as Encoder<
                 <T as SerializationAdapter>::Parameters,
@@ -367,7 +367,7 @@ pub mod from_bytes {
                 .into();
         let typed_state: T =
             <<T as SerializationAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
-        let mut summary = <<T as ComposableContract>::Summary>::from(&typed_state);
+        let mut summary = <<T as ContractComponent>::Summary>::from(&typed_state);
         typed_state.summarize(&typed_params, &mut summary)?;
         Ok(summary)
     }
@@ -376,11 +376,11 @@ pub mod from_bytes {
         parameters: Parameters<'static>,
         state: State<'static>,
         summary: StateSummary<'static>,
-    ) -> Result<<T as ComposableContract>::Delta, ContractError>
+    ) -> Result<<T as ContractComponent>::Delta, ContractError>
     where
-        T: ComposableContract + SerializationAdapter,
-        <T as SerializationAdapter>::Parameters: Into<<T as ComposableContract>::Parameters>,
-        <T as SerializationAdapter>::Summary: Into<<T as ComposableContract>::Summary>,
+        T: ContractComponent + SerializationAdapter,
+        <T as SerializationAdapter>::Parameters: Into<<T as ContractComponent>::Parameters>,
+        <T as SerializationAdapter>::Summary: Into<<T as ContractComponent>::Summary>,
         ContractError: From<
             <<T as SerializationAdapter>::ParametersEncoder as Encoder<
                 <T as SerializationAdapter>::Parameters,

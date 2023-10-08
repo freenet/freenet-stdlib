@@ -1597,7 +1597,7 @@ pub mod serialization {
 
     use serde::de::DeserializeOwned;
 
-    use crate::composers::{MergeResult, RelatedContractsContainer};
+    use crate::contract_composition::{MergeResult, RelatedContractsContainer};
 
     use super::*;
 
