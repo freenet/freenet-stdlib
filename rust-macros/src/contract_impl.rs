@@ -482,7 +482,7 @@ impl ImplTrait {
                     ::freenet_stdlib::prelude::StateSummary<'static>,
                     ::freenet_stdlib::prelude::ContractError,
                 > {
-                    let mut summary: ::core::option::Option<<#type_name as ::freenet_stdlib::contract_composition::ContractComponent>::Summary> = ::core::option::Option::None;
+                    use ::freenet_stdlib::prelude::Encoder;
                     let summary = ::freenet_stdlib::contract_composition::from_bytes::inner_summarize_state::<
                         #type_name,
                     >(parameters.clone(), state.clone())?;
@@ -499,6 +499,7 @@ impl ImplTrait {
                     ::freenet_stdlib::prelude::StateDelta<'static>,
                     ::freenet_stdlib::prelude::ContractError,
                 > {
+                    use ::freenet_stdlib::prelude::Encoder;
                     let delta = ::freenet_stdlib::contract_composition::from_bytes::inner_state_delta::<
                         #type_name,
                     >(parameters.clone(), state.clone(), summary.clone())?;

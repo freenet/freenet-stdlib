@@ -1,9 +1,11 @@
 #[cfg(not(feature = "unstable"))]
 compile_error!("requires \"unstable\" feature");
 
+use freenet_macros::contract;
 use freenet_stdlib::contract_composition::{
     ContractComponent, ParametersComponent, SummaryComponent,
 };
+use freenet_stdlib::typed_contract::BincodeEncoder;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -35,16 +37,40 @@ impl<'x> From<&'x ChatRoom> for dependency_2::PublicKey {
     }
 }
 
+impl<'x> From<&'x ChatRoom> for String {
+    fn from(_: &'x ChatRoom) -> Self {
+        unreachable!()
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct ChatRoomSummary;
 
 impl SummaryComponent<dependency_2::ChildSummary> for ChatRoomSummary {
     fn merge(&mut self, _child_summary: dependency_2::ChildSummary) {
-        todo!()
+        unreachable!()
     }
 }
 
-// #[contract(children(), encoder = BincodeEncoder)]
+impl SummaryComponent<ChatRoomSummary> for ChatRoomSummary {
+    fn merge(&mut self, _child_summary: ChatRoomSummary) {
+        unreachable!()
+    }
+}
+
+impl<'x> From<&'x ChatRoom> for ChatRoomSummary {
+    fn from(_: &'x ChatRoom) -> Self {
+        unreachable!()
+    }
+}
+
+#[contract(
+    children(
+        Vec<dependency_2::ChatRoomMember>,
+        Vec<dependency_1::SignedComposable<dependency_2::ChatRoomMessage>>
+    ),
+    encoder = BincodeEncoder
+)]
 impl ContractComponent for ChatRoom {
     type Context = String;
     type Parameters = ChatRoomParameters;
@@ -138,6 +164,67 @@ pub mod dependency_2 {
     pub struct ChatRoomMember {
         pub name: String,
         pub public_key: PublicKey,
+    }
+
+    #[allow(dead_code)]
+    impl ContractComponent for ChatRoomMember {
+        type Context = PublicKey;
+        type Parameters = ChatRoomMsgParameters;
+        type Delta = String;
+        type Summary = String;
+
+        fn verify<Child, Ctx>(
+            &self,
+            _: &Self::Parameters,
+            _: &Ctx,
+            _: &freenet_stdlib::typed_contract::RelatedContractsContainer,
+        ) -> Result<freenet_stdlib::prelude::ValidateResult, freenet_stdlib::prelude::ContractError>
+        where
+            Child: ContractComponent,
+            Self::Context: for<'x> From<&'x Ctx>,
+        {
+            unreachable!()
+        }
+
+        fn verify_delta<Child>(
+            _: &Self::Parameters,
+            _: &Self::Delta,
+        ) -> Result<bool, freenet_stdlib::prelude::ContractError>
+        where
+            Child: ContractComponent,
+        {
+            unreachable!()
+        }
+
+        fn merge(
+            &mut self,
+            _: &Self::Parameters,
+            _: &freenet_stdlib::contract_composition::TypedUpdateData<Self>,
+            _: &freenet_stdlib::typed_contract::RelatedContractsContainer,
+        ) -> freenet_stdlib::typed_contract::MergeResult {
+            unreachable!()
+        }
+
+        fn summarize<ParentSummary>(
+            &self,
+            _: &Self::Parameters,
+            _: &mut ParentSummary,
+        ) -> Result<(), freenet_stdlib::prelude::ContractError>
+        where
+            ParentSummary: freenet_stdlib::contract_composition::SummaryComponent<
+                <Self as ContractComponent>::Summary,
+            >,
+        {
+            unreachable!()
+        }
+
+        fn delta(
+            &self,
+            _: &Self::Parameters,
+            _: &Self::Summary,
+        ) -> Result<Self::Delta, freenet_stdlib::prelude::ContractError> {
+            unreachable!()
+        }
     }
 
     #[derive(Serialize, Deserialize)]
