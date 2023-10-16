@@ -240,11 +240,9 @@ impl ContractContainer {
     }
 
     /// Return the contract code from the specific contract version as `Vec<u8>`.
-    pub fn data(&self) -> Vec<u8> {
+    pub fn data(&self) -> &[u8] {
         match self {
-            Self::Wasm(ContractWasmAPIVersion::V1(contract_v1)) => {
-                contract_v1.clone().try_into().unwrap()
-            }
+            Self::Wasm(ContractWasmAPIVersion::V1(contract_v1)) => contract_v1.data.data(),
         }
     }
 
