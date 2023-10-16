@@ -1215,7 +1215,7 @@ pub struct WrappedContract {
         deserialize_with = "WrappedContract::deser_contract_data"
     )]
     pub data: Arc<ContractCode<'static>>,
-    #[serde(deserialize_with = "WrappedContract::deser_params")]
+    #[serde(deserialize_with = "Parameters::deser_params")]
     pub params: Parameters<'static>,
     pub key: ContractKey,
 }
@@ -1262,14 +1262,6 @@ impl WrappedContract {
     {
         let data: ContractCode<'de> = Deserialize::deserialize(deser)?;
         Ok(Arc::new(data.into_owned()))
-    }
-
-    fn deser_params<'de, D>(deser: D) -> Result<Parameters<'static>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let data: Parameters<'de> = Deserialize::deserialize(deser)?;
-        Ok(data.into_owned())
     }
 }
 

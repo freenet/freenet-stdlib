@@ -1,13 +1,13 @@
 use std::borrow::Cow;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
 
 /// Data that forms part of a contract or a delegate along with the WebAssembly code.
 ///
 /// This is supplied to the contract as a parameter to the contract's functions. Parameters are
 /// typically be used to configure a contract, much like the parameters of a constructor function.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde_as]
 #[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct Parameters<'a>(
@@ -32,6 +32,14 @@ impl<'a> Parameters<'a> {
     pub fn into_owned(self) -> Parameters<'static> {
         let data: Cow<'static, _> = Cow::from(self.0.into_owned());
         Parameters(data)
+    }
+
+    pub fn deser_params<'de, D>(deser: D) -> Result<Parameters<'static>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let data: Parameters<'de> = Deserialize::deserialize(deser)?;
+        Ok(data.into_owned())
     }
 }
 
