@@ -382,8 +382,8 @@ impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
 ///    they arrive
 
 pub trait DelegateInterface {
-    /// Process inbound message, producing zero or more outbound messages in response
-    /// Note that all state for the delegate must be stored using the secret mechanism.
+    /// Process inbound message, producing zero or more outbound messages in response.
+    /// All state for the delegate must be stored using the secret mechanism.
     ///
     /// # Arguments
     /// - attested: an optional identifier for the client of this function. Usually will

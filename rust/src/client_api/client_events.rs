@@ -1292,7 +1292,6 @@ impl std::fmt::Display for HostResponse {
     }
 }
 
-// todo: add a `AsBytes` trait for state representations
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[non_exhaustive]
 pub enum ContractResponse<T = WrappedState> {
@@ -1308,33 +1307,15 @@ pub enum ContractResponse<T = WrappedState> {
     /// Message sent when there is an update to a subscribed contract.
     UpdateNotification {
         key: ContractKey,
-        #[serde(deserialize_with = "ContractResponse::<T>::deser_update_data")]
+        #[serde(deserialize_with = "UpdateData::deser_update_data")]
         update: UpdateData<'static>,
     },
     /// Successful update
     UpdateResponse {
         key: ContractKey,
-        #[serde(deserialize_with = "ContractResponse::<T>::deser_state")]
+        #[serde(deserialize_with = "StateSummary::deser_state_summary")]
         summary: StateSummary<'static>,
     },
-}
-
-impl<T> ContractResponse<T> {
-    fn deser_update_data<'de, D>(deser: D) -> Result<UpdateData<'static>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = <UpdateData as Deserialize>::deserialize(deser)?;
-        Ok(value.into_owned())
-    }
-
-    fn deser_state<'de, D>(deser: D) -> Result<StateSummary<'static>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = <StateSummary as Deserialize>::deserialize(deser)?;
-        Ok(value.into_owned())
-    }
 }
 
 impl<T> From<ContractResponse<T>> for HostResponse<T> {

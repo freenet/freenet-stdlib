@@ -292,6 +292,14 @@ impl UpdateData<'_> {
     ) -> Vec<(Option<State<'a>>, Option<StateDelta<'a>>)> {
         todo!()
     }
+
+    pub fn deser_update_data<'de, D>(deser: D) -> Result<UpdateData<'static>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <UpdateData as Deserialize>::deserialize(deser)?;
+        Ok(value.into_owned())
+    }
 }
 
 impl<'a> From<StateDelta<'a>> for UpdateData<'a> {
@@ -713,6 +721,14 @@ impl StateSummary<'_> {
 
     pub fn into_owned(self) -> StateSummary<'static> {
         StateSummary(self.0.into_owned().into())
+    }
+
+    pub fn deser_state_summary<'de, D>(deser: D) -> Result<StateSummary<'static>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <StateSummary as Deserialize>::deserialize(deser)?;
+        Ok(value.into_owned())
     }
 }
 
