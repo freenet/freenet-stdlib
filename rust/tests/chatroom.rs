@@ -2,9 +2,7 @@
 compile_error!("requires \"unstable\" feature");
 
 use freenet_macros::contract;
-use freenet_stdlib::contract_composition::{
-    ContractComponent, ParametersComponent, SummaryComponent,
-};
+use freenet_stdlib::contract_composition::{ComponentParameter, ContractComponent, Mergeable};
 use freenet_stdlib::typed_contract::BincodeEncoder;
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +17,7 @@ pub struct ChatRoomParameters {
     pub owner_public_key: dependency_2::PublicKey,
 }
 
-impl ParametersComponent for ChatRoomParameters {
+impl ComponentParameter for ChatRoomParameters {
     fn contract_id(&self) -> Option<freenet_stdlib::prelude::ContractInstanceId> {
         unimplemented!()
     }
@@ -46,13 +44,13 @@ impl<'x> From<&'x ChatRoom> for String {
 #[derive(Serialize, Deserialize)]
 pub struct ChatRoomSummary;
 
-impl SummaryComponent<dependency_2::ChildSummary> for ChatRoomSummary {
+impl Mergeable<dependency_2::ChildSummary> for ChatRoomSummary {
     fn merge(&mut self, _child_summary: dependency_2::ChildSummary) {
         unreachable!()
     }
 }
 
-impl SummaryComponent<ChatRoomSummary> for ChatRoomSummary {
+impl Mergeable<ChatRoomSummary> for ChatRoomSummary {
     fn merge(&mut self, _child_summary: ChatRoomSummary) {
         unreachable!()
     }
@@ -74,7 +72,7 @@ impl<'x> From<&'x ChatRoom> for ChatRoomSummary {
 impl ContractComponent for ChatRoom {
     type Context = String;
     type Parameters = ChatRoomParameters;
-    type Delta = String;
+    type Delta = dependency_2::ChatDelta;
     type Summary = ChatRoomSummary;
 
     fn verify<Child, Ctx>(
@@ -121,9 +119,8 @@ impl ContractComponent for ChatRoom {
         _: &mut ParentSummary,
     ) -> Result<(), freenet_stdlib::prelude::ContractError>
     where
-        ParentSummary: freenet_stdlib::contract_composition::SummaryComponent<
-            <Self as ContractComponent>::Summary,
-        >,
+        ParentSummary:
+            freenet_stdlib::contract_composition::Mergeable<<Self as ContractComponent>::Summary>,
     {
         unimplemented!()
     }
@@ -140,10 +137,10 @@ impl ContractComponent for ChatRoom {
 pub mod dependency_1 {
     use serde::{Deserialize, Serialize};
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct Signature {}
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct SignedComposable<S> {
         pub value: S,
         pub signature: Signature,
@@ -151,8 +148,21 @@ pub mod dependency_1 {
 }
 
 pub mod dependency_2 {
-    use freenet_stdlib::contract_composition::{ContractComponent, ParametersComponent};
+    use freenet_stdlib::contract_composition::{ComponentParameter, ContractComponent, Mergeable};
     use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize, Clone)]
+    pub struct ChatDelta;
+
+    impl Mergeable<ChatDelta> for ChatDelta {
+        fn merge(&mut self, _child_summary: ChatDelta) {}
+    }
+
+    impl<'x> From<&'x ChatDelta> for ChatDelta {
+        fn from(_: &'x ChatDelta) -> Self {
+            ChatDelta
+        }
+    }
 
     #[derive(Clone, Copy, Serialize, Deserialize)]
     pub struct ChildSummary;
@@ -160,7 +170,7 @@ pub mod dependency_2 {
     #[derive(Clone, Copy, Serialize, Deserialize)]
     pub struct PublicKey {}
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct ChatRoomMember {
         pub name: String,
         pub public_key: PublicKey,
@@ -170,7 +180,7 @@ pub mod dependency_2 {
     impl ContractComponent for ChatRoomMember {
         type Context = PublicKey;
         type Parameters = ChatRoomMsgParameters;
-        type Delta = String;
+        type Delta = ChatDelta;
         type Summary = String;
 
         fn verify<Child, Ctx>(
@@ -211,7 +221,7 @@ pub mod dependency_2 {
             _: &mut ParentSummary,
         ) -> Result<(), freenet_stdlib::prelude::ContractError>
         where
-            ParentSummary: freenet_stdlib::contract_composition::SummaryComponent<
+            ParentSummary: freenet_stdlib::contract_composition::Mergeable<
                 <Self as ContractComponent>::Summary,
             >,
         {
@@ -227,7 +237,7 @@ pub mod dependency_2 {
         }
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct ChatRoomMessage {
         pub message: String,
         pub author: String,
@@ -237,7 +247,7 @@ pub mod dependency_2 {
         pub owner_public_key: PublicKey,
     }
 
-    impl ParametersComponent for ChatRoomMsgParameters {
+    impl ComponentParameter for ChatRoomMsgParameters {
         fn contract_id(&self) -> Option<freenet_stdlib::prelude::ContractInstanceId> {
             unimplemented!()
         }
@@ -246,7 +256,7 @@ pub mod dependency_2 {
     impl ContractComponent for super::dependency_1::SignedComposable<ChatRoomMessage> {
         type Context = PublicKey;
         type Parameters = ChatRoomMsgParameters;
-        type Delta = String;
+        type Delta = ChatDelta;
         type Summary = String;
 
         fn verify<Child, Ctx>(
@@ -290,7 +300,7 @@ pub mod dependency_2 {
             _: &mut ParentSummary,
         ) -> Result<(), freenet_stdlib::prelude::ContractError>
         where
-            ParentSummary: freenet_stdlib::contract_composition::SummaryComponent<
+            ParentSummary: freenet_stdlib::contract_composition::Mergeable<
                 <Self as ContractComponent>::Summary,
             >,
         {

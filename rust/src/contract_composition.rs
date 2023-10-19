@@ -11,17 +11,17 @@ impl<'a> From<&'a State<'static>> for State<'static> {
     }
 }
 
-pub trait ParametersComponent {
+pub trait ComponentParameter {
     fn contract_id(&self) -> Option<ContractInstanceId>;
 }
 
-pub trait SummaryComponent<ChildSummary> {
-    fn merge(&mut self, _child_summary: ChildSummary);
+pub trait Mergeable<Other> {
+    fn merge(&mut self, other: Other);
 }
 
 pub trait ContractComponent: std::any::Any + Sized {
     type Context;
-    type Parameters: ParametersComponent;
+    type Parameters: ComponentParameter;
     type Delta;
     type Summary;
 
@@ -59,7 +59,7 @@ pub trait ContractComponent: std::any::Any + Sized {
         summary: &mut ParentSummary,
     ) -> Result<(), ContractError>
     where
-        ParentSummary: SummaryComponent<<Self as ContractComponent>::Summary>;
+        ParentSummary: Mergeable<<Self as ContractComponent>::Summary>;
 
     /// Corresponds to ContractInterface `delta`
     fn delta(
@@ -76,24 +76,48 @@ pub enum TypedUpdateData<T: ContractComponent> {
 }
 
 impl<T: ContractComponent> TypedUpdateData<T> {
-    pub fn from_other<Parent>(_value: &TypedUpdateData<Parent>) -> Self
+    pub fn from_other<Parent>(value: &TypedUpdateData<Parent>) -> Self
     where
         Parent: ContractComponent,
         <T as ContractComponent>::Delta: for<'x> From<&'x Parent::Delta>,
         T: for<'x> From<&'x Parent>,
     {
-        todo!()
+        match value {
+            TypedUpdateData::RelatedState { state } => {
+                let state = T::from(state);
+                TypedUpdateData::RelatedState { state }
+            }
+            TypedUpdateData::RelatedDelta { delta } => {
+                let delta: T::Delta = <T as ContractComponent>::Delta::from(delta);
+                TypedUpdateData::RelatedDelta { delta }
+            }
+            TypedUpdateData::RelatedStateAndDelta { state, delta } => {
+                let state = T::from(state);
+                let delta: T::Delta = <T as ContractComponent>::Delta::from(delta);
+                TypedUpdateData::RelatedStateAndDelta { state, delta }
+            }
+        }
     }
 }
 
-impl<T: ContractComponent> From<(Option<T>, Option<T::Delta>)> for TypedUpdateData<T> {
-    fn from((_state, _delta): (Option<T>, Option<T::Delta>)) -> Self {
-        todo!()
+impl<T: ContractComponent> TryFrom<(Option<T>, Option<T::Delta>)> for TypedUpdateData<T> {
+    type Error = ContractError;
+    fn try_from((state, delta): (Option<T>, Option<T::Delta>)) -> Result<Self, Self::Error> {
+        match (state, delta) {
+            (None, None) => Err(ContractError::InvalidState),
+            (None, Some(delta)) => Ok(Self::RelatedDelta { delta }),
+            (Some(state), None) => Ok(Self::RelatedState { state }),
+            (Some(state), Some(delta)) => Ok(Self::RelatedStateAndDelta { state, delta }),
+        }
     }
 }
 
 #[allow(unused)]
-impl<T: ContractComponent> ContractComponent for Vec<T> {
+impl<T> ContractComponent for Vec<T>
+where
+    T: ContractComponent + Clone,
+    <T as ContractComponent>::Delta: Clone + Mergeable<<T as ContractComponent>::Delta>,
+{
     type Context = T::Context;
     type Parameters = T::Parameters;
     type Delta = T::Delta;
@@ -109,7 +133,16 @@ impl<T: ContractComponent> ContractComponent for Vec<T> {
         Child: ContractComponent,
         Self::Context: for<'x> From<&'x Ctx>,
     {
-        todo!()
+        for v in self {
+            match v.verify::<Child, Ctx>(parameters, context, related)? {
+                ValidateResult::Invalid => return Ok(ValidateResult::Invalid),
+                ValidateResult::RequestRelated(related) => {
+                    return Ok(ValidateResult::RequestRelated(related))
+                }
+                ValidateResult::Valid => {}
+            }
+        }
+        Ok(ValidateResult::Valid)
     }
 
     fn verify_delta<Child>(
@@ -119,7 +152,7 @@ impl<T: ContractComponent> ContractComponent for Vec<T> {
     where
         Child: ContractComponent,
     {
-        todo!()
+        <T as ContractComponent>::verify_delta::<Child>(parameters, delta)
     }
 
     fn merge(
@@ -128,7 +161,28 @@ impl<T: ContractComponent> ContractComponent for Vec<T> {
         update: &TypedUpdateData<Self>,
         related: &RelatedContractsContainer,
     ) -> MergeResult {
-        todo!()
+        for v in self {
+            let update = match update {
+                TypedUpdateData::RelatedState { state } => TypedUpdateData::RelatedState {
+                    state: state[0].clone(),
+                },
+                TypedUpdateData::RelatedDelta { delta } => TypedUpdateData::RelatedDelta {
+                    delta: delta.clone(),
+                },
+                TypedUpdateData::RelatedStateAndDelta { state, delta } => {
+                    TypedUpdateData::RelatedStateAndDelta {
+                        state: state[0].clone(),
+                        delta: delta.clone(),
+                    }
+                }
+            };
+            match v.merge(parameters, &update, related) {
+                MergeResult::RequestRelated(req) => return MergeResult::RequestRelated(req),
+                MergeResult::Error(err) => return MergeResult::Error(err),
+                MergeResult::Success => {}
+            }
+        }
+        MergeResult::Success
     }
 
     fn summarize<ParentSummary>(
@@ -137,9 +191,12 @@ impl<T: ContractComponent> ContractComponent for Vec<T> {
         summary: &mut ParentSummary,
     ) -> Result<(), ContractError>
     where
-        ParentSummary: SummaryComponent<<Self as ContractComponent>::Summary>,
+        ParentSummary: Mergeable<<Self as ContractComponent>::Summary>,
     {
-        todo!()
+        for v in self {
+            v.summarize(parameters, summary);
+        }
+        Ok(())
     }
 
     fn delta(
@@ -147,7 +204,16 @@ impl<T: ContractComponent> ContractComponent for Vec<T> {
         parameters: &Self::Parameters,
         summary: &Self::Summary,
     ) -> Result<Self::Delta, ContractError> {
-        todo!()
+        let mut delta: Option<<T as ContractComponent>::Delta> = None;
+        for v in self {
+            let other_delta = v.delta(parameters, summary)?;
+            if let Some(delta) = &mut delta {
+                delta.merge(other_delta);
+            } else {
+                delta = Some(other_delta)
+            }
+        }
+        delta.ok_or(ContractError::InvalidDelta)
     }
 }
 
@@ -274,7 +340,7 @@ pub mod from_bytes {
                     <<T as EncodingAdapter>::DeltaEncoder>::deserialize(d.as_ref()).map(Into::into)
                 })
                 .transpose()?;
-            let typed_update = TypedUpdateData::from((state, delta));
+            let typed_update = TypedUpdateData::try_from((state, delta))?;
             match typed_state.merge(&typed_params, &typed_update, &related_container) {
                 MergeResult::Success => {}
                 MergeResult::RequestRelated(req) => {
@@ -295,7 +361,7 @@ pub mod from_bytes {
         T: ContractComponent + EncodingAdapter,
         <T as EncodingAdapter>::Parameters: Into<<T as ContractComponent>::Parameters>,
         <T as ContractComponent>::Summary:
-            for<'x> From<&'x T> + SummaryComponent<<T as ContractComponent>::Summary>,
+            for<'x> From<&'x T> + Mergeable<<T as ContractComponent>::Summary>,
         ContractError: From<
             <<T as EncodingAdapter>::ParametersEncoder as Encoder<
                 <T as EncodingAdapter>::Parameters,

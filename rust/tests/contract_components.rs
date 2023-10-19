@@ -21,7 +21,7 @@ mod parent {
         contract_b_0_params: ChildComponentParams,
         contract_b_1_params: ChildComponentParams,
     }
-    impl ParametersComponent for ParentContractParams {
+    impl ComponentParameter for ParentContractParams {
         fn contract_id(&self) -> Option<ContractInstanceId> {
             unimplemented!()
         }
@@ -39,12 +39,12 @@ mod parent {
             unimplemented!()
         }
     }
-    impl SummaryComponent<ChildComponentSummary> for ParentContractSummary {
+    impl Mergeable<ChildComponentSummary> for ParentContractSummary {
         fn merge(&mut self, _: ChildComponentSummary) {
             unimplemented!()
         }
     }
-    impl SummaryComponent<ParentContractSummary> for ParentContractSummary {
+    impl Mergeable<ParentContractSummary> for ParentContractSummary {
         fn merge(&mut self, _: ParentContractSummary) {
             unimplemented!()
         }
@@ -156,7 +156,7 @@ mod parent {
             summary: &mut ParentSummary,
         ) -> Result<(), ContractError>
         where
-            ParentSummary: SummaryComponent<<Self as ContractComponent>::Summary>,
+            ParentSummary: Mergeable<<Self as ContractComponent>::Summary>,
         {
             // todo: probably need ParentSummary to impl From<&Self>?
             let mut this_summary = ParentContractSummary;
@@ -213,7 +213,7 @@ mod children {
         other_params: CParams,
     }
 
-    impl ParametersComponent for ChildComponentParams {
+    impl ComponentParameter for ChildComponentParams {
         fn contract_id(&self) -> Option<ContractInstanceId> {
             unimplemented!()
         }
@@ -301,7 +301,7 @@ mod children {
             summary: &mut ParentSummary,
         ) -> Result<(), ContractError>
         where
-            ParentSummary: SummaryComponent<<Self as ContractComponent>::Summary>,
+            ParentSummary: Mergeable<<Self as ContractComponent>::Summary>,
         {
             summary.merge(ChildComponentSummary);
             Ok(())
@@ -334,11 +334,11 @@ mod children {
             _: Self::Parameters,
             _: RelatedContractsContainer,
         ) -> Result<ValidateResult, ContractError> {
-            todo!()
+            unimplemented!()
         }
 
         fn verify_delta(_: Self::Parameters, _: Self::Delta) -> Result<bool, ContractError> {
-            todo!()
+            unimplemented!()
         }
 
         fn merge(
@@ -347,11 +347,11 @@ mod children {
             _: encoding::TypedUpdateData<Self>,
             _: &RelatedContractsContainer,
         ) -> MergeResult {
-            todo!()
+            unimplemented!()
         }
 
         fn summarize(&self, _: Self::Parameters) -> Result<Self::Summary, ContractError> {
-            todo!()
+            unimplemented!()
         }
 
         fn delta(
@@ -359,7 +359,7 @@ mod children {
             _: Self::Parameters,
             _: Self::Summary,
         ) -> Result<Self::Delta, ContractError> {
-            todo!()
+            unimplemented!()
         }
 
         fn instance_id(_: &Self::Parameters) -> ContractInstanceId {

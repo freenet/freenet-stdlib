@@ -288,9 +288,20 @@ impl UpdateData<'_> {
     }
 
     pub(crate) fn get_self_states<'a>(
-        _updates: &[UpdateData<'a>],
+        updates: &[UpdateData<'a>],
     ) -> Vec<(Option<State<'a>>, Option<StateDelta<'a>>)> {
-        todo!()
+        let mut own_states = Vec::with_capacity(updates.len());
+        for update in updates {
+            match update {
+                UpdateData::State(state) => own_states.push((Some(state.clone()), None)),
+                UpdateData::Delta(delta) => own_states.push((None, Some(delta.clone()))),
+                UpdateData::StateAndDelta { state, delta } => {
+                    own_states.push((Some(state.clone()), Some(delta.clone())))
+                }
+                _ => {}
+            }
+        }
+        own_states
     }
 
     pub fn deser_update_data<'de, D>(deser: D) -> Result<UpdateData<'static>, D::Error>
@@ -1649,8 +1660,22 @@ pub mod encoding {
     }
 
     impl From<Vec<UpdateData<'static>>> for RelatedContractsContainer {
-        fn from(_value: Vec<UpdateData<'static>>) -> Self {
-            todo!()
+        fn from(updates: Vec<UpdateData<'static>>) -> Self {
+            let mut this = RelatedContractsContainer::default();
+            for update in updates {
+                match update {
+                    UpdateData::RelatedState { related_to, state } => {
+                        this.contracts.insert(related_to, state);
+                    }
+                    UpdateData::RelatedStateAndDelta {
+                        related_to, state, ..
+                    } => {
+                        this.contracts.insert(related_to, state);
+                    }
+                    _ => {}
+                }
+            }
+            this
         }
     }
 
@@ -1680,8 +1705,15 @@ pub mod encoding {
             self.pending.insert(id);
         }
 
-        pub fn merge(&mut self, _other: Self) {
-            todo!()
+        pub fn merge(&mut self, other: Self) {
+            let Self {
+                contracts,
+                pending,
+                not_found,
+            } = other;
+            self.pending.extend(pending);
+            self.not_found.extend(not_found);
+            self.contracts.extend(contracts);
         }
     }
 
@@ -1720,18 +1752,39 @@ pub mod encoding {
     }
 
     impl<T: EncodingAdapter> TypedUpdateData<T> {
-        pub fn from_other<Parent>(_value: &TypedUpdateData<Parent>) -> Self
+        pub fn from_other<Parent>(value: &TypedUpdateData<Parent>) -> Self
         where
             Parent: EncodingAdapter,
             T: for<'x> From<&'x Parent>,
+            T::Delta: for<'x> From<&'x Parent::Delta>,
         {
-            todo!()
+            match value {
+                TypedUpdateData::RelatedState { state } => {
+                    let state = T::from(state);
+                    TypedUpdateData::RelatedState { state }
+                }
+                TypedUpdateData::RelatedDelta { delta } => {
+                    let delta: T::Delta = <T as EncodingAdapter>::Delta::from(delta);
+                    TypedUpdateData::RelatedDelta { delta }
+                }
+                TypedUpdateData::RelatedStateAndDelta { state, delta } => {
+                    let state = T::from(state);
+                    let delta: T::Delta = <T as EncodingAdapter>::Delta::from(delta);
+                    TypedUpdateData::RelatedStateAndDelta { state, delta }
+                }
+            }
         }
     }
 
-    impl<T: EncodingAdapter> From<(Option<T>, Option<T::Delta>)> for TypedUpdateData<T> {
-        fn from((_state, _delta): (Option<T>, Option<T::Delta>)) -> Self {
-            todo!()
+    impl<T: EncodingAdapter> TryFrom<(Option<T>, Option<T::Delta>)> for TypedUpdateData<T> {
+        type Error = ContractError;
+        fn try_from((state, delta): (Option<T>, Option<T::Delta>)) -> Result<Self, Self::Error> {
+            match (state, delta) {
+                (None, None) => Err(ContractError::InvalidState),
+                (None, Some(delta)) => Ok(Self::RelatedDelta { delta }),
+                (Some(state), None) => Ok(Self::RelatedState { state }),
+                (Some(state), Some(delta)) => Ok(Self::RelatedStateAndDelta { state, delta }),
+            }
         }
     }
 
@@ -1890,7 +1943,7 @@ pub mod encoding {
                     <<T as EncodingAdapter>::DeltaEncoder>::deserialize(d.as_ref()).map(Into::into)
                 })
                 .transpose()?;
-            let typed_update = TypedUpdateData::from((state, delta));
+            let typed_update = TypedUpdateData::try_from((state, delta))?;
             match typed_state.merge(&typed_params, typed_update, &related_container) {
                 MergeResult::Success => {}
                 MergeResult::RequestRelated(req) => {
