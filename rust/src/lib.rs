@@ -21,6 +21,7 @@ pub(crate) mod host_response_generated;
 pub mod client_api;
 #[cfg(feature = "contract")]
 pub mod log;
+#[cfg(feature = "contract")]
 pub mod rand;
 #[cfg(feature = "contract")]
 pub mod time;
