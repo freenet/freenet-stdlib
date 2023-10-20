@@ -1,7 +1,7 @@
 use flatbuffers::WIPOffset;
 use std::fmt::Display;
 
-use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::client_api::TryFromFbs;
 use crate::client_request_generated::client_request::{
@@ -413,7 +413,7 @@ impl<'a> From<DelegateRequest<'a>> for ClientRequest<'a> {
 pub enum DelegateRequest<'a> {
     ApplicationMessages {
         key: DelegateKey,
-        #[serde(deserialize_with = "DelegateRequest::deser_params")]
+        #[serde(deserialize_with = "Parameters::deser_params")]
         params: Parameters<'a>,
         #[serde(borrow)]
         inbound: Vec<InboundDelegateMsg<'a>>,
@@ -483,14 +483,6 @@ impl DelegateRequest<'_> {
             DelegateRequest::RegisterDelegate { delegate, .. } => delegate.key(),
             DelegateRequest::UnregisterDelegate(key) => key,
         }
-    }
-
-    fn deser_params<'de, 'a, D>(deser: D) -> Result<Parameters<'a>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let bytes_vec: Vec<u8> = Deserialize::deserialize(deser)?;
-        Ok(Parameters::from(bytes_vec))
     }
 }
 

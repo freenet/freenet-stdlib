@@ -137,6 +137,14 @@ impl RelatedContracts<'_> {
         }
         RelatedContracts { map }
     }
+
+    pub fn deser_related_contracts<'de, D>(deser: D) -> Result<RelatedContracts<'static>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <RelatedContracts as Deserialize>::deserialize(deser)?;
+        Ok(value.into_owned())
+    }
 }
 
 impl RelatedContracts<'static> {
@@ -304,7 +312,7 @@ impl UpdateData<'_> {
         own_states
     }
 
-    pub fn deser_update_data<'de, D>(deser: D) -> Result<UpdateData<'static>, D::Error>
+    pub(crate) fn deser_update_data<'de, D>(deser: D) -> Result<UpdateData<'static>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -734,7 +742,7 @@ impl StateSummary<'_> {
         StateSummary(self.0.into_owned().into())
     }
 
-    pub fn deser_state_summary<'de, D>(deser: D) -> Result<StateSummary<'static>, D::Error>
+    pub(crate) fn deser_state_summary<'de, D>(deser: D) -> Result<StateSummary<'static>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {

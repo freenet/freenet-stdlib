@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::client_api::{TryFromFbs, WsApiError};
 use crate::client_request_generated::client_request::{
@@ -21,21 +21,10 @@ use crate::{contract_interface::ContractKey, prelude::ContractCode};
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DelegateWasmAPIVersion {
-    V1(
-        #[serde(deserialize_with = "DelegateWasmAPIVersion::deserialize_delegate")]
-        Delegate<'static>,
-    ),
+    V1(#[serde(deserialize_with = "Delegate::deserialize_delegate")] Delegate<'static>),
 }
 
-impl DelegateWasmAPIVersion {
-    fn deserialize_delegate<'de, D>(deser: D) -> Result<Delegate<'static>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let data: Delegate<'de> = Deserialize::deserialize(deser)?;
-        Ok(data.into_owned())
-    }
-}
+impl DelegateWasmAPIVersion {}
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
