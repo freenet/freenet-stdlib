@@ -1,7 +1,7 @@
 use flatbuffers::WIPOffset;
 use std::fmt::Display;
 
-use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::client_api::TryFromFbs;
 use crate::client_request_generated::client_request::{
@@ -413,7 +413,7 @@ impl<'a> From<DelegateRequest<'a>> for ClientRequest<'a> {
 pub enum DelegateRequest<'a> {
     ApplicationMessages {
         key: DelegateKey,
-        #[serde(deserialize_with = "DelegateRequest::deser_params")]
+        #[serde(deserialize_with = "Parameters::deser_params")]
         params: Parameters<'a>,
         #[serde(borrow)]
         inbound: Vec<InboundDelegateMsg<'a>>,
@@ -483,14 +483,6 @@ impl DelegateRequest<'_> {
             DelegateRequest::RegisterDelegate { delegate, .. } => delegate.key(),
             DelegateRequest::UnregisterDelegate(key) => key,
         }
-    }
-
-    fn deser_params<'de, 'a, D>(deser: D) -> Result<Parameters<'a>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let bytes_vec: Vec<u8> = Deserialize::deserialize(deser)?;
-        Ok(Parameters::from(bytes_vec))
     }
 }
 
@@ -1292,7 +1284,6 @@ impl std::fmt::Display for HostResponse {
     }
 }
 
-// todo: add a `AsBytes` trait for state representations
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[non_exhaustive]
 pub enum ContractResponse<T = WrappedState> {
@@ -1308,33 +1299,15 @@ pub enum ContractResponse<T = WrappedState> {
     /// Message sent when there is an update to a subscribed contract.
     UpdateNotification {
         key: ContractKey,
-        #[serde(deserialize_with = "ContractResponse::<T>::deser_update_data")]
+        #[serde(deserialize_with = "UpdateData::deser_update_data")]
         update: UpdateData<'static>,
     },
     /// Successful update
     UpdateResponse {
         key: ContractKey,
-        #[serde(deserialize_with = "ContractResponse::<T>::deser_state")]
+        #[serde(deserialize_with = "StateSummary::deser_state_summary")]
         summary: StateSummary<'static>,
     },
-}
-
-impl<T> ContractResponse<T> {
-    fn deser_update_data<'de, D>(deser: D) -> Result<UpdateData<'static>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = <UpdateData as Deserialize>::deserialize(deser)?;
-        Ok(value.into_owned())
-    }
-
-    fn deser_state<'de, D>(deser: D) -> Result<StateSummary<'static>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = <StateSummary as Deserialize>::deserialize(deser)?;
-        Ok(value.into_owned())
-    }
 }
 
 impl<T> From<ContractResponse<T>> for HostResponse<T> {

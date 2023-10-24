@@ -5,7 +5,7 @@ pub fn info(msg: &str) {
     }
 }
 
-#[link(wasm_import_module = "freenet_logger")]
+#[link(wasm_import_module = "freenet_log")]
 extern "C" {
     #[doc(hidden)]
     fn __frnt__logger__info(id: i64, ptr: i64, len: i32);

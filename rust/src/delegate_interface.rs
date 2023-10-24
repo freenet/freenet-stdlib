@@ -8,7 +8,7 @@ use std::{
 };
 
 use blake3::{traits::digest::Digest, Hasher as Blake3};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
 
 use crate::client_request_generated::client_request::{
@@ -62,6 +62,14 @@ impl Delegate<'_> {
 
     pub fn size(&self) -> usize {
         self.parameters.size() + self.data.size()
+    }
+
+    pub(crate) fn deserialize_delegate<'de, D>(deser: D) -> Result<Delegate<'static>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let data: Delegate<'de> = Deserialize::deserialize(deser)?;
+        Ok(data.into_owned())
     }
 }
 
@@ -382,8 +390,8 @@ impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
 ///    they arrive
 
 pub trait DelegateInterface {
-    /// Process inbound message, producing zero or more outbound messages in response
-    /// Note that all state for the delegate must be stored using the secret mechanism.
+    /// Process inbound message, producing zero or more outbound messages in response.
+    /// All state for the delegate must be stored using the secret mechanism.
     ///
     /// # Arguments
     /// - attested: an optional identifier for the client of this function. Usually will
@@ -588,7 +596,10 @@ impl UserInputResponse<'_> {
 pub enum OutboundDelegateMsg {
     // for the apps
     ApplicationMessage(ApplicationMessage),
-    RequestUserInput(#[serde(deserialize_with = "deser_func")] UserInputRequest<'static>),
+    RequestUserInput(
+        #[serde(deserialize_with = "OutboundDelegateMsg::deser_user_input_req")]
+        UserInputRequest<'static>,
+    ),
     // todo: remove when context can be accessed from the delegate environment and we pass it as reference
     ContextUpdated(DelegateContext),
     // from the node
@@ -614,6 +625,14 @@ impl From<ApplicationMessage> for OutboundDelegateMsg {
 }
 
 impl OutboundDelegateMsg {
+    fn deser_user_input_req<'de, D>(deser: D) -> Result<UserInputRequest<'static>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <UserInputRequest<'de> as Deserialize>::deserialize(deser)?;
+        Ok(value.into_owned())
+    }
+
     pub fn processed(&self) -> bool {
         match self {
             OutboundDelegateMsg::ApplicationMessage(msg) => msg.processed,
@@ -648,14 +667,6 @@ impl OutboundDelegateMsg {
             _ => None,
         }
     }
-}
-
-fn deser_func<'de, D>(deser: D) -> Result<UserInputRequest<'static>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = <UserInputRequest<'de> as Deserialize>::deserialize(deser)?;
-    Ok(value.into_owned())
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 pub fn set_logger() -> TokenStream {
-    // TODO: add log level as a parameter to the macro
+    // TODO: add env_filter as a parameter to the macro
     quote! {
         #[cfg(feature = "trace")]
         {
