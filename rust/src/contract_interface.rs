@@ -499,7 +499,7 @@ pub struct Contract<'a> {
 impl<'a> Contract<'a> {
     /// Returns a contract from [contract code](ContractCode) and given [parameters](Parameters).
     pub fn new(contract: ContractCode<'a>, parameters: Parameters<'a>) -> Contract<'a> {
-        let key = ContractKey::from((&parameters, &contract));
+        let key = ContractKey::from_params_and_code(&parameters, &contract);
         Contract {
             parameters,
             data: contract,
@@ -534,7 +534,7 @@ impl TryFrom<Vec<u8>> for Contract<'static> {
         reader.read_exact(&mut contract_buf)?;
         let contract = ContractCode::from(contract_buf);
 
-        let key = ContractKey::from((&parameters, &contract));
+        let key = ContractKey::from_params_and_code(&parameters, &contract);
 
         Ok(Contract {
             parameters,
@@ -922,6 +922,13 @@ impl std::fmt::Display for ContractCode<'_> {
 pub struct ContractInstanceId(#[serde_as(as = "[_; CONTRACT_KEY_SIZE]")] [u8; CONTRACT_KEY_SIZE]);
 
 impl ContractInstanceId {
+    pub fn from_params_and_code<'a>(
+        params: impl Borrow<Parameters<'a>>,
+        code: impl Borrow<ContractCode<'a>>,
+    ) -> Self {
+        generate_id(params.borrow(), code.borrow())
+    }
+
     pub const fn new(key: [u8; CONTRACT_KEY_SIZE]) -> Self {
         Self(key)
     }
@@ -947,6 +954,14 @@ impl ContractInstanceId {
     }
 }
 
+impl Deref for ContractInstanceId {
+    type Target = [u8; CONTRACT_KEY_SIZE];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 impl FromStr for ContractInstanceId {
     type Err = bs58::decode::Error;
 
@@ -960,17 +975,6 @@ impl TryFrom<String> for ContractInstanceId {
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         ContractInstanceId::from_bytes(s)
-    }
-}
-
-impl<'a, T, U> From<(T, U)> for ContractInstanceId
-where
-    T: Borrow<Parameters<'a>>,
-    U: Borrow<ContractCode<'a>>,
-{
-    fn from(val: (T, U)) -> Self {
-        let (parameters, code_data) = (val.0.borrow(), val.1.borrow());
-        generate_id(parameters, code_data)
     }
 }
 
@@ -989,50 +993,20 @@ pub struct ContractKey {
     code: Option<CodeHash>,
 }
 
-impl PartialEq for ContractKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.instance == other.instance
-    }
-}
-
-impl std::hash::Hash for ContractKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.instance.0.hash(state);
-    }
-}
-
-impl From<ContractInstanceId> for ContractKey {
-    fn from(instance: ContractInstanceId) -> Self {
-        Self {
-            instance,
-            code: None,
-        }
-    }
-}
-
-impl From<ContractKey> for ContractInstanceId {
-    fn from(key: ContractKey) -> Self {
-        key.instance
-    }
-}
-
-impl<'a, T, U> From<(T, U)> for ContractKey
-where
-    T: Borrow<Parameters<'a>>,
-    U: Borrow<ContractCode<'a>>,
-{
-    fn from(val: (T, U)) -> Self {
-        let (parameters, code_data) = (val.0.borrow(), val.1.borrow());
-        let id = generate_id(parameters, code_data);
-        let code_hash = code_data.hash();
+impl ContractKey {
+    pub fn from_params_and_code<'a>(
+        params: impl Borrow<Parameters<'a>>,
+        wasm_code: impl Borrow<ContractCode<'a>>,
+    ) -> Self {
+        let code = wasm_code.borrow();
+        let id = generate_id(params.borrow(), code);
+        let code_hash = code.hash();
         Self {
             instance: id,
             code: Some(*code_hash),
         }
     }
-}
 
-impl ContractKey {
     /// Builds a partial [`ContractKey`](ContractKey), the contract code part is unspecified.
     pub fn from_id(instance: impl Into<String>) -> Result<Self, bs58::decode::Error> {
         let instance = ContractInstanceId::try_from(instance.into())?;
@@ -1095,8 +1069,35 @@ impl ContractKey {
     }
 }
 
+impl PartialEq for ContractKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.instance == other.instance
+    }
+}
+
+impl std::hash::Hash for ContractKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.instance.0.hash(state);
+    }
+}
+
+impl From<ContractInstanceId> for ContractKey {
+    fn from(instance: ContractInstanceId) -> Self {
+        Self {
+            instance,
+            code: None,
+        }
+    }
+}
+
+impl From<ContractKey> for ContractInstanceId {
+    fn from(key: ContractKey) -> Self {
+        key.instance
+    }
+}
+
 impl Deref for ContractKey {
-    type Target = [u8];
+    type Target = [u8; CONTRACT_KEY_SIZE];
 
     fn deref(&self) -> &Self::Target {
         &self.instance.0
@@ -1113,7 +1114,9 @@ impl<'a> TryFromFbs<&FbsContractKey<'a>> for ContractKey {
     fn try_decode_fbs(key: &FbsContractKey<'a>) -> Result<Self, WsApiError> {
         let key_bytes: [u8; CONTRACT_KEY_SIZE] = key.instance().data().bytes().try_into().unwrap();
         let instance = ContractInstanceId::new(key_bytes);
-        let code = key.code().map(|code_hash| CodeHash::new(code_hash.bytes()));
+        let code = key
+            .code()
+            .map(|code_hash| CodeHash::from_code(code_hash.bytes()));
         Ok(ContractKey { instance, code })
     }
 }
@@ -1265,7 +1268,7 @@ impl Eq for WrappedContract {}
 
 impl WrappedContract {
     pub fn new(data: Arc<ContractCode<'static>>, params: Parameters<'static>) -> WrappedContract {
-        let key = ContractKey::from((&params, &*data));
+        let key = ContractKey::from_params_and_code(&params, &*data);
         WrappedContract { data, params, key }
     }
 
@@ -1324,7 +1327,7 @@ impl<'a> arbitrary::Arbitrary<'a> for WrappedContract {
         let data = <ContractCode as Arbitrary>::arbitrary(u)?.into_owned();
         let param_bytes: Vec<u8> = Arbitrary::arbitrary(u)?;
         let params = Parameters::from(param_bytes);
-        let key = ContractKey::from((&params, &data));
+        let key = ContractKey::from_params_and_code(&params, &data);
         Ok(Self {
             data: Arc::new(data),
             params,
@@ -1572,7 +1575,7 @@ mod test {
     #[test]
     fn key_encoding() -> Result<(), Box<dyn std::error::Error>> {
         let code = ContractCode::from(vec![1, 2, 3]);
-        let expected = ContractKey::from((Parameters::from(vec![]), &code));
+        let expected = ContractKey::from_params_and_code(Parameters::from(vec![]), &code);
         // let encoded_key = expected.encode();
         // println!("encoded key: {encoded_key}");
         // let encoded_code = expected.contract_part_as_str();

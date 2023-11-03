@@ -388,7 +388,7 @@ impl<'a> TryFromFbs<&FbsContractContainer<'a>> for ContractContainer {
                 let contract = value.contract_as_wasm_contract_v1().unwrap();
                 let data = Arc::new(ContractCode::from(contract.data().data().bytes().to_vec()));
                 let params = Parameters::from(contract.parameters().bytes().to_vec());
-                let key = ContractKey::from((&params, &*data));
+                let key = ContractKey::from_params_and_code(&params, &*data);
                 Ok(ContractContainer::from(V1(WrappedContract {
                     data,
                     params,
