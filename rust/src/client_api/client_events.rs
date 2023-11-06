@@ -645,7 +645,7 @@ impl HostResponse {
         match self {
             HostResponse::ContractResponse(res) => match res {
                 ContractResponse::PutResponse { key } => {
-                    let instance_data = builder.create_vector(key.bytes());
+                    let instance_data = builder.create_vector(key.as_bytes());
                     let instance_offset = ContractInstanceId::create(
                         &mut builder,
                         &ContractInstanceIdArgs {
@@ -691,7 +691,7 @@ impl HostResponse {
                     Ok(builder.finished_data().to_vec())
                 }
                 ContractResponse::UpdateResponse { key, summary } => {
-                    let instance_data = builder.create_vector(key.bytes());
+                    let instance_data = builder.create_vector(key.as_bytes());
                     let instance_offset = ContractInstanceId::create(
                         &mut builder,
                         &ContractInstanceIdArgs {
@@ -745,7 +745,7 @@ impl HostResponse {
                     contract: contract_container,
                     state,
                 } => {
-                    let instance_data = builder.create_vector(key.bytes());
+                    let instance_data = builder.create_vector(key.as_bytes());
                     let instance_offset = ContractInstanceId::create(
                         &mut builder,
                         &ContractInstanceIdArgs {
@@ -763,7 +763,7 @@ impl HostResponse {
                     );
 
                     let container_offset = if let Some(contract) = contract_container {
-                        let data = builder.create_vector(contract.key().bytes());
+                        let data = builder.create_vector(contract.key().as_bytes());
 
                         let instance_offset = ContractInstanceId::create(
                             &mut builder,
@@ -851,7 +851,7 @@ impl HostResponse {
                     Ok(builder.finished_data().to_vec())
                 }
                 ContractResponse::UpdateNotification { key, update } => {
-                    let instance_data = builder.create_vector(key.bytes());
+                    let instance_data = builder.create_vector(key.as_bytes());
                     let instance_offset = ContractInstanceId::create(
                         &mut builder,
                         &ContractInstanceIdArgs {
