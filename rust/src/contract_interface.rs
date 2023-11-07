@@ -1017,7 +1017,7 @@ impl ContractKey {
     }
 
     /// Gets the whole spec key hash.
-    pub fn bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         self.instance.0.as_ref()
     }
 
@@ -1064,8 +1064,8 @@ impl ContractKey {
         self.instance.encode()
     }
 
-    pub fn id(&self) -> ContractInstanceId {
-        self.instance
+    pub fn id(&self) -> &ContractInstanceId {
+        &self.instance
     }
 }
 
@@ -1591,12 +1591,12 @@ mod test {
     fn key_ser() -> Result<(), Box<dyn std::error::Error>> {
         let mut gen = arbitrary::Unstructured::new(&*RND_BYTES);
         let expected: ContractKey = gen.arbitrary()?;
-        let encoded = bs58::encode(expected.bytes()).into_string();
+        let encoded = bs58::encode(expected.as_bytes()).into_string();
         // println!("encoded key: {encoded}");
 
         let serialized = bincode::serialize(&expected)?;
         let deserialized: ContractKey = bincode::deserialize(&serialized)?;
-        let decoded = bs58::encode(deserialized.bytes()).into_string();
+        let decoded = bs58::encode(deserialized.as_bytes()).into_string();
         assert_eq!(encoded, decoded);
         assert_eq!(deserialized, expected);
         Ok(())
