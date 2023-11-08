@@ -84,7 +84,7 @@ impl Eq for Delegate<'_> {}
 impl<'a> From<(&DelegateCode<'a>, &Parameters<'a>)> for Delegate<'a> {
     fn from((data, parameters): (&DelegateCode<'a>, &Parameters<'a>)) -> Self {
         Self {
-            key: DelegateKey::from((parameters, data)),
+            key: DelegateKey::from_params_and_code(parameters, data),
             parameters: parameters.clone(),
             data: data.clone(),
         }
@@ -172,7 +172,7 @@ impl AsRef<[u8]> for DelegateCode<'_> {
 
 impl From<Vec<u8>> for DelegateCode<'static> {
     fn from(data: Vec<u8>) -> Self {
-        let key = CodeHash::new(data.as_slice());
+        let key = CodeHash::from_code(data.as_slice());
         DelegateCode {
             data: Cow::from(data),
             code_hash: key,
@@ -181,10 +181,10 @@ impl From<Vec<u8>> for DelegateCode<'static> {
 }
 
 impl<'a> From<&'a [u8]> for DelegateCode<'a> {
-    fn from(data: &'a [u8]) -> Self {
-        let key = CodeHash::new(data);
+    fn from(code: &'a [u8]) -> Self {
+        let key = CodeHash::from_code(code);
         DelegateCode {
-            data: Cow::from(data),
+            data: Cow::from(code),
             code_hash: key,
         }
     }
@@ -208,15 +208,20 @@ impl From<DelegateKey> for SecretsId {
 }
 
 impl DelegateKey {
-    pub fn new<'a>(
-        wasm_code: impl AsRef<DelegateCode<'a>>,
-        params: impl AsRef<Parameters<'a>>,
-    ) -> Self {
-        let params = params.as_ref();
-        let wasm_code = wasm_code.as_ref();
-        let key = generate_id(params, wasm_code);
-        let code_hash = *wasm_code.hash();
+    pub const fn new(key: [u8; DELEGATE_HASH_LENGTH], code_hash: CodeHash) -> Self {
         Self { key, code_hash }
+    }
+
+    fn from_params_and_code<'a>(
+        params: impl Borrow<Parameters<'a>>,
+        wasm_code: impl Borrow<DelegateCode<'a>>,
+    ) -> Self {
+        let code = wasm_code.borrow();
+        let key = generate_id(params.borrow(), code);
+        Self {
+            key,
+            code_hash: *code.hash(),
+        }
     }
 
     pub fn encode(&self) -> String {
@@ -265,21 +270,6 @@ impl Deref for DelegateKey {
     }
 }
 
-impl<'a, T, U> From<(T, U)> for DelegateKey
-where
-    T: Borrow<Parameters<'a>>,
-    U: Borrow<DelegateCode<'a>>,
-{
-    fn from(val: (T, U)) -> Self {
-        let (parameters, code_data) = (val.0.borrow(), val.1.borrow());
-        let key = generate_id(parameters, code_data);
-        Self {
-            key,
-            code_hash: *code_data.hash(),
-        }
-    }
-}
-
 impl Display for DelegateKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.encode())
@@ -292,7 +282,7 @@ impl<'a> TryFromFbs<&FbsDelegateKey<'a>> for DelegateKey {
         key_bytes.copy_from_slice(key.key().bytes().iter().as_ref());
         Ok(DelegateKey {
             key: key_bytes,
-            code_hash: CodeHash::new(key.code_hash().bytes()),
+            code_hash: CodeHash::from_code(key.code_hash().bytes()),
         })
     }
 }

@@ -10,7 +10,6 @@ repository = "https://github.com/freenet/freenet-stdlib"
 
 [dependencies]
 arbitrary = { version = "1", optional = true, features = ["derive"] }
-arrayvec = { version = "0.7", features = ["serde"] }
 bincode = "1"
 byteorder = "1"
 blake3 = { version = "1", features = ["std", "traits-preview"] }

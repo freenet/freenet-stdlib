@@ -12,6 +12,7 @@ use crate::client_request_generated::client_request::{
     DelegateContainer as FbsDelegateContainer, DelegateType,
 };
 use crate::common_generated::common::{ContractContainer as FbsContractContainer, ContractType};
+use crate::contract_interface::ContractInstanceId;
 use crate::parameters::Parameters;
 use crate::prelude::ContractWasmAPIVersion::V1;
 use crate::prelude::{CodeHash, Delegate, DelegateCode, DelegateKey, WrappedContract};
@@ -221,6 +222,13 @@ impl ContractContainer {
         }
     }
 
+    /// Return the `ContractInstanceId` from the specific contract version.
+    pub fn id(&self) -> &ContractInstanceId {
+        match self {
+            Self::Wasm(ContractWasmAPIVersion::V1(contract_v1)) => contract_v1.key().id(),
+        }
+    }
+
     /// Return the `Parameters` from the specific contract version.
     pub fn params(&self) -> Parameters<'static> {
         match self {
@@ -388,7 +396,7 @@ impl<'a> TryFromFbs<&FbsContractContainer<'a>> for ContractContainer {
                 let contract = value.contract_as_wasm_contract_v1().unwrap();
                 let data = Arc::new(ContractCode::from(contract.data().data().bytes().to_vec()));
                 let params = Parameters::from(contract.parameters().bytes().to_vec());
-                let key = ContractKey::from((&params, &*data));
+                let key = ContractKey::from_params_and_code(&params, &*data);
                 Ok(ContractContainer::from(V1(WrappedContract {
                     data,
                     params,
