@@ -79,8 +79,8 @@ impl ClientError {
         Ok(builder.finished_data().to_vec())
     }
 
-    pub fn kind(&self) -> ErrorKind {
-        (*self.kind).clone()
+    pub fn kind(&self) -> &ErrorKind {
+        &self.kind
     }
 }
 
@@ -121,6 +121,8 @@ pub enum ErrorKind {
     UnknownClient(usize),
     #[error(transparent)]
     RequestError(#[from] RequestError),
+    #[error("peer should shutdown")]
+    Shutdown,
 }
 
 impl Display for ClientError {
@@ -1353,8 +1355,7 @@ mod client_request_test {
             } => {
                 assert_eq!(
                     contract.to_string(),
-                    "wasm container version 0.0.1 of contract \
-                Contract(D8fdVLbRyMLw5mZtPRpWMFcrXGN2z8Nq8UGcLGPFBg2W)"
+                    "WasmContainer([api=0.0.1](D8fdVLbRyMLw5mZtPRpWMFcrXGN2z8Nq8UGcLGPFBg2W))"
                 );
                 assert_eq!(contract.unwrap_v1().data.data(), &[1, 2, 3, 4, 5, 6, 7, 8]);
                 assert_eq!(state.to_vec(), &[1, 2, 3, 4, 5, 6, 7, 8]);

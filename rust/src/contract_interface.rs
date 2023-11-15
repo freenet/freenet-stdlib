@@ -1229,18 +1229,11 @@ impl From<WrappedState> for State<'static> {
 
 impl std::fmt::Display for WrappedState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let data: String = if self.0.len() > 8 {
-            let last_4 = self.0.len() - 4;
-            self.0[..4]
-                .iter()
-                .map(|b| char::from(*b))
-                .chain("...".chars())
-                .chain(self.0[last_4..].iter().map(|b| char::from(*b)))
-                .collect()
-        } else {
-            self.0.iter().copied().map(char::from).collect()
-        };
-        write!(f, "ContractState(data: [{data}])")
+        write!(f, "ContractState(data: [0x")?;
+        for b in self.0.iter().take(8) {
+            write!(f, "{:02x}", b)?;
+        }
+        write!(f, "...])")
     }
 }
 
