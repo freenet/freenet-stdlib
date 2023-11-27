@@ -189,8 +189,8 @@ async fn process_response(
                 .await
                 .map_err(|_| Error::ChannelClosed)?;
         }
-        Message::Ping(_) => {
-            conn.send(Message::Pong(vec![0, 5, 3, 9])).await?;
+        Message::Ping(ping) => {
+            conn.send(Message::Pong(ping)).await?;
         }
         Message::Pong(_) => {}
         Message::Close(_) => return Err(Error::ConnectionClosed),

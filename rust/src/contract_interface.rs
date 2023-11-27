@@ -23,10 +23,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
 
 use crate::client_api::TryFromFbs;
-use crate::client_request_generated::client_request::RelatedContracts as FbsRelatedContracts;
 use crate::common_generated::common::{
     ContractKey as FbsContractKey, UpdateData as FbsUpdateData, UpdateDataType,
 };
+use crate::generated::client_request::RelatedContracts as FbsRelatedContracts;
 use crate::{client_api::WsApiError, code_hash::CodeHash, parameters::Parameters};
 
 pub(crate) const CONTRACT_KEY_SIZE: usize = 32;

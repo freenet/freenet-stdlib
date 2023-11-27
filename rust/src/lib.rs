@@ -12,11 +12,18 @@ mod versioning;
 pub use contract_interface::encoding as typed_contract;
 
 #[allow(dead_code, unused_imports, clippy::all)]
-pub(crate) mod client_request_generated;
-#[allow(dead_code, unused_imports, clippy::all)]
-pub(crate) mod common_generated;
-#[allow(dead_code, unused_imports, clippy::all)]
-pub(crate) mod host_response_generated;
+pub(crate) mod generated {
+    mod client_request_generated;
+    pub(crate) use client_request_generated::*;
+    pub(crate) mod common_generated;
+    pub(crate) use common_generated::*;
+    mod host_response_generated;
+    pub(crate) use host_response_generated::*;
+}
+
+pub(crate) mod common_generated {
+    pub use super::generated::common_generated::*;
+}
 
 pub mod client_api;
 #[cfg(feature = "contract")]

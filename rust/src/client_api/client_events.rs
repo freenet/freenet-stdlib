@@ -4,12 +4,13 @@ use std::fmt::Display;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::client_api::TryFromFbs;
-use crate::client_request_generated::client_request::{
+use crate::generated::client_request::{
     root_as_client_request, ClientRequestType, ContractRequest as FbsContractRequest,
     ContractRequestType, DelegateRequest as FbsDelegateRequest, DelegateRequestType,
 };
 
-use crate::common_generated::common::{
+use crate::delegate_interface::DelegateContext;
+use crate::generated::common::{
     ApplicationMessage as FbsApplicationMessage, ApplicationMessageArgs, ContractCode,
     ContractCodeArgs, ContractContainer as FbsContractContainer, ContractContainerArgs,
     ContractInstanceId, ContractInstanceIdArgs, ContractKey as FbsContractKey, ContractKeyArgs,
@@ -21,8 +22,7 @@ use crate::common_generated::common::{
     StateUpdate, StateUpdateArgs, UpdateData as FbsUpdateData, UpdateDataArgs, UpdateDataType,
     WasmContractV1, WasmContractV1Args,
 };
-use crate::delegate_interface::DelegateContext;
-use crate::host_response_generated::host_response::{
+use crate::generated::host_response::{
     finish_host_response_buffer, ClientResponse as FbsClientResponse, ClientResponseArgs,
     ContextUpdated as FbsContextUpdated, ContextUpdatedArgs,
     ContractResponse as FbsContractResponse, ContractResponseArgs, ContractResponseType,
@@ -59,7 +59,7 @@ pub struct ClientError {
 
 impl ClientError {
     pub fn into_fbs_bytes(self) -> Result<Vec<u8>, Box<ClientError>> {
-        use crate::host_response_generated::host_response::{Error, ErrorArgs};
+        use crate::generated::host_response::{Error, ErrorArgs};
         let mut builder = flatbuffers::FlatBufferBuilder::new();
         let msg_offset = builder.create_string(&self.to_string());
         let err_offset = Error::create(
@@ -1321,8 +1321,8 @@ impl<T> From<ContractResponse<T>> for HostResponse<T> {
 #[cfg(test)]
 mod client_request_test {
     use crate::client_api::{ContractRequest, TryFromFbs};
-    use crate::client_request_generated::client_request::root_as_client_request;
     use crate::contract_interface::UpdateData;
+    use crate::generated::client_request::root_as_client_request;
 
     const EXPECTED_ENCODED_CONTRACT_ID: &str = "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9";
 
