@@ -1,4 +1,4 @@
-use std::task::Poll;
+use std::{borrow::Cow, task::Poll};
 
 use futures::{pin_mut, FutureExt, Sink, SinkExt, Stream, StreamExt};
 use tokio::{
@@ -115,7 +115,7 @@ impl WebApi {
         res.ok_or_else(|| ClientError::from(ErrorKind::ChannelClosed))?
     }
 
-    pub async fn disconnect(self, cause: impl Into<String>) {
+    pub async fn disconnect(self, cause: impl Into<Cow<'static, str>>) {
         let _ = self
             .request_tx
             .send(ClientRequest::Disconnect {
