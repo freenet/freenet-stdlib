@@ -23,10 +23,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
 
 use crate::client_api::TryFromFbs;
-use crate::client_request_generated::client_request::RelatedContracts as FbsRelatedContracts;
 use crate::common_generated::common::{
     ContractKey as FbsContractKey, UpdateData as FbsUpdateData, UpdateDataType,
 };
+use crate::generated::client_request::RelatedContracts as FbsRelatedContracts;
 use crate::{client_api::WsApiError, code_hash::CodeHash, parameters::Parameters};
 
 pub(crate) const CONTRACT_KEY_SIZE: usize = 32;
@@ -1229,18 +1229,11 @@ impl From<WrappedState> for State<'static> {
 
 impl std::fmt::Display for WrappedState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let data: String = if self.0.len() > 8 {
-            let last_4 = self.0.len() - 4;
-            self.0[..4]
-                .iter()
-                .map(|b| char::from(*b))
-                .chain("...".chars())
-                .chain(self.0[last_4..].iter().map(|b| char::from(*b)))
-                .collect()
-        } else {
-            self.0.iter().copied().map(char::from).collect()
-        };
-        write!(f, "ContractState(data: [{data}])")
+        write!(f, "ContractState(data: [0x")?;
+        for b in self.0.iter().take(8) {
+            write!(f, "{:02x}", b)?;
+        }
+        write!(f, "...])")
     }
 }
 
@@ -1314,9 +1307,7 @@ impl TryInto<Vec<u8>> for WrappedContract {
 
 impl Display for WrappedContract {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Contract(")?;
-        self.key.fmt(f)?;
-        write!(f, ")")
+        self.key.fmt(f)
     }
 }
 

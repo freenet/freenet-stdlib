@@ -1,15 +1,17 @@
 use flatbuffers::WIPOffset;
+use std::borrow::Cow;
 use std::fmt::Display;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::client_api::TryFromFbs;
-use crate::client_request_generated::client_request::{
+use crate::generated::client_request::{
     root_as_client_request, ClientRequestType, ContractRequest as FbsContractRequest,
     ContractRequestType, DelegateRequest as FbsDelegateRequest, DelegateRequestType,
 };
 
-use crate::common_generated::common::{
+use crate::delegate_interface::DelegateContext;
+use crate::generated::common::{
     ApplicationMessage as FbsApplicationMessage, ApplicationMessageArgs, ContractCode,
     ContractCodeArgs, ContractContainer as FbsContractContainer, ContractContainerArgs,
     ContractInstanceId, ContractInstanceIdArgs, ContractKey as FbsContractKey, ContractKeyArgs,
@@ -21,8 +23,7 @@ use crate::common_generated::common::{
     StateUpdate, StateUpdateArgs, UpdateData as FbsUpdateData, UpdateDataArgs, UpdateDataType,
     WasmContractV1, WasmContractV1Args,
 };
-use crate::delegate_interface::DelegateContext;
-use crate::host_response_generated::host_response::{
+use crate::generated::host_response::{
     finish_host_response_buffer, ClientResponse as FbsClientResponse, ClientResponseArgs,
     ContextUpdated as FbsContextUpdated, ContextUpdatedArgs,
     ContractResponse as FbsContractResponse, ContractResponseArgs, ContractResponseType,
@@ -59,7 +60,7 @@ pub struct ClientError {
 
 impl ClientError {
     pub fn into_fbs_bytes(self) -> Result<Vec<u8>, Box<ClientError>> {
-        use crate::host_response_generated::host_response::{Error, ErrorArgs};
+        use crate::generated::host_response::{Error, ErrorArgs};
         let mut builder = flatbuffers::FlatBufferBuilder::new();
         let msg_offset = builder.create_string(&self.to_string());
         let err_offset = Error::create(
@@ -79,8 +80,8 @@ impl ClientError {
         Ok(builder.finished_data().to_vec())
     }
 
-    pub fn kind(&self) -> ErrorKind {
-        (*self.kind).clone()
+    pub fn kind(&self) -> &ErrorKind {
+        &self.kind
     }
 }
 
@@ -92,10 +93,12 @@ impl From<ErrorKind> for ClientError {
     }
 }
 
-impl From<String> for ClientError {
-    fn from(cause: String) -> Self {
+impl<T: Into<Cow<'static, str>>> From<T> for ClientError {
+    fn from(cause: T) -> Self {
         ClientError {
-            kind: Box::new(ErrorKind::Unhandled { cause }),
+            kind: Box::new(ErrorKind::Unhandled {
+                cause: cause.into(),
+            }),
         }
     }
 }
@@ -106,7 +109,7 @@ pub enum ErrorKind {
     #[error("comm channel between client/host closed")]
     ChannelClosed,
     #[error("error while deserializing: {cause}")]
-    DeserializationError { cause: String },
+    DeserializationError { cause: Cow<'static, str> },
     #[error("client disconnected")]
     Disconnect,
     #[error("failed while trying to unpack state for {0}")]
@@ -116,11 +119,13 @@ pub enum ErrorKind {
     #[error("lost the connection with the protocol hanling connections")]
     TransportProtocolDisconnect,
     #[error("unhandled error: {cause}")]
-    Unhandled { cause: String },
+    Unhandled { cause: Cow<'static, str> },
     #[error("unknown client id: {0}")]
     UnknownClient(usize),
     #[error(transparent)]
     RequestError(#[from] RequestError),
+    #[error("peer should shutdown")]
+    Shutdown,
 }
 
 impl Display for ClientError {
@@ -151,7 +156,7 @@ pub enum DelegateError {
     #[error("error while registering delegate {0}")]
     RegisterError(DelegateKey),
     #[error("execution error, cause {0}")]
-    ExecutionError(String),
+    ExecutionError(Cow<'static, str>),
     #[error("missing delegate {0}")]
     Missing(DelegateKey),
     #[error("missing secret `{secret}` for delegate {key}")]
@@ -165,22 +170,68 @@ pub enum DelegateError {
 #[non_exhaustive]
 pub enum ContractError {
     #[error("failed to get contract {key}, reason: {cause}")]
-    Get { key: ContractKey, cause: String },
+    Get {
+        key: ContractKey,
+        cause: Cow<'static, str>,
+    },
     #[error("put error for contract {key}, reason: {cause}")]
-    Put { key: ContractKey, cause: String },
+    Put {
+        key: ContractKey,
+        cause: Cow<'static, str>,
+    },
     #[error("update error for contract {key}, reason: {cause}")]
-    Update { key: ContractKey, cause: String },
+    Update {
+        key: ContractKey,
+        cause: Cow<'static, str>,
+    },
     #[error("failed to subscribe for contract {key}, reason: {cause}")]
-    Subscribe { key: ContractKey, cause: String },
-    #[error("missing related contract: {key}")]
-    MissingRelated {
-        key: crate::contract_interface::ContractInstanceId,
+    Subscribe {
+        key: ContractKey,
+        cause: Cow<'static, str>,
     },
     // todo: actually build a stack of the involved keys
     #[error("dependency contract stack overflow : {key}")]
     ContractStackOverflow {
         key: crate::contract_interface::ContractInstanceId,
     },
+    #[error("missing related contract: {key}")]
+    MissingRelated {
+        key: crate::contract_interface::ContractInstanceId,
+    },
+    #[error("missing related contract: {key}")]
+    MissingContract {
+        key: crate::contract_interface::ContractInstanceId,
+    },
+}
+
+impl ContractError {
+    const EXECUTION_ERROR: &'static str = "execution error";
+    const INVALID_PUT: &'static str = "invalid put";
+
+    pub fn update_exec_error(key: ContractKey, additional_info: impl std::fmt::Display) -> Self {
+        Self::Update {
+            key,
+            cause: format!(
+                "{exec_err}: {additional_info}",
+                exec_err = Self::EXECUTION_ERROR
+            )
+            .into(),
+        }
+    }
+
+    pub fn invalid_put(key: ContractKey) -> Self {
+        Self::Put {
+            key,
+            cause: Self::INVALID_PUT.into(),
+        }
+    }
+
+    pub fn invalid_update(key: ContractKey) -> Self {
+        Self::Update {
+            key,
+            cause: Self::INVALID_PUT.into(),
+        }
+    }
 }
 
 /// A request from a client application to the host.
@@ -190,7 +241,7 @@ pub enum ContractError {
 pub enum ClientRequest<'a> {
     DelegateOp(#[serde(borrow)] DelegateRequest<'a>),
     ContractOp(#[serde(borrow)] ContractRequest<'a>),
-    Disconnect { cause: Option<String> },
+    Disconnect { cause: Option<Cow<'static, str>> },
     Authenticate { token: String },
 }
 
@@ -261,7 +312,7 @@ impl ClientRequest<'_> {
                             client_request.client_request_as_disconnect().unwrap();
                         let cause = delegate_request
                             .cause()
-                            .map(|cuase_msg| cuase_msg.to_string());
+                            .map(|cause_msg| cause_msg.to_string().into());
                         ClientRequest::Disconnect { cause }
                     }
                     ClientRequestType::Authenticate => {
@@ -1319,8 +1370,8 @@ impl<T> From<ContractResponse<T>> for HostResponse<T> {
 #[cfg(test)]
 mod client_request_test {
     use crate::client_api::{ContractRequest, TryFromFbs};
-    use crate::client_request_generated::client_request::root_as_client_request;
     use crate::contract_interface::UpdateData;
+    use crate::generated::client_request::root_as_client_request;
 
     const EXPECTED_ENCODED_CONTRACT_ID: &str = "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9";
 
@@ -1353,8 +1404,7 @@ mod client_request_test {
             } => {
                 assert_eq!(
                     contract.to_string(),
-                    "wasm container version 0.0.1 of contract \
-                Contract(D8fdVLbRyMLw5mZtPRpWMFcrXGN2z8Nq8UGcLGPFBg2W)"
+                    "WasmContainer([api=0.0.1](D8fdVLbRyMLw5mZtPRpWMFcrXGN2z8Nq8UGcLGPFBg2W))"
                 );
                 assert_eq!(contract.unwrap_v1().data.data(), &[1, 2, 3, 4, 5, 6, 7, 8]);
                 assert_eq!(state.to_vec(), &[1, 2, 3, 4, 5, 6, 7, 8]);

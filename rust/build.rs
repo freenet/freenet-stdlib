@@ -4,7 +4,7 @@ fn main() {
     let status = Command::new("flatc")
         .arg("--rust")
         .arg("-o")
-        .arg("src")
+        .arg("src/generated")
         .arg("../schemas/flatbuffers/common.fbs")
         .arg("../schemas/flatbuffers/client_request.fbs")
         .arg("../schemas/flatbuffers/host_response.fbs")

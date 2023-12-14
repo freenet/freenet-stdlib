@@ -11,7 +11,7 @@ use blake3::{traits::digest::Digest, Hasher as Blake3};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
 
-use crate::client_request_generated::client_request::{
+use crate::generated::client_request::{
     DelegateKey as FbsDelegateKey, InboundDelegateMsg as FbsInboundDelegateMsg,
     InboundDelegateMsgType,
 };

@@ -7,16 +7,17 @@ use std::sync::Arc;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use serde::{Deserialize, Serialize};
 
-use crate::client_api::{TryFromFbs, WsApiError};
-use crate::client_request_generated::client_request::{
-    DelegateContainer as FbsDelegateContainer, DelegateType,
+use crate::{
+    client_api::{TryFromFbs, WsApiError},
+    common_generated::common::{ContractContainer as FbsContractContainer, ContractType},
+    contract_interface::{ContractInstanceId, ContractKey},
+    generated::client_request::{DelegateContainer as FbsDelegateContainer, DelegateType},
+    parameters::Parameters,
+    prelude::{
+        CodeHash, ContractCode, ContractWasmAPIVersion::V1, Delegate, DelegateCode, DelegateKey,
+        WrappedContract,
+    },
 };
-use crate::common_generated::common::{ContractContainer as FbsContractContainer, ContractType};
-use crate::contract_interface::ContractInstanceId;
-use crate::parameters::Parameters;
-use crate::prelude::ContractWasmAPIVersion::V1;
-use crate::prelude::{CodeHash, Delegate, DelegateCode, DelegateKey, WrappedContract};
-use crate::{contract_interface::ContractKey, prelude::ContractCode};
 
 /// Contains the different versions available for WASM delegates.
 #[non_exhaustive]
@@ -192,7 +193,7 @@ impl Display for ContractWasmAPIVersion {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             ContractWasmAPIVersion::V1(contract_v1) => {
-                write!(f, "version 0.0.1 of contract {contract_v1}")
+                write!(f, "[api=0.0.1]({contract_v1})")
             }
         }
     }
@@ -254,7 +255,7 @@ impl Display for ContractContainer {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             ContractContainer::Wasm(wasm_version) => {
-                write!(f, "wasm container {wasm_version}")
+                write!(f, "WasmContainer({wasm_version})")
             }
         }
     }

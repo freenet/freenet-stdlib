@@ -316,3 +316,5 @@ pub mod dependency_2 {
         }
     }
 }
+
+fn main() {}

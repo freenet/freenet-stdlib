@@ -79,3 +79,5 @@ impl TypedContract for Contract {
         unimplemented!()
     }
 }
+
+fn main() {}

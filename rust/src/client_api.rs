@@ -67,7 +67,7 @@ impl WsApiError {
     }
 
     pub fn into_fbs_bytes(self) -> Vec<u8> {
-        use crate::host_response_generated::host_response::{
+        use crate::generated::host_response::{
             finish_host_response_buffer, Error, ErrorArgs, HostResponse, HostResponseArgs,
             HostResponseType,
         };
