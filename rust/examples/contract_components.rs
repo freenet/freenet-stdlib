@@ -367,3 +367,5 @@ mod children {
         }
     }
 }
+
+fn main() {}

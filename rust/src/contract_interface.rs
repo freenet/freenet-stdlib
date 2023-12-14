@@ -1307,9 +1307,7 @@ impl TryInto<Vec<u8>> for WrappedContract {
 
 impl Display for WrappedContract {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Contract(")?;
-        self.key.fmt(f)?;
-        write!(f, ")")
+        self.key.fmt(f)
     }
 }
 
