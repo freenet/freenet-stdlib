@@ -124,6 +124,8 @@ pub enum ErrorKind {
     UnknownClient(usize),
     #[error(transparent)]
     RequestError(#[from] RequestError),
+    #[error("error while executing operation in the network: {cause}")]
+    OperationError { cause: Cow<'static, str> },
     #[error("peer should shutdown")]
     Shutdown,
 }
