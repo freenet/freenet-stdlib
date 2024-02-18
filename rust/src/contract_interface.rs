@@ -742,7 +742,7 @@ impl StateSummary<'_> {
         StateSummary(self.0.into_owned().into())
     }
 
-    pub(crate) fn deser_state_summary<'de, D>(deser: D) -> Result<StateSummary<'static>, D::Error>
+    pub fn deser_state_summary<'de, D>(deser: D) -> Result<StateSummary<'static>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
