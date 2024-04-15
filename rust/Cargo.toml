@@ -15,9 +15,9 @@ byteorder = "1"
 blake3 = { version = "1", features = ["std", "traits-preview"] }
 bs58 = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "serde"] }
-flatbuffers = "23.5.26"
+flatbuffers = "24.3"
 futures = "0.3"
-semver = { version = "1.0.14",  features = ["serde"] }
+semver = { version = "1",  features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
@@ -32,7 +32,7 @@ freenet-macros = { path = "../rust-macros", version = "0.0.5" }
 
 [target.'cfg(any(unix, windows))'.dependencies]
 tokio = { version = "1", optional = true, features = ["macros", "parking_lot", "rt-multi-thread", "sync", "time"] }
-tokio-tungstenite = { version = "0.20", optional = true }
+tokio-tungstenite = { version = "0.21", optional = true }
 serde_with = { version = "3" }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
