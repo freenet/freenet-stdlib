@@ -385,7 +385,7 @@ pub trait DelegateInterface {
     ///
     /// # Arguments
     /// - attested: an optional identifier for the client of this function. Usually will
-    /// be a [`ContractInstanceId`].
+    ///   be a [`ContractInstanceId`].
     fn process(
         parameters: Parameters<'static>,
         attested: Option<&'static [u8]>,
