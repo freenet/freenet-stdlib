@@ -253,7 +253,7 @@ impl DelegateKey {
 
         debug_assert_eq!(full_key_arr[..].len(), DELEGATE_HASH_LENGTH);
         let mut key = [0; DELEGATE_HASH_LENGTH];
-        key.copy_from_slice(&full_key_arr);
+        key.copy_from_slice(full_key_arr.as_ref());
 
         Ok(Self {
             key,
@@ -309,7 +309,7 @@ fn generate_id<'a>(
 
     debug_assert_eq!(full_key_arr[..].len(), DELEGATE_HASH_LENGTH);
     let mut key = [0; DELEGATE_HASH_LENGTH];
-    key.copy_from_slice(&full_key_arr);
+    key.copy_from_slice(full_key_arr.as_ref());
     key
 }
 
@@ -328,7 +328,7 @@ impl SecretsId {
         hasher.update(&key);
         let hashed = hasher.finalize();
         let mut hash = [0; 32];
-        hash.copy_from_slice(&hashed);
+        hash.copy_from_slice(hashed.as_ref());
         Self { key, hash }
     }
 
@@ -385,7 +385,7 @@ pub trait DelegateInterface {
     ///
     /// # Arguments
     /// - attested: an optional identifier for the client of this function. Usually will
-    /// be a [`ContractInstanceId`].
+    ///   be a [`ContractInstanceId`].
     fn process(
         parameters: Parameters<'static>,
         attested: Option<&'static [u8]>,

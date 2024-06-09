@@ -43,7 +43,7 @@ pub enum Error {
     #[error("connection closed")]
     ConnectionClosed,
     #[error("unhandled error: {0}")]
-    OtherError(Box<dyn std::error::Error + Send + Sync>),
+    OtherError(anyhow::Error),
 }
 
 pub trait TryFromFbs<T>: Sized {
@@ -56,7 +56,7 @@ pub enum WsApiError {
     #[error("Unsupported contract version")]
     UnsupportedContractVersion,
     #[error("Failed unpacking contract container")]
-    UnpackingContractContainerError(Box<dyn std::error::Error + Send + Sync + 'static>),
+    UnpackingContractContainerError(anyhow::Error),
     #[error("Failed decoding message from client request: {cause}")]
     DeserError { cause: String },
 }

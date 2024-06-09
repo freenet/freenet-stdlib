@@ -1378,7 +1378,7 @@ mod client_request_test {
     const EXPECTED_ENCODED_CONTRACT_ID: &str = "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9";
 
     #[test]
-    fn test_build_contract_put_op_from_fbs() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_build_contract_put_op_from_fbs() -> Result<(), anyhow::Error> {
         let put_req_op = vec![
             4, 0, 0, 0, 244, 255, 255, 255, 16, 0, 0, 0, 0, 0, 0, 1, 8, 0, 12, 0, 11, 0, 4, 0, 8,
             0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 1, 198, 255, 255, 255, 12, 0, 0, 0, 20, 0, 0, 0, 36, 0,
@@ -1418,7 +1418,7 @@ mod client_request_test {
     }
 
     #[test]
-    fn test_build_contract_get_op_from_fbs() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_build_contract_get_op_from_fbs() -> Result<(), anyhow::Error> {
         let get_req_op = vec![
             4, 0, 0, 0, 244, 255, 255, 255, 16, 0, 0, 0, 0, 0, 0, 1, 8, 0, 12, 0, 11, 0, 4, 0, 8,
             0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 3, 222, 255, 255, 255, 12, 0, 0, 0, 8, 0, 12, 0, 8, 0, 4,
@@ -1448,7 +1448,7 @@ mod client_request_test {
     }
 
     #[test]
-    fn test_build_contract_update_op_from_fbs() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_build_contract_update_op_from_fbs() -> Result<(), anyhow::Error> {
         let update_op = vec![
             4, 0, 0, 0, 220, 255, 255, 255, 8, 0, 0, 0, 0, 0, 0, 1, 232, 255, 255, 255, 8, 0, 0, 0,
             0, 0, 0, 2, 204, 255, 255, 255, 16, 0, 0, 0, 52, 0, 0, 0, 8, 0, 12, 0, 11, 0, 4, 0, 8,

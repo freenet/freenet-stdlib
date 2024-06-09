@@ -157,10 +157,7 @@ impl DelegateCode<'static> {
 }
 
 impl DelegateCode<'_> {
-    pub fn to_bytes_versioned(
-        &self,
-        version: APIVersion,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    pub fn to_bytes_versioned(&self, version: APIVersion) -> anyhow::Result<Vec<u8>> {
         match version {
             APIVersion::Version0_0_1 => {
                 let output_size =
@@ -362,20 +359,17 @@ impl Display for APIVersion {
 }
 
 impl<'a> TryFrom<&'a semver::Version> for APIVersion {
-    type Error = Box<dyn std::error::Error + Send + Sync>;
+    type Error = anyhow::Error;
     fn try_from(value: &'a semver::Version) -> Result<Self, Self::Error> {
         match value {
             ver if ver == &semver::Version::new(0, 0, 1) => Ok(APIVersion::Version0_0_1),
-            other => Err(format!("{other} version not supported").into()),
+            other => Err(anyhow::anyhow!("{other} version not supported")),
         }
     }
 }
 
 impl ContractCode<'_> {
-    pub fn to_bytes_versioned(
-        &self,
-        version: APIVersion,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    pub fn to_bytes_versioned(&self, version: APIVersion) -> anyhow::Result<Vec<u8>> {
         match version {
             APIVersion::Version0_0_1 => {
                 let output_size =

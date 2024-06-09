@@ -222,10 +222,7 @@ mod test {
             Server { recv, listener }
         }
 
-        async fn listen(
-            self,
-            tx: tokio::sync::oneshot::Sender<()>,
-        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        async fn listen(self, tx: tokio::sync::oneshot::Sender<()>) -> Result<(), anyhow::Error> {
             let (stream, _) =
                 tokio::time::timeout(Duration::from_millis(10), self.listener.accept()).await??;
             let mut stream = tokio_tungstenite::accept_async(stream).await?;
@@ -248,7 +245,7 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_send() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn test_send() -> Result<(), anyhow::Error> {
         let port = PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let server = Server::new(port, true).await;
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
@@ -266,7 +263,7 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_recv() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn test_recv() -> Result<(), anyhow::Error> {
         let port = PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let server = Server::new(port, false).await;
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();

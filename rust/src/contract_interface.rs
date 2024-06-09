@@ -863,7 +863,7 @@ impl ContractCode<'_> {
         let key_arr = hasher.finalize();
         debug_assert_eq!(key_arr[..].len(), CONTRACT_KEY_SIZE);
         let mut key = [0; CONTRACT_KEY_SIZE];
-        key.copy_from_slice(&key_arr);
+        key.copy_from_slice(key_arr.as_ref());
         CodeHash(key)
     }
 }
@@ -1052,7 +1052,7 @@ impl ContractKey {
         let full_key_arr = hasher.finalize();
 
         let mut spec = [0; CONTRACT_KEY_SIZE];
-        spec.copy_from_slice(&full_key_arr);
+        spec.copy_from_slice(full_key_arr.as_ref());
         Ok(Self {
             instance: ContractInstanceId(spec),
             code: Some(CodeHash(code_key)),
@@ -1134,7 +1134,7 @@ fn generate_id<'a>(
 
     debug_assert_eq!(full_key_arr[..].len(), CONTRACT_KEY_SIZE);
     let mut spec = [0; CONTRACT_KEY_SIZE];
-    spec.copy_from_slice(&full_key_arr);
+    spec.copy_from_slice(full_key_arr.as_ref());
     ContractInstanceId(spec)
 }
 
@@ -1564,7 +1564,7 @@ mod test {
     });
 
     #[test]
-    fn key_encoding() -> Result<(), Box<dyn std::error::Error>> {
+    fn key_encoding() -> Result<(), anyhow::Error> {
         let code = ContractCode::from(vec![1, 2, 3]);
         let expected = ContractKey::from_params_and_code(Parameters::from(vec![]), &code);
         // let encoded_key = expected.encode();
@@ -1579,7 +1579,7 @@ mod test {
     }
 
     #[test]
-    fn key_ser() -> Result<(), Box<dyn std::error::Error>> {
+    fn key_ser() -> Result<(), anyhow::Error> {
         let mut gen = arbitrary::Unstructured::new(&*RND_BYTES);
         let expected: ContractKey = gen.arbitrary()?;
         let encoded = bs58::encode(expected.as_bytes()).into_string();
@@ -1594,7 +1594,7 @@ mod test {
     }
 
     #[test]
-    fn contract_ser() -> Result<(), Box<dyn std::error::Error>> {
+    fn contract_ser() -> Result<(), anyhow::Error> {
         let mut gen = arbitrary::Unstructured::new(&*RND_BYTES);
         let expected: Contract = gen.arbitrary()?;
 

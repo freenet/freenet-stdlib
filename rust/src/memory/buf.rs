@@ -354,7 +354,7 @@ mod test {
             (export "initiate_buffer" (func $initiate_buffer))
         )"#;
 
-    fn build_test_mod() -> Result<(Store, Instance), Box<dyn std::error::Error>> {
+    fn build_test_mod() -> Result<(Store, Instance), anyhow::Error> {
         let wasm_bytes = wat2wasm(TEST_MODULE.as_bytes())?;
         let mut store = Store::new(Cranelift::new());
         let module = Module::new(&store, wasm_bytes)?;
@@ -377,7 +377,7 @@ mod test {
 
     #[test]
     #[ignore]
-    fn read_and_write() -> Result<(), Box<dyn std::error::Error>> {
+    fn read_and_write() -> Result<(), anyhow::Error> {
         let (mut store, instance) = build_test_mod()?;
         let mem = instance.exports.get_memory("memory")?.view(&store);
         let linear_mem = WasmLinearMem {
@@ -402,7 +402,7 @@ mod test {
 
     #[test]
     #[ignore]
-    fn read_and_write_bytes() -> Result<(), Box<dyn std::error::Error>> {
+    fn read_and_write_bytes() -> Result<(), anyhow::Error> {
         let (mut store, instance) = build_test_mod()?;
         let mem = instance.exports.get_memory("memory")?.view(&store);
         let linear_mem = WasmLinearMem {
@@ -427,7 +427,7 @@ mod test {
 
     #[test]
     #[ignore]
-    fn update() -> Result<(), Box<dyn std::error::Error>> {
+    fn update() -> Result<(), anyhow::Error> {
         let (mut store, instance) = build_test_mod()?;
         let mem = instance.exports.get_memory("memory")?.view(&store);
         let linear_mem = WasmLinearMem {
