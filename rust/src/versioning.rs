@@ -216,7 +216,7 @@ impl ContractContainer {
     /// Return the `ContractKey` from the specific contract version.
     pub fn key(&self) -> ContractKey {
         match self {
-            Self::Wasm(ContractWasmAPIVersion::V1(contract_v1)) => contract_v1.key().clone(),
+            Self::Wasm(ContractWasmAPIVersion::V1(contract_v1)) => *contract_v1.key(),
         }
     }
 

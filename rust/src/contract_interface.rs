@@ -986,7 +986,7 @@ impl Display for ContractInstanceId {
 
 /// A complete key specification, that represents a cryptographic hash that identifies the contract.
 #[serde_as]
-#[derive(Debug, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Eq, Copy, Clone, Serialize, Deserialize)]
 #[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct ContractKey {
     instance: ContractInstanceId,
