@@ -401,13 +401,6 @@ impl<'a> TryFromFbs<&FbsUpdateData<'a>> for UpdateData<'a> {
 ///         Ok(ValidateResult::Valid)
 ///     }
 ///
-///     fn validate_delta(
-///         _parameters: Parameters<'static>,
-///         _delta: StateDelta<'static>
-///     ) -> Result<bool, ContractError> {
-///         Ok(true)
-///     }
-///
 ///     fn update_state(
 ///         _parameters: Parameters<'static>,
 ///         state: State<'static>,
@@ -450,13 +443,6 @@ pub trait ContractInterface {
         state: State<'static>,
         related: RelatedContracts<'static>,
     ) -> Result<ValidateResult, ContractError>;
-
-    /// Verify that a delta is valid if possible, returns false if and only delta is
-    /// definitely invalid, true otherwise.
-    fn validate_delta(
-        parameters: Parameters<'static>,
-        delta: StateDelta<'static>,
-    ) -> Result<bool, ContractError>;
 
     /// Update the state to account for the new data
     fn update_state(
@@ -1386,26 +1372,6 @@ pub(crate) mod wasm_interface {
             }
         }
 
-        pub unsafe fn unwrap_validate_delta_res(
-            self,
-            mem: WasmLinearMem,
-        ) -> Result<bool, ContractError> {
-            #![allow(clippy::let_and_return)]
-            let kind = ResultKind::from(self.kind);
-            match kind {
-                ResultKind::ValidateDelta => {
-                    let ptr = crate::memory::buf::compute_ptr(self.ptr as *mut u8, &mem);
-                    let serialized = std::slice::from_raw_parts(ptr as *const u8, self.size as _);
-                    let value = bincode::deserialize(serialized)
-                        .map_err(|e| ContractError::Other(format!("{e}")))?;
-                    #[cfg(feature = "trace")]
-                    self.log_input(serialized, &value, ptr);
-                    value
-                }
-                _ => unreachable!(),
-            }
-        }
-
         pub unsafe fn unwrap_update_state(
             self,
             mem: WasmLinearMem,
@@ -1799,11 +1765,6 @@ pub mod encoding {
             related: RelatedContractsContainer,
         ) -> Result<ValidateResult, ContractError>;
 
-        fn verify_delta(
-            parameters: Self::Parameters,
-            delta: Self::Delta,
-        ) -> Result<bool, ContractError>;
-
         fn merge(
             &mut self,
             parameters: &Self::Parameters,
@@ -1891,27 +1852,6 @@ pub mod encoding {
         let typed_state = <<T as EncodingAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
         let related_container = RelatedContractsContainer::from(related);
         typed_state.verify(typed_params, related_container)
-    }
-
-    pub fn inner_validate_delta<T>(
-        parameters: Parameters<'static>,
-        delta: StateDelta<'static>,
-    ) -> Result<bool, ContractError>
-    where
-        T: EncodingAdapter + TypedContract,
-        ContractError: From<
-            <<T as EncodingAdapter>::ParametersEncoder as Encoder<
-                <T as EncodingAdapter>::Parameters,
-            >>::Error,
-        >,
-        ContractError: From<
-            <<T as EncodingAdapter>::DeltaEncoder as Encoder<<T as EncodingAdapter>::Delta>>::Error,
-        >,
-    {
-        let typed_params =
-            <<T as EncodingAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
-        let typed_delta = <<T as EncodingAdapter>::DeltaEncoder>::deserialize(delta.as_ref())?;
-        <T as TypedContract>::verify_delta(typed_params, typed_delta)
     }
 
     pub fn inner_update_state<T>(

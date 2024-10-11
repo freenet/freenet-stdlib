@@ -44,13 +44,6 @@ impl TypedContract for Contract {
         unimplemented!()
     }
 
-    fn verify_delta(
-        _: Self::Parameters,
-        _: Self::Delta,
-    ) -> Result<bool, freenet_stdlib::prelude::ContractError> {
-        Ok(true)
-    }
-
     fn merge(
         &mut self,
         _: &Self::Parameters,

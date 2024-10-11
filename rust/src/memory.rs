@@ -82,26 +82,6 @@ pub mod wasm_interface {
         ContractInterfaceResult::from(result).into_raw()
     }
 
-    pub fn inner_validate_delta<T: ContractInterface>(parameters: i64, delta: i64) -> i64 {
-        if let Err(e) = set_logger().map_err(|e| e.into_raw()) {
-            return e;
-        }
-        let parameters = unsafe {
-            let param_buf = &mut *(parameters as *mut super::buf::BufferBuilder);
-            let bytes =
-                &*std::ptr::slice_from_raw_parts(param_buf.start(), param_buf.bytes_written());
-            Parameters::from(bytes)
-        };
-        let delta = unsafe {
-            let delta_buf = &mut *(delta as *mut super::buf::BufferBuilder);
-            let bytes =
-                &*std::ptr::slice_from_raw_parts(delta_buf.start(), delta_buf.bytes_written());
-            StateDelta::from(bytes)
-        };
-        let result = <T as ContractInterface>::validate_delta(parameters, delta);
-        ContractInterfaceResult::from(result).into_raw()
-    }
-
     pub fn inner_update_state<T: ContractInterface>(
         parameters: i64,
         state: i64,

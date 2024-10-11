@@ -36,14 +36,6 @@ pub trait ContractComponent: std::any::Any + Sized {
         Child: ContractComponent,
         Self::Context: for<'x> From<&'x Ctx>;
 
-    /// Corresponds to ContractInterface `validate_delta`
-    fn verify_delta<Child>(
-        parameters: &Self::Parameters,
-        delta: &Self::Delta,
-    ) -> Result<bool, ContractError>
-    where
-        Child: ContractComponent;
-
     /// Corresponds to ContractInterface `update_state`
     fn merge(
         &mut self,
@@ -143,16 +135,6 @@ where
             }
         }
         Ok(ValidateResult::Valid)
-    }
-
-    fn verify_delta<Child>(
-        parameters: &Self::Parameters,
-        delta: &Self::Delta,
-    ) -> Result<bool, ContractError>
-    where
-        Child: ContractComponent,
-    {
-        <T as ContractComponent>::verify_delta::<Child>(parameters, delta)
     }
 
     fn merge(
@@ -272,34 +254,6 @@ pub mod from_bytes {
             }
         }
         Ok(ValidateResult::Valid)
-    }
-
-    pub fn inner_validate_delta<T, Child>(
-        parameters: Parameters<'static>,
-        delta: StateDelta<'static>,
-    ) -> Result<bool, ContractError>
-    where
-        T: ContractComponent + EncodingAdapter,
-        <T as EncodingAdapter>::Parameters: Into<<T as ContractComponent>::Parameters>,
-        <T as EncodingAdapter>::Delta: Into<<T as ContractComponent>::Delta>,
-        ContractError: From<
-            <<T as EncodingAdapter>::ParametersEncoder as Encoder<
-                <T as EncodingAdapter>::Parameters,
-            >>::Error,
-        >,
-        ContractError: From<
-            <<T as EncodingAdapter>::DeltaEncoder as Encoder<<T as EncodingAdapter>::Delta>>::Error,
-        >,
-        Child: ContractComponent,
-        <Child as ContractComponent>::Parameters:
-            for<'x> From<&'x <T as ContractComponent>::Parameters>,
-        <Child as ContractComponent>::Delta: for<'x> From<&'x <T as ContractComponent>::Delta>,
-    {
-        let typed_params =
-            <<T as EncodingAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?.into();
-        let typed_delta =
-            <<T as EncodingAdapter>::DeltaEncoder>::deserialize(delta.as_ref())?.into();
-        <T as ContractComponent>::verify_delta::<Child>(&typed_params, &typed_delta)
     }
 
     pub fn inner_update_state<T, Child>(

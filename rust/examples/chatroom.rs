@@ -94,16 +94,6 @@ impl ContractComponent for ChatRoom {
         unimplemented!()
     }
 
-    fn verify_delta<Child>(
-        _: &Self::Parameters,
-        _: &Self::Delta,
-    ) -> Result<bool, freenet_stdlib::prelude::ContractError>
-    where
-        Child: ContractComponent,
-    {
-        unimplemented!()
-    }
-
     fn merge(
         &mut self,
         _: &Self::Parameters,
@@ -196,16 +186,6 @@ pub mod dependency_2 {
             unreachable!()
         }
 
-        fn verify_delta<Child>(
-            _: &Self::Parameters,
-            _: &Self::Delta,
-        ) -> Result<bool, freenet_stdlib::prelude::ContractError>
-        where
-            Child: ContractComponent,
-        {
-            unreachable!()
-        }
-
         fn merge(
             &mut self,
             _: &Self::Parameters,
@@ -272,16 +252,6 @@ pub mod dependency_2 {
             let _public_key = parameters.owner_public_key;
             let _public_key = PublicKey::from(context);
             // do stuff with pub key
-            unimplemented!()
-        }
-
-        fn verify_delta<Child>(
-            _: &Self::Parameters,
-            _: &Self::Delta,
-        ) -> Result<bool, freenet_stdlib::prelude::ContractError>
-        where
-            Child: ContractComponent,
-        {
             unimplemented!()
         }
 

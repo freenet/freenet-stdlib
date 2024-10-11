@@ -352,13 +352,6 @@ impl ImplTrait {
                     ::freenet_stdlib::typed_contract::inner_validate_state::<#type_name>(parameters, state, related)
                 }
 
-                fn validate_delta(
-                    parameters: ::freenet_stdlib::prelude::Parameters<'static>,
-                    delta: ::freenet_stdlib::prelude::StateDelta<'static>,
-                ) -> ::core::result::Result<bool, ::freenet_stdlib::prelude::ContractError> {
-                    ::freenet_stdlib::typed_contract::inner_validate_delta::<#type_name>(parameters, delta)
-                }
-
                 fn update_state(
                     parameters: ::freenet_stdlib::prelude::Parameters<'static>,
                     state: ::freenet_stdlib::prelude::State<'static>,
@@ -415,17 +408,6 @@ impl ImplTrait {
             }
         });
 
-        let validate_delta_impl = self.children.iter().map(|child| {
-            quote! {
-                if !::freenet_stdlib::contract_composition::from_bytes::inner_validate_delta::<
-                    #type_name,
-                    #child,
-                >(parameters.clone(), delta.clone())? {
-                    return ::core::result::Result::Ok(false);
-                }
-            }
-        });
-
         let update_state_impl = self.children.iter().map(|child| {
             quote! {{
                 let modification = ::freenet_stdlib::contract_composition::from_bytes::inner_update_state::<
@@ -452,14 +434,6 @@ impl ImplTrait {
                 > {
                     #(#validate_state_impl)*
                     ::core::result::Result::Ok(::freenet_stdlib::prelude::ValidateResult::Valid)
-                }
-
-                fn validate_delta(
-                    parameters: ::freenet_stdlib::prelude::Parameters<'static>,
-                    delta: ::freenet_stdlib::prelude::StateDelta<'static>,
-                ) -> ::core::result::Result<bool, ::freenet_stdlib::prelude::ContractError> {
-                    #(#validate_delta_impl)*
-                    ::core::result::Result::Ok(true)
                 }
 
                 fn update_state(
@@ -513,13 +487,11 @@ impl ImplTrait {
 
     fn gen_extern_functions(&self) -> TokenStream {
         let validate_state_fn = self.gen_validate_state_fn();
-        let validate_delta_fn = self.gen_validate_delta_fn();
         let update_fn = self.gen_update_state_fn();
         let summarize_fn = self.gen_summarize_state_fn();
         let get_delta_fn = self.gen_get_state_delta();
         quote! {
             #validate_state_fn
-            #validate_delta_fn
             #update_fn
             #summarize_fn
             #get_delta_fn
@@ -534,18 +506,6 @@ impl ImplTrait {
             #[cfg(feature = "freenet-main-contract")]
             pub extern "C" fn validate_state(parameters: i64, state: i64, related: i64) -> #ret {
                 ::freenet_stdlib::memory::wasm_interface::inner_validate_state::<#type_name>(parameters, state, related)
-            }
-        }
-    }
-
-    fn gen_validate_delta_fn(&self) -> TokenStream {
-        let type_name = &self.type_name;
-        let ret = self.ffi_ret_type();
-        quote! {
-            #[no_mangle]
-            #[cfg(feature = "freenet-main-contract")]
-            pub extern "C" fn validate_delta(parameters: i64, delta: i64) -> #ret {
-                ::freenet_stdlib::memory::wasm_interface::inner_validate_delta::<#type_name>(parameters, delta)
             }
         }
     }
