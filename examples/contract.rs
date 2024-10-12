@@ -16,13 +16,6 @@ impl ContractInterface for Contract {
         unimplemented!()
     }
 
-    fn validate_delta(
-        _parameters: Parameters<'static>,
-        _delta: StateDelta<'static>,
-    ) -> Result<bool, ContractError> {
-        unimplemented!()
-    }
-
     fn update_state(
         _parameters: Parameters<'static>,
         _state: State<'static>,

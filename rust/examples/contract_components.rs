@@ -99,20 +99,6 @@ mod parent {
             Ok(ValidateResult::Valid)
         }
 
-        fn verify_delta<Child>(
-            parameters: &Self::Parameters,
-            delta: &Self::Delta,
-        ) -> Result<bool, ContractError>
-        where
-            Child: ContractComponent,
-        {
-            <ChildComponent as ContractComponent>::verify_delta::<ChildComponent>(
-                &parameters.into(),
-                &delta.into(),
-            )?;
-            Ok(true)
-        }
-
         fn merge(
             &mut self,
             parameters: &Self::Parameters,
@@ -254,18 +240,6 @@ mod children {
             Ok(ValidateResult::Valid)
         }
 
-        fn verify_delta<Child>(
-            parameters: &Self::Parameters,
-            _delta: &Self::Delta,
-        ) -> Result<bool, ContractError>
-        where
-            Child: ContractComponent,
-        {
-            let _pub_key = PubKey::from(parameters.clone());
-            // assert something in Self::Delta is signed with pub key
-            Ok(true)
-        }
-
         fn merge(
             &mut self,
             parameters: &Self::Parameters,
@@ -334,10 +308,6 @@ mod children {
             _: Self::Parameters,
             _: RelatedContractsContainer,
         ) -> Result<ValidateResult, ContractError> {
-            unimplemented!()
-        }
-
-        fn verify_delta(_: Self::Parameters, _: Self::Delta) -> Result<bool, ContractError> {
             unimplemented!()
         }
 
