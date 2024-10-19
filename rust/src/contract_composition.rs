@@ -213,7 +213,7 @@ pub mod from_bytes {
     use crate::{
         contract_interface::{
             encoding::{Encoder, EncodingAdapter},
-            StateDelta, StateSummary, UpdateModification,
+            StateSummary, UpdateModification,
         },
         parameters::Parameters,
     };
