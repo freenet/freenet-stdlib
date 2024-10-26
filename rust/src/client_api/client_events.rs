@@ -1,6 +1,7 @@
 use flatbuffers::WIPOffset;
 use std::borrow::Cow;
 use std::fmt::Display;
+use std::net::SocketAddr;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -245,7 +246,11 @@ pub enum ClientRequest<'a> {
     ContractOp(#[serde(borrow)] ContractRequest<'a>),
     Disconnect { cause: Option<Cow<'static, str>> },
     Authenticate { token: String },
+    NodeQueries(ConnectedPeers),
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ConnectedPeers {}
 
 impl ClientRequest<'_> {
     pub fn into_owned(self) -> ClientRequest<'static> {
@@ -288,6 +293,7 @@ impl ClientRequest<'_> {
             }
             ClientRequest::Disconnect { cause } => ClientRequest::Disconnect { cause },
             ClientRequest::Authenticate { token } => ClientRequest::Authenticate { token },
+            ClientRequest::NodeQueries(query) => ClientRequest::NodeQueries(query),
         }
     }
 
@@ -590,6 +596,7 @@ impl Display for ClientRequest<'_> {
             },
             ClientRequest::Disconnect { .. } => write!(f, "client disconnected"),
             ClientRequest::Authenticate { .. } => write!(f, "authenticate"),
+            ClientRequest::NodeQueries(query) => write!(f, "node queries: {:?}", query),
         }
     }
 }
@@ -669,8 +676,16 @@ pub enum HostResponse<T = WrappedState> {
         key: DelegateKey,
         values: Vec<OutboundDelegateMsg>,
     },
+    QueryResponse(QueryResponse),
     /// A requested action which doesn't require an answer was performed successfully.
     Ok,
+}
+
+type Peer = String;
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum QueryResponse {
+    ConnectedPeers { peers: Vec<(Peer, SocketAddr)> },
 }
 
 impl HostResponse {
@@ -1310,6 +1325,7 @@ impl HostResponse {
                 finish_host_response_buffer(&mut builder, host_response_offset);
                 Ok(builder.finished_data().to_vec())
             }
+            HostResponse::QueryResponse(_) => unimplemented!(),
         }
     }
 }
@@ -1333,6 +1349,7 @@ impl std::fmt::Display for HostResponse {
             },
             HostResponse::DelegateResponse { .. } => write!(f, "delegate responses"),
             HostResponse::Ok => write!(f, "ok response"),
+            HostResponse::QueryResponse(_) => write!(f, "query response"),
         }
     }
 }
