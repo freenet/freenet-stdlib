@@ -201,7 +201,7 @@ pub enum ContractError {
     MissingRelated {
         key: crate::contract_interface::ContractInstanceId,
     },
-    #[error("missing related contract: {key}")]
+    #[error("missing contract: {key}")]
     MissingContract {
         key: crate::contract_interface::ContractInstanceId,
     },
