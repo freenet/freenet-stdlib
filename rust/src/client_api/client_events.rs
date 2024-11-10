@@ -1110,6 +1110,7 @@ impl HostResponse {
                     finish_host_response_buffer(&mut builder, host_response_offset);
                     Ok(builder.finished_data().to_vec())
                 }
+                ContractResponse::SubscribeResponse { .. } => todo!(),
             },
             HostResponse::DelegateResponse { key, values } => {
                 let key_data = builder.create_vector(key.bytes());
@@ -1346,6 +1347,9 @@ impl std::fmt::Display for HostResponse {
                 ContractResponse::UpdateNotification { key, .. } => {
                     f.write_fmt(format_args!("update notification for `{key}`"))
                 }
+                ContractResponse::SubscribeResponse { key, .. } => {
+                    f.write_fmt(format_args!("subscribe response for `{key}`"))
+                }
             },
             HostResponse::DelegateResponse { .. } => write!(f, "delegate responses"),
             HostResponse::Ok => write!(f, "ok response"),
@@ -1377,6 +1381,10 @@ pub enum ContractResponse<T = WrappedState> {
         key: ContractKey,
         #[serde(deserialize_with = "StateSummary::deser_state_summary")]
         summary: StateSummary<'static>,
+    },
+    SubscribeResponse {
+        key: ContractKey,
+        subscribed: bool,
     },
 }
 
