@@ -275,10 +275,10 @@ impl ClientRequest<'_> {
                     }
                     ContractRequest::Get {
                         key,
-                        fetch_contract,
+                        return_contract_code: fetch_contract,
                     } => ContractRequest::Get {
                         key,
-                        fetch_contract,
+                        return_contract_code: fetch_contract,
                     },
                     ContractRequest::Subscribe { key, summary } => ContractRequest::Subscribe {
                         key,
@@ -366,7 +366,7 @@ pub enum ContractRequest<'a> {
         /// Key of the contract.
         key: ContractKey,
         /// If this flag is set then fetch also the contract itself.
-        fetch_contract: bool,
+        return_contract_code: bool,
     },
     /// Subscribe to the changes in a given contract. Implicitly starts a get operation
     /// if the contract is not present yet.
@@ -394,10 +394,10 @@ impl ContractRequest<'_> {
             },
             Self::Get {
                 key,
-                fetch_contract,
+                return_contract_code: fetch_contract,
             } => ContractRequest::Get {
                 key,
-                fetch_contract,
+                return_contract_code: fetch_contract,
             },
             Self::Subscribe { key, summary } => ContractRequest::Subscribe {
                 key,
@@ -424,7 +424,7 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                     let fetch_contract = get.fetch_contract();
                     ContractRequest::Get {
                         key,
-                        fetch_contract,
+                        return_contract_code: fetch_contract,
                     }
                 }
                 ContractRequestType::Put => {
@@ -560,7 +560,7 @@ impl Display for ClientRequest<'_> {
                 ContractRequest::Update { key, .. } => write!(f, "update request for {key}"),
                 ContractRequest::Get {
                     key,
-                    fetch_contract: contract,
+                    return_contract_code: contract,
                     ..
                 } => {
                     write!(
@@ -1461,7 +1461,7 @@ mod client_request_test {
         match request {
             ContractRequest::Get {
                 key,
-                fetch_contract,
+                return_contract_code: fetch_contract,
             } => {
                 assert_eq!(key.encoded_contract_id(), EXPECTED_ENCODED_CONTRACT_ID);
                 assert!(!fetch_contract);
