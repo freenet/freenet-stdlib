@@ -275,10 +275,10 @@ impl ClientRequest<'_> {
                     }
                     ContractRequest::Get {
                         key,
-                        return_contract_code: fetch_contract,
+                        return_contract_code,
                     } => ContractRequest::Get {
                         key,
-                        return_contract_code: fetch_contract,
+                        return_contract_code,
                     },
                     ContractRequest::Subscribe { key, summary } => ContractRequest::Subscribe {
                         key,
