@@ -777,7 +777,7 @@ impl<'a> DerefMut for StateSummary<'a> {
 /// It is the part of the executable belonging to the full specification
 /// and does not include any other metadata (like the parameters).
 #[serde_as]
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct ContractCode<'a> {
     // TODO: conver this to Arc<[u8]> instead
@@ -900,9 +900,17 @@ impl std::fmt::Display for ContractCode<'_> {
     }
 }
 
+impl std::fmt::Debug for ContractCode<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContractCode")
+            .field("hash", &self.code_hash);
+        Ok(())
+    }
+}
+
 /// The key representing the hash of the contract executable code hash and a set of `parameters`.
 #[serde_as]
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
 #[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 #[repr(transparent)]
 pub struct ContractInstanceId(#[serde_as(as = "[_; CONTRACT_KEY_SIZE]")] [u8; CONTRACT_KEY_SIZE]);
@@ -967,6 +975,14 @@ impl TryFrom<String> for ContractInstanceId {
 impl Display for ContractInstanceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.encode())
+    }
+}
+
+impl std::fmt::Debug for ContractInstanceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ContractInstanceId")
+            .field(&self.encode())
+            .finish()
     }
 }
 
@@ -1137,7 +1153,7 @@ fn internal_fmt_key(
 
 // TODO:  get rid of this when State is internally an Arc<[u8]>
 /// The state for a contract.
-#[derive(Debug, PartialEq, Eq, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(PartialEq, Eq, Clone, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct WrappedState(
     #[serde(
@@ -1220,6 +1236,12 @@ impl std::fmt::Display for WrappedState {
             write!(f, "{:02x}", b)?;
         }
         write!(f, "...])")
+    }
+}
+
+impl std::fmt::Debug for WrappedState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <Self as Display>::fmt(self, f)
     }
 }
 

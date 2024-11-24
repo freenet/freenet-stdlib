@@ -7,7 +7,7 @@ use serde_with::serde_as;
 const CONTRACT_KEY_SIZE: usize = 32;
 
 #[serde_as]
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
 #[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
 pub struct CodeHash(#[serde_as(as = "[_; CONTRACT_KEY_SIZE]")] pub(crate) [u8; CONTRACT_KEY_SIZE]);
 
@@ -69,5 +69,11 @@ impl TryFrom<&[u8]> for CodeHash {
 impl Display for CodeHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.encode())
+    }
+}
+
+impl std::fmt::Debug for CodeHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("CodeHash").field(&self.encode()).finish()
     }
 }
