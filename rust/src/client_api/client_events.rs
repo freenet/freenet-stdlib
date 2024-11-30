@@ -127,6 +127,9 @@ pub enum ErrorKind {
     RequestError(#[from] RequestError),
     #[error("error while executing operation in the network: {cause}")]
     OperationError { cause: Cow<'static, str> },
+    // TODO: identify requests by some id so we can inform clients which one failed exactly
+    #[error("operation timed out")]
+    FailedOperation,
     #[error("peer should shutdown")]
     Shutdown,
 }
