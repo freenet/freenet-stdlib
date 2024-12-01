@@ -129,6 +129,8 @@ pub enum ErrorKind {
     OperationError { cause: Cow<'static, str> },
     #[error("peer should shutdown")]
     Shutdown,
+    #[error("operation failed")]
+    FailedOperation,
 }
 
 impl Display for ClientError {
