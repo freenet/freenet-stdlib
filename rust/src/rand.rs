@@ -2,12 +2,12 @@
 use std::cell::RefCell;
 
 thread_local! {
-    static SMALL_BUF: RefCell<[u8; 512]> = RefCell::new([0u8; 512]);
-    static LARGE_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    static SMALL_BUF: RefCell<[u8; 512]> = const { RefCell::new([0u8; 512]) };
+    static LARGE_BUF: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Get the specified number of random bytes.
-pub fn rand_bytes<'a>(number: u32) -> Vec<u8> {
+pub fn rand_bytes(number: u32) -> Vec<u8> {
     const MAX_KEY_SIZE: u32 = 512;
 
     if number <= MAX_KEY_SIZE {
