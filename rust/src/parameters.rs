@@ -17,7 +17,7 @@ pub struct Parameters<'a>(
     Cow<'a, [u8]>,
 );
 
-impl<'a> Parameters<'a> {
+impl Parameters<'_> {
     /// Gets the number of bytes of data stored in the `Parameters`.
     pub fn size(&self) -> usize {
         self.0.len()
@@ -43,7 +43,7 @@ impl<'a> Parameters<'a> {
     }
 }
 
-impl<'a> From<Vec<u8>> for Parameters<'a> {
+impl From<Vec<u8>> for Parameters<'_> {
     fn from(data: Vec<u8>) -> Self {
         Parameters(Cow::from(data))
     }
@@ -55,7 +55,7 @@ impl<'a> From<&'a [u8]> for Parameters<'a> {
     }
 }
 
-impl<'a> AsRef<[u8]> for Parameters<'a> {
+impl AsRef<[u8]> for Parameters<'_> {
     fn as_ref(&self) -> &[u8] {
         match &self.0 {
             Cow::Borrowed(arr) => arr,

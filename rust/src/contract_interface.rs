@@ -154,9 +154,9 @@ impl RelatedContracts<'static> {
 }
 
 impl<'a> RelatedContracts<'a> {
-    pub fn update<'b>(
-        &'b mut self,
-    ) -> impl Iterator<Item = (&ContractInstanceId, &mut Option<State<'a>>)> + 'b {
+    pub fn update(
+        &mut self,
+    ) -> impl Iterator<Item = (&ContractInstanceId, &mut Option<State<'_>>)> + '_ {
         self.map.iter_mut()
     }
 
@@ -590,7 +590,7 @@ impl State<'_> {
     }
 }
 
-impl<'a> From<Vec<u8>> for State<'a> {
+impl From<Vec<u8>> for State<'_> {
     fn from(state: Vec<u8>) -> Self {
         State(Cow::from(state))
     }
@@ -602,7 +602,7 @@ impl<'a> From<&'a [u8]> for State<'a> {
     }
 }
 
-impl<'a> AsRef<[u8]> for State<'a> {
+impl AsRef<[u8]> for State<'_> {
     fn as_ref(&self) -> &[u8] {
         match &self.0 {
             Cow::Borrowed(arr) => arr,
@@ -619,13 +619,13 @@ impl<'a> Deref for State<'a> {
     }
 }
 
-impl<'a> DerefMut for State<'a> {
+impl DerefMut for State<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<'a> std::io::Read for State<'a> {
+impl std::io::Read for State<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.as_ref().read(buf)
     }
@@ -647,7 +647,7 @@ pub struct StateDelta<'a>(
     Cow<'a, [u8]>,
 );
 
-impl<'a> StateDelta<'a> {
+impl StateDelta<'_> {
     /// Gets the number of bytes of data stored in the `StateDelta`.
     pub fn size(&self) -> usize {
         self.0.len()
@@ -663,7 +663,7 @@ impl<'a> StateDelta<'a> {
     }
 }
 
-impl<'a> From<Vec<u8>> for StateDelta<'a> {
+impl From<Vec<u8>> for StateDelta<'_> {
     fn from(delta: Vec<u8>) -> Self {
         StateDelta(Cow::from(delta))
     }
@@ -675,7 +675,7 @@ impl<'a> From<&'a [u8]> for StateDelta<'a> {
     }
 }
 
-impl<'a> AsRef<[u8]> for StateDelta<'a> {
+impl AsRef<[u8]> for StateDelta<'_> {
     fn as_ref(&self) -> &[u8] {
         match &self.0 {
             Cow::Borrowed(arr) => arr,
@@ -692,7 +692,7 @@ impl<'a> Deref for StateDelta<'a> {
     }
 }
 
-impl<'a> DerefMut for StateDelta<'a> {
+impl DerefMut for StateDelta<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -737,7 +737,7 @@ impl StateSummary<'_> {
     }
 }
 
-impl<'a> From<Vec<u8>> for StateSummary<'a> {
+impl From<Vec<u8>> for StateSummary<'_> {
     fn from(state: Vec<u8>) -> Self {
         StateSummary(Cow::from(state))
     }
@@ -749,7 +749,7 @@ impl<'a> From<&'a [u8]> for StateSummary<'a> {
     }
 }
 
-impl<'a> AsRef<[u8]> for StateSummary<'a> {
+impl AsRef<[u8]> for StateSummary<'_> {
     fn as_ref(&self) -> &[u8] {
         match &self.0 {
             Cow::Borrowed(arr) => arr,
@@ -766,7 +766,7 @@ impl<'a> Deref for StateSummary<'a> {
     }
 }
 
-impl<'a> DerefMut for StateSummary<'a> {
+impl DerefMut for StateSummary<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
