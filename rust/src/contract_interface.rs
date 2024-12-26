@@ -865,7 +865,7 @@ impl From<Vec<u8>> for ContractCode<'static> {
 }
 
 impl<'a> From<&'a [u8]> for ContractCode<'a> {
-    fn from(data: &'a [u8]) -> ContractCode {
+    fn from(data: &'a [u8]) -> ContractCode<'a> {
         let hash = ContractCode::gen_hash(data);
         ContractCode {
             data: Cow::from(data),
