@@ -9,7 +9,7 @@ thread_local! {
 /// Get the specified number of random bytes.
 pub fn rand_bytes<'a>(number: u32) -> Vec<u8> {
     const MAX_KEY_SIZE: u32 = 512;
-    
+
     if number <= MAX_KEY_SIZE {
         SMALL_BUF.with(|buf| {
             let mut buf = buf.borrow_mut();
