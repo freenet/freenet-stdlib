@@ -156,7 +156,7 @@ impl RelatedContracts<'static> {
 impl<'a> RelatedContracts<'a> {
     pub fn update(
         &mut self,
-    ) -> impl Iterator<Item = (&ContractInstanceId, &mut Option<State<'_>>)> + '_ {
+    ) -> impl Iterator<Item = (&ContractInstanceId, &mut Option<State<'a>>)> + '_ {
         self.map.iter_mut()
     }
 
