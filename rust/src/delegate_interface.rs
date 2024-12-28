@@ -378,7 +378,6 @@ impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
 ///    the delegate to sign messages, it will ask the user for permission
 ///  * A delegate monitors an inbox contract and downloads new messages when
 ///    they arrive
-
 pub trait DelegateInterface {
     /// Process inbound message, producing zero or more outbound messages in response.
     /// All state for the delegate must be stored using the secret mechanism.
