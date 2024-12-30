@@ -148,8 +148,8 @@ impl RelatedContracts<'_> {
 }
 
 impl RelatedContracts<'static> {
-    pub fn states(self) -> impl Iterator<Item = (ContractInstanceId, Option<State<'static>>)> {
-        self.map.into_iter()
+    pub fn states(&self) -> impl Iterator<Item = (&ContractInstanceId, &Option<State<'static>>)> {
+        self.map.iter()
     }
 }
 
