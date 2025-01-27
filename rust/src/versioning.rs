@@ -125,9 +125,8 @@ impl DelegateCode<'static> {
         // Get contract version
         let version = contract_data
             .read_u64::<BigEndian>()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Failed to read version number"))
-            .and_then(|v| APIVersion::from_u64(v)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+            .map_err(|_| std::io::ErrorKind::InvalidData)
+            .map(APIVersion::from_u64)?;
 
         if version == APIVersion::Version0_0_1 {
             let mut code_hash = [0u8; 32];
@@ -340,10 +339,10 @@ pub enum APIVersion {
 }
 
 impl APIVersion {
-    fn from_u64(version: u64) -> Result<Self, String> {
+    fn from_u64(version: u64) -> Self {
         match version {
-            0 => Ok(Self::Version0_0_1),
-            _ => Err(format!("unsupported incremental API version: {version}")),
+            0 => Self::Version0_0_1,
+            _ => panic!("unsupported incremental API version: {version}"),
         }
     }
 
