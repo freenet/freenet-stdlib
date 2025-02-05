@@ -302,9 +302,9 @@ impl ContractCode<'static> {
         // Get contract version
         let version = contract_data
             .read_u64::<BigEndian>()
-            .map_err(|_| std::io::ErrorKind::InvalidData)
-            .and_then(|v| APIVersion::from_u64(v)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Failed to read version"))?;
+        let version = APIVersion::from_u64(version)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         if version == APIVersion::Version0_0_1 {
             let mut code_hash = [0u8; 32];
