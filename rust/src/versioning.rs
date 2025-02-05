@@ -303,7 +303,8 @@ impl ContractCode<'static> {
         let version = contract_data
             .read_u64::<BigEndian>()
             .map_err(|_| std::io::ErrorKind::InvalidData)
-            .map(APIVersion::from_u64)?;
+            .and_then(|v| APIVersion::from_u64(v)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
 
         if version == APIVersion::Version0_0_1 {
             let mut code_hash = [0u8; 32];
