@@ -4,7 +4,6 @@ use syn::{spanned::Spanned, ImplItem, ItemImpl, MetaNameValue, Token, Type, Type
 
 use crate::{AttributeArgs, ContractType};
 
-#[derive(Debug)]
 struct ChildrenPaths {
     paths: Vec<TypePath>,
 }
