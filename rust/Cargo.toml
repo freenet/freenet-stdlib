@@ -1,6 +1,6 @@
 [package]
 name = "freenet-stdlib"
-version = "0.0.8"
+version = "0.1.0-rc1"
 edition = "2021"
 rust-version = "1.71.1"
 publish = true
@@ -28,7 +28,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["default", "env-filter"] }
 
 # internal
-freenet-macros = { path = "../rust-macros", version = "0.0.5" }
+freenet-macros = { path = "../rust-macros", version = "0.1.0-rc1" }
 
 [target.'cfg(any(unix, windows))'.dependencies]
 tokio = { version = "1", optional = true, features = ["macros", "parking_lot", "rt-multi-thread", "sync", "time"] }
