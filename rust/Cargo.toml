@@ -32,7 +32,7 @@ freenet-macros = { path = "../rust-macros", version = "0.1.0-rc1" }
 
 [target.'cfg(any(unix, windows))'.dependencies]
 tokio = { version = "1", optional = true, features = ["macros", "parking_lot", "rt-multi-thread", "sync", "time"] }
-tokio-tungstenite = { version = "0.24", optional = true }
+tokio-tungstenite = { version = "0.26.1", optional = true }
 serde_with = { version = "3" }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
