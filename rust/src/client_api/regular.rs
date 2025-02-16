@@ -1,15 +1,15 @@
 use std::{borrow::Cow, task::Poll};
 
+use super::{
+    client_events::{ClientError, ClientRequest, ErrorKind},
+    Error, HostResult,
+};
 use futures::{pin_mut, FutureExt, Sink, SinkExt, Stream, StreamExt};
 use tokio::{
     net::TcpStream,
     sync::mpsc::{self, Receiver, Sender},
 };
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
-use super::{
-    client_events::{ClientError, ClientRequest, ErrorKind},
-    Error, HostResult,
-};
 
 type Connection = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
