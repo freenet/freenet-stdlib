@@ -1,16 +1,15 @@
 use std::{borrow::Cow, task::Poll};
 
+use super::{
+    client_events::{ClientError, ClientRequest, ErrorKind},
+    Error, HostResult,
+};
 use futures::{pin_mut, FutureExt, Sink, SinkExt, Stream, StreamExt};
 use tokio::{
     net::TcpStream,
     sync::mpsc::{self, Receiver, Sender},
 };
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
-
-use super::{
-    client_events::{ClientError, ClientRequest, ErrorKind},
-    Error, HostResult,
-};
 
 type Connection = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -163,7 +162,7 @@ async fn process_request(
     let msg = bincode::serialize(&req)
         .map_err(Into::into)
         .map_err(Error::OtherError)?;
-    conn.send(Message::Binary(msg)).await?;
+    conn.send(Message::Binary(msg.into())).await?;
     Ok(())
 }
 
@@ -183,7 +182,7 @@ async fn process_response(
                 .map_err(|_| Error::ChannelClosed)?;
         }
         Message::Binary(binary) => {
-            let response: HostResult = bincode::deserialize(binary.as_slice())?;
+            let response: HostResult = bincode::deserialize(&binary)?;
             response_tx
                 .send(response)
                 .await
@@ -233,7 +232,7 @@ mod test {
             if !self.recv {
                 let res: HostResult = Ok(HostResponse::Ok);
                 let req = bincode::serialize(&res)?;
-                stream.send(Message::Binary(req)).await?;
+                stream.send(Message::Binary(req.into())).await?;
             }
 
             let Message::Binary(msg) = stream.next().await.ok_or_else(|| "no msg".to_owned())??
