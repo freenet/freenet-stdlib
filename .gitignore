@@ -9,3 +9,5 @@ docs
 Cargo.lock
 .aider*
 .env
+
+.idea
