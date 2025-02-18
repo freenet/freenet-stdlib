@@ -300,9 +300,9 @@ impl ContractCode<'static> {
         mut contract_data: Cursor<Vec<u8>>,
     ) -> Result<(Self, APIVersion), std::io::Error> {
         // Get contract version
-        let version = contract_data
-            .read_u64::<BigEndian>()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Failed to read version"))?;
+        let version = contract_data.read_u64::<BigEndian>().map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "Failed to read version")
+        })?;
         let version = APIVersion::from_u64(version);
 
         if version == APIVersion::Version0_0_1 {
