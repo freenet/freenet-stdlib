@@ -17,9 +17,9 @@ mod regular;
 #[cfg(all(any(unix, windows), feature = "net"))]
 pub use regular::*;
 
-#[cfg(all(target_family = "wasm", feature = "net", not(feature = "contract")))]
+#[cfg(all(target_family = "wasm", feature = "net"))]
 mod browser;
-#[cfg(all(target_family = "wasm", feature = "net", not(feature = "contract")))]
+#[cfg(all(target_family = "wasm", feature = "net"))]
 pub use browser::*;
 
 pub use client_events::*;
