@@ -1903,9 +1903,7 @@ pub mod encoding {
                 .map(|s| <<T as EncodingAdapter>::SelfEncoder>::deserialize(s.as_ref()))
                 .transpose()?;
             let delta = delta
-                .map(|d| {
-                    <<T as EncodingAdapter>::DeltaEncoder>::deserialize(d.as_ref()).map(Into::into)
-                })
+                .map(|d| <<T as EncodingAdapter>::DeltaEncoder>::deserialize(d.as_ref()))
                 .transpose()?;
             let typed_update = TypedUpdateData::try_from((state, delta))?;
             match typed_state.merge(&typed_params, typed_update, &related_container) {
