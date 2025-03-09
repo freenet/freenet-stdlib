@@ -117,7 +117,7 @@ pub enum ErrorKind {
     IncorrectState(ContractKey),
     #[error("node not available")]
     NodeUnavailable,
-    #[error("lost the connection with the protocol hanling connections")]
+    #[error("lost the connection with the protocol handling connections")]
     TransportProtocolDisconnect,
     #[error("unhandled error: {cause}")]
     Unhandled { cause: Cow<'static, str> },
