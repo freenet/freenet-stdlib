@@ -42,6 +42,7 @@ table Put {
   container:common.ContractContainer(required);
   wrapped_state:[ubyte](required);
   related_contracts:RelatedContracts(required);
+  subscribe:bool;
 }
 
 table Update {
@@ -52,6 +53,7 @@ table Update {
 table Get {
   key:common.ContractKey(required);
   fetch_contract:bool;
+  subscribe:bool;
 }
 
 table Subscribe {
