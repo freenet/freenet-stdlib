@@ -145,7 +145,7 @@ async fn request_handler(
             }
         }
     };
-    tracing::error!(?error, "request handler error");
+    tracing::debug!(?error, "request handler error");
     let error = match error {
         Error::ChannelClosed => ErrorKind::ChannelClosed.into(),
         other => ClientError::from(format!("{other}")),
