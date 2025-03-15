@@ -1463,7 +1463,7 @@ mod client_request_test {
                 );
                 assert_eq!(contract.unwrap_v1().data.data(), &[1, 2, 3, 4, 5, 6, 7, 8]);
                 assert_eq!(state.to_vec(), &[1, 2, 3, 4, 5, 6, 7, 8]);
-                assert_eq!(subscribe, false);
+                assert!(!subscribe);
             }
             _ => panic!("wrong contract request type"),
         }
@@ -1495,7 +1495,7 @@ mod client_request_test {
             } => {
                 assert_eq!(key.encoded_contract_id(), EXPECTED_ENCODED_CONTRACT_ID);
                 assert!(!fetch_contract);
-                assert_eq!(subscribe, false);
+                assert!(!subscribe);
             }
             _ => panic!("wrong contract request type"),
         }
