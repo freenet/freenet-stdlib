@@ -1358,7 +1358,7 @@ impl HostResponse {
     }
 }
 
-impl std::fmt::Display for HostResponse {
+impl Display for HostResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HostResponse::ContractResponse(res) => match res {
