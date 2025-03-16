@@ -1,6 +1,6 @@
 [package]
 name = "freenet-stdlib"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 rust-version = "1.71.1"
 publish = true
@@ -57,7 +57,6 @@ version = "0.3"
 optional = true
 
 [target.'cfg(any(unix, windows))'.dev-dependencies]
-arbitrary = { version = "1", features = ["derive"] }
 bincode = "1"
 wasmer = { version = "5.0.4", features = [ "sys-default"] }
 rand = { version = "0.8", features = ["small_rng"] }
@@ -68,5 +67,5 @@ contract = []
 unstable = []
 freenet-main-contract = []
 net = ["dep:tokio", "dep:tokio-tungstenite", "dep:wasm-bindgen", "dep:web-sys", "dep:js-sys", "dep:serde-wasm-bindgen"]
-testing = ["arbitrary"]
+testing = ["dep:arbitrary"]
 trace = []
