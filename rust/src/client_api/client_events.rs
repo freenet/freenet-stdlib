@@ -247,9 +247,15 @@ impl ContractError {
 pub enum ClientRequest<'a> {
     DelegateOp(#[serde(borrow)] DelegateRequest<'a>),
     ContractOp(#[serde(borrow)] ContractRequest<'a>),
-    Disconnect { cause: Option<Cow<'static, str>> },
-    Authenticate { token: String },
+    Disconnect {
+        cause: Option<Cow<'static, str>>,
+    },
+    Authenticate {
+        token: String,
+    },
     NodeQueries(ConnectedPeers),
+    /// Gracefully disconnect from the host.
+    Close,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -301,6 +307,7 @@ impl ClientRequest<'_> {
             ClientRequest::Disconnect { cause } => ClientRequest::Disconnect { cause },
             ClientRequest::Authenticate { token } => ClientRequest::Authenticate { token },
             ClientRequest::NodeQueries(query) => ClientRequest::NodeQueries(query),
+            ClientRequest::Close => ClientRequest::Close,
         }
     }
 
@@ -616,6 +623,7 @@ impl Display for ClientRequest<'_> {
             ClientRequest::Disconnect { .. } => write!(f, "client disconnected"),
             ClientRequest::Authenticate { .. } => write!(f, "authenticate"),
             ClientRequest::NodeQueries(query) => write!(f, "node queries: {:?}", query),
+            ClientRequest::Close => write!(f, "close"),
         }
     }
 }
