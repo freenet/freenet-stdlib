@@ -270,12 +270,14 @@ impl ClientRequest<'_> {
                         contract,
                         state,
                         related_contracts,
+                        subscribe,
                     } => {
                         let related_contracts = related_contracts.into_owned();
                         ContractRequest::Put {
                             contract,
                             state,
                             related_contracts,
+                            subscribe,
                         }
                     }
                     ContractRequest::Update { key, data } => {
@@ -285,9 +287,11 @@ impl ClientRequest<'_> {
                     ContractRequest::Get {
                         key,
                         return_contract_code,
+                        subscribe,
                     } => ContractRequest::Get {
                         key,
                         return_contract_code,
+                        subscribe,
                     },
                     ContractRequest::Subscribe { key, summary } => ContractRequest::Subscribe {
                         key,
@@ -364,6 +368,8 @@ pub enum ContractRequest<'a> {
         /// Related contracts.
         #[serde(borrow)]
         related_contracts: RelatedContracts<'a>,
+        /// If this flag is set then subscribe to updates for this contract.
+        subscribe: bool,
     },
     /// Update an existing contract corresponding with the provided key.
     Update {
@@ -377,6 +383,8 @@ pub enum ContractRequest<'a> {
         key: ContractKey,
         /// If this flag is set then fetch also the contract itself.
         return_contract_code: bool,
+        /// If this flag is set then subscribe to updates for this contract.
+        subscribe: bool,
     },
     /// Subscribe to the changes in a given contract. Implicitly starts a get operation
     /// if the contract is not present yet.
@@ -393,10 +401,12 @@ impl ContractRequest<'_> {
                 contract,
                 state,
                 related_contracts,
+                subscribe,
             } => ContractRequest::Put {
                 contract,
                 state,
                 related_contracts: related_contracts.into_owned(),
+                subscribe,
             },
             Self::Update { key, data } => ContractRequest::Update {
                 key,
@@ -405,9 +415,11 @@ impl ContractRequest<'_> {
             Self::Get {
                 key,
                 return_contract_code: fetch_contract,
+                subscribe,
             } => ContractRequest::Get {
                 key,
                 return_contract_code: fetch_contract,
+                subscribe,
             },
             Self::Subscribe { key, summary } => ContractRequest::Subscribe {
                 key,
@@ -432,9 +444,11 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                     let get = request.contract_request_as_get().unwrap();
                     let key = ContractKey::try_decode_fbs(&get.key())?;
                     let fetch_contract = get.fetch_contract();
+                    let subscribe = get.subscribe();
                     ContractRequest::Get {
                         key,
                         return_contract_code: fetch_contract,
+                        subscribe,
                     }
                 }
                 ContractRequestType::Put => {
@@ -443,10 +457,12 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                     let state = WrappedState::new(put.wrapped_state().bytes().to_vec());
                     let related_contracts =
                         RelatedContracts::try_decode_fbs(&put.related_contracts())?.into_owned();
+                    let subscribe = put.subscribe();
                     ContractRequest::Put {
                         contract,
                         state,
                         related_contracts,
+                        subscribe,
                     }
                 }
                 ContractRequestType::Update => {
@@ -1439,6 +1455,7 @@ mod client_request_test {
                 contract,
                 state,
                 related_contracts: _,
+                subscribe,
             } => {
                 assert_eq!(
                     contract.to_string(),
@@ -1446,6 +1463,7 @@ mod client_request_test {
                 );
                 assert_eq!(contract.unwrap_v1().data.data(), &[1, 2, 3, 4, 5, 6, 7, 8]);
                 assert_eq!(state.to_vec(), &[1, 2, 3, 4, 5, 6, 7, 8]);
+                assert_eq!(subscribe, false);
             }
             _ => panic!("wrong contract request type"),
         }
@@ -1473,9 +1491,11 @@ mod client_request_test {
             ContractRequest::Get {
                 key,
                 return_contract_code: fetch_contract,
+                subscribe,
             } => {
                 assert_eq!(key.encoded_contract_id(), EXPECTED_ENCODED_CONTRACT_ID);
                 assert!(!fetch_contract);
+                assert_eq!(subscribe, false);
             }
             _ => panic!("wrong contract request type"),
         }
