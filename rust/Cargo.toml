@@ -63,7 +63,7 @@ wasmer = { version = "5.0.4", features = [ "sys-default"] }
 rand = { version = "0.8", features = ["small_rng"] }
 
 [features]
-default = []
+default = ["unstable"]
 contract = []
 unstable = []
 freenet-main-contract = []
