@@ -1,8 +1,10 @@
 # Locutus Javascript/Typescript Std Lib
 
-Locutus Javascript/Typescript Standard Library contains utilities for developing web apps which interact with Locutus node.
+Locutus Javascript/Typescript Standard Library contains utilities for developing web apps which
+interact with Locutus node.
 
-The stdlib offers a series of facilities in which you will be able to communicate with the network ergonomically.
+The stdlib offers a series of facilities in which you will be able to communicate with the network
+ergonomically.
 
 Here is a minimal example of how you could write your application to interact with the node:
 
