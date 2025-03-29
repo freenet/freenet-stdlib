@@ -54,7 +54,7 @@ use crate::{
 
 use super::WsApiError;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClientError {
     kind: Box<ErrorKind>,
 }
@@ -695,7 +695,7 @@ impl<'a> TryFromFbs<&FbsDelegateRequest<'a>> for DelegateRequest<'a> {
 }
 
 /// A response to a previous [`ClientRequest`]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[non_exhaustive]
 pub enum HostResponse<T = WrappedState> {
     ContractResponse(#[serde(bound(deserialize = "T: DeserializeOwned"))] ContractResponse<T>),
@@ -710,7 +710,7 @@ pub enum HostResponse<T = WrappedState> {
 
 type Peer = String;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum QueryResponse {
     ConnectedPeers { peers: Vec<(Peer, SocketAddr)> },
 }
