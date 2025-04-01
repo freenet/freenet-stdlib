@@ -9,7 +9,13 @@ use tokio::{
     net::TcpStream,
     sync::mpsc::{self, Receiver, Sender},
 };
-use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+    tungstenite::{
+        protocol::{frame::coding::CloseCode, CloseFrame},
+        Message,
+    },
+    MaybeTlsStream, WebSocketStream,
+};
 
 type Connection = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -17,6 +23,15 @@ pub struct WebApi {
     request_tx: Sender<ClientRequest<'static>>,
     response_rx: Receiver<HostResult>,
     queue: Vec<ClientRequest<'static>>,
+}
+
+impl Drop for WebApi {
+    fn drop(&mut self) {
+        let req = self.request_tx.clone();
+        tokio::spawn(async move {
+            let _ = req.send(ClientRequest::Close).await;
+        });
+    }
 }
 
 impl Stream for WebApi {
@@ -114,6 +129,7 @@ impl WebApi {
         res.ok_or_else(|| ClientError::from(ErrorKind::ChannelClosed))?
     }
 
+    #[doc(hidden)]
     pub async fn disconnect(self, cause: impl Into<Cow<'static, str>>) {
         let _ = self
             .request_tx
@@ -145,9 +161,10 @@ async fn request_handler(
             }
         }
     };
-    tracing::error!(?error, "request handler error");
+    tracing::debug!(?error, "request handler error");
     let error = match error {
         Error::ChannelClosed => ErrorKind::ChannelClosed.into(),
+        Error::ConnectionClosed => ErrorKind::Disconnect.into(),
         other => ClientError::from(format!("{other}")),
     };
     let _ = response_tx.send(Err(error)).await;
@@ -163,6 +180,17 @@ async fn process_request(
         .map_err(Into::into)
         .map_err(Error::OtherError)?;
     conn.send(Message::Binary(msg.into())).await?;
+    if let ClientRequest::Disconnect { cause } = req {
+        conn.close(cause.map(|c| CloseFrame {
+            code: CloseCode::Normal,
+            reason: format!("{c}").into(),
+        }))
+        .await?;
+        return Err(Error::ConnectionClosed);
+    } else if let ClientRequest::Close = req {
+        conn.close(None).await?;
+        return Err(Error::ConnectionClosed);
+    }
     Ok(())
 }
 

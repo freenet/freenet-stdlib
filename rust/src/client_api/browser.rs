@@ -13,6 +13,13 @@ pub struct WebApi {
     error_handler: Box<dyn FnMut(Error) + 'static>,
 }
 
+impl Drop for WebApi {
+    fn drop(&mut self) {
+        // Close with normal closure code when dropped
+        let _ = self.conn.close_with_code(1000);
+    }
+}
+
 impl WebApi {
     pub fn start<ErrFn>(
         conn: Connection,
