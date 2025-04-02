@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.71.1"
 publish = true
 description = "Freeenet standard library"
-license = "MIT OR Apache-2.0"
+license = "GNU Lesser General Public License v3"
 repository = "https://github.com/freenet/freenet-stdlib"
 
 [dependencies]
