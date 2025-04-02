@@ -1,6 +1,6 @@
 {
   "name": "@freenetorg/freenet-stdlib",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Freenet standard library and utils",
   "main": "src/index.ts",
   "files": [
