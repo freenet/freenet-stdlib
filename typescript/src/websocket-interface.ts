@@ -320,9 +320,10 @@ export class PutRequest extends PutT {
   constructor(
     container: ContractContainerT | null = null,
     wrappedState: number[] = [],
-    relatedContracts: RelatedContractsT | null = null
+    relatedContracts: RelatedContractsT | null = null,
+    subscribe: boolean = false
   ) {
-    super(container, wrappedState, relatedContracts);
+    super(container, wrappedState, relatedContracts, subscribe);
   }
 }
 
@@ -345,9 +346,9 @@ export class UpdateRequest extends UpdateT {
  * @public
  */
 export class GetRequest extends GetT {
-  constructor(key: ContractKey, fetchContract: boolean = false) {
+  constructor(key: ContractKey, fetchContract: boolean = false, subscribe: boolean = false) {
     const contract_key = key.get_contract_key();
-    super(contract_key, fetchContract);
+    super(contract_key, fetchContract, subscribe);
   }
 }
 
@@ -785,7 +786,10 @@ export class FreenetWsApi {
    * @param put - The `PutRequest` object
    */
   async put(put: PutRequest): Promise<void> {
-    let put_request = new ContractRequestT(ContractRequestType.Put, put);
+    let put_request = new ContractRequestT(
+      put.subscribe ? ContractRequestType.Subscribe : ContractRequestType.Put, 
+      put
+    );
     let request = new ClientRequestT(
       ClientRequestType.ContractRequest,
       put_request
@@ -818,7 +822,10 @@ export class FreenetWsApi {
    * @param get - The `GetRequest` object
    */
   async get(get: GetRequest): Promise<void> {
-    let get_request = new ContractRequestT(ContractRequestType.Get, get);
+    let get_request = new ContractRequestT(
+      get.subscribe ? ContractRequestType.Subscribe : ContractRequestType.Get, 
+      get
+    );
     let request = new ClientRequestT(
       ClientRequestType.ContractRequest,
       get_request
