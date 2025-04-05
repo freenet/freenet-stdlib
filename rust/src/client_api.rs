@@ -9,7 +9,7 @@
 //! - `websocket`:
 //!   - `regular` (native): Using TCP transport directly, for native applications programmed in Rust.
 //!   - `browser` (wasm): Via wasm-bindgen (and by extension web-sys).
-//!               (In order to use this client from JS/Typescript refer to the Typescript std lib).
+//!     (In order to use this client from JS/Typescript refer to the Typescript std lib).
 mod client_events;
 
 #[cfg(all(any(unix, windows), feature = "net"))]
