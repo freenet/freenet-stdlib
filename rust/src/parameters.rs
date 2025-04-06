@@ -9,7 +9,7 @@ use serde_with::serde_as;
 /// typically be used to configure a contract, much like the parameters of a constructor function.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde_as]
-#[cfg_attr(any(feature = "testing", test), derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
 pub struct Parameters<'a>(
     // TODO: conver this to Arc<u8> instead
     #[serde_as(as = "serde_with::Bytes")]
