@@ -580,7 +580,7 @@ impl Display for ClientRequest<'_> {
                 } => {
                     write!(
                         f,
-                        "put request for contract `{contract}` with state {state}"
+                        "ContractRequest::Put for contract `{contract}` with state {state}"
                     )
                 }
                 ContractRequest::Update { key, .. } => write!(f, "update request for {key}"),
@@ -591,18 +591,18 @@ impl Display for ClientRequest<'_> {
                 } => {
                     write!(
                         f,
-                        "get request for `{key}` (fetch full contract: {contract})"
+                        "ContractRequest::Get for key `{key}` (fetch full contract: {contract})"
                     )
                 }
                 ContractRequest::Subscribe { key, .. } => {
-                    write!(f, "subscribe request for `{key}`")
+                    write!(f, "ContractRequest::Subscribe for `{key}`")
                 }
             },
             ClientRequest::DelegateOp(op) => match op {
                 DelegateRequest::ApplicationMessages { key, inbound, .. } => {
                     write!(
                         f,
-                        "delegate app request for `{key}` with {} messages",
+                        "DelegateRequest::ApplicationMessages for `{key}` with {} messages",
                         inbound.len()
                     )
                 }
@@ -611,13 +611,13 @@ impl Display for ClientRequest<'_> {
                     key,
                     ..
                 } => {
-                    write!(f, "get delegate secret `{secret_id}` for `{key}`")
+                    write!(f, "DelegateRequest::GetSecretRequest secret_id `{secret_id}` for key `{key}`")
                 }
                 DelegateRequest::RegisterDelegate { delegate, .. } => {
-                    write!(f, "delegate register request for `{}`", delegate.key())
+                    write!(f, "DelegateRequest::RegisterDelegate for delegate.key()=`{}`", delegate.key())
                 }
                 DelegateRequest::UnregisterDelegate(key) => {
-                    write!(f, "delegate unregister request for `{key}`")
+                    write!(f, "DelegateRequest::UnregisterDelegate for key `{key}`")
                 }
             },
             ClientRequest::Disconnect { .. } => write!(f, "client disconnected"),
