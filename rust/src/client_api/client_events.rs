@@ -598,28 +598,34 @@ impl Display for ClientRequest<'_> {
                     write!(f, "ContractRequest::Subscribe for `{key}`")
                 }
             },
-            ClientRequest::DelegateOp(op) => match op {
-                DelegateRequest::ApplicationMessages { key, inbound, .. } => {
-                    write!(
-                        f,
-                        "DelegateRequest::ApplicationMessages for `{key}` with {} messages",
-                        inbound.len()
-                    )
+            ClientRequest::DelegateOp(op) => {
+                match op {
+                    DelegateRequest::ApplicationMessages { key, inbound, .. } => {
+                        write!(
+                            f,
+                            "DelegateRequest::ApplicationMessages for `{key}` with {} messages",
+                            inbound.len()
+                        )
+                    }
+                    DelegateRequest::GetSecretRequest {
+                        get_request: GetSecretRequest { key: secret_id, .. },
+                        key,
+                        ..
+                    } => {
+                        write!(f, "DelegateRequest::GetSecretRequest secret_id `{secret_id}` for key `{key}`")
+                    }
+                    DelegateRequest::RegisterDelegate { delegate, .. } => {
+                        write!(
+                            f,
+                            "DelegateRequest::RegisterDelegate for delegate.key()=`{}`",
+                            delegate.key()
+                        )
+                    }
+                    DelegateRequest::UnregisterDelegate(key) => {
+                        write!(f, "DelegateRequest::UnregisterDelegate for key `{key}`")
+                    }
                 }
-                DelegateRequest::GetSecretRequest {
-                    get_request: GetSecretRequest { key: secret_id, .. },
-                    key,
-                    ..
-                } => {
-                    write!(f, "DelegateRequest::GetSecretRequest secret_id `{secret_id}` for key `{key}`")
-                }
-                DelegateRequest::RegisterDelegate { delegate, .. } => {
-                    write!(f, "DelegateRequest::RegisterDelegate for delegate.key()=`{}`", delegate.key())
-                }
-                DelegateRequest::UnregisterDelegate(key) => {
-                    write!(f, "DelegateRequest::UnregisterDelegate for key `{key}`")
-                }
-            },
+            }
             ClientRequest::Disconnect { .. } => write!(f, "client disconnected"),
             ClientRequest::Authenticate { .. } => write!(f, "authenticate"),
             ClientRequest::NodeQueries(query) => write!(f, "node queries: {:?}", query),
