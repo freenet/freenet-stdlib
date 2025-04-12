@@ -8,7 +8,10 @@ const CONTRACT_KEY_SIZE: usize = 32;
 
 #[serde_as]
 #[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(
+    any(feature = "testing", all(test, any(unix, windows))),
+    derive(arbitrary::Arbitrary)
+)]
 pub struct CodeHash(#[serde_as(as = "[_; CONTRACT_KEY_SIZE]")] pub(crate) [u8; CONTRACT_KEY_SIZE]);
 
 impl CodeHash {

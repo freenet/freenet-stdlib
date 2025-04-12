@@ -472,7 +472,10 @@ pub trait ContractInterface {
 /// A complete contract specification requires a `parameters` section
 /// and a `contract` section.
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(
+    any(feature = "testing", all(test, any(unix, windows))),
+    derive(arbitrary::Arbitrary)
+)]
 pub struct Contract<'a> {
     #[serde(borrow)]
     pub parameters: Parameters<'a>,
@@ -778,7 +781,10 @@ impl DerefMut for StateSummary<'_> {
 /// and does not include any other metadata (like the parameters).
 #[serde_as]
 #[derive(Serialize, Deserialize, Clone)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(
+    any(feature = "testing", all(test, any(unix, windows))),
+    derive(arbitrary::Arbitrary)
+)]
 pub struct ContractCode<'a> {
     // TODO: conver this to Arc<[u8]> instead
     #[serde_as(as = "serde_with::Bytes")]
@@ -911,7 +917,10 @@ impl std::fmt::Debug for ContractCode<'_> {
 /// The key representing the hash of the contract executable code hash and a set of `parameters`.
 #[serde_as]
 #[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(
+    any(feature = "testing", all(test, any(unix, windows))),
+    derive(arbitrary::Arbitrary)
+)]
 #[repr(transparent)]
 pub struct ContractInstanceId(#[serde_as(as = "[_; CONTRACT_KEY_SIZE]")] [u8; CONTRACT_KEY_SIZE]);
 
@@ -989,7 +998,10 @@ impl std::fmt::Debug for ContractInstanceId {
 /// A complete key specification, that represents a cryptographic hash that identifies the contract.
 #[serde_as]
 #[derive(Debug, Eq, Copy, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "testing", derive(arbitrary::Arbitrary))]
+#[cfg_attr(
+    any(feature = "testing", all(test, any(unix, windows))),
+    derive(arbitrary::Arbitrary)
+)]
 pub struct ContractKey {
     instance: ContractInstanceId,
     code: Option<CodeHash>,
