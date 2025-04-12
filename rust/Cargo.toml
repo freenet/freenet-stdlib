@@ -6,7 +6,7 @@ rust-version = "1.71.1"
 publish = true
 description = "Freeenet standard library"
 license = "GNU Lesser General Public License v3"
-license-file = "LICENSE"
+license-file = "LICENSE.md"
 repository = "https://github.com/freenet/freenet-stdlib"
 
 [dependencies]
