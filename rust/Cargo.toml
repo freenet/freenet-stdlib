@@ -1,11 +1,11 @@
 [package]
 name = "freenet-stdlib"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 rust-version = "1.71.1"
 publish = true
 description = "Freeenet standard library"
-license-file = "LICENSE.md"
+license-file = "LGPL-3.0-only"
 repository = "https://github.com/freenet/freenet-stdlib"
 
 [dependencies]
@@ -60,6 +60,7 @@ optional = true
 bincode = "1"
 wasmer = { version = "5.0.4", features = [ "sys-default"] }
 rand = { version = "0.8", features = ["small_rng"] }
+arbitrary = { version = "1", features = ["derive"] }
 
 [features]
 default = []

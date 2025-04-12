@@ -1,11 +1,11 @@
 [package]
 name = "freenet-macros"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.71.1"
 publish = true 
 description = "Procedural macros for Freenet"
-license = "MIT OR Apache-2.0"
+license = "LGPL-3.0-only"
 repository = "https://github.com/freenet/freenet-stdlib"
 
 [lib]
