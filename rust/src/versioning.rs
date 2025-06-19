@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{
     client_api::{TryFromFbs, WsApiError},
@@ -125,8 +126,10 @@ impl DelegateCode<'static> {
         // Get contract version
         let version = contract_data
             .read_u64::<BigEndian>()
-            .map_err(|_| std::io::ErrorKind::InvalidData)
-            .map(APIVersion::from_u64)?;
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Failed to read version"))?;
+        let version = APIVersion::from_u64(version).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Version error: {}", e))
+        })?;
 
         if version == APIVersion::Version0_0_1 {
             let mut code_hash = [0u8; 32];
@@ -303,7 +306,9 @@ impl ContractCode<'static> {
         let version = contract_data.read_u64::<BigEndian>().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "Failed to read version")
         })?;
-        let version = APIVersion::from_u64(version);
+        let version = APIVersion::from_u64(version).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Version error: {}", e))
+        })?;
 
         if version == APIVersion::Version0_0_1 {
             let mut code_hash = [0u8; 32];
@@ -333,16 +338,24 @@ impl ContractCode<'static> {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum VersionError {
+    #[error("unsupported incremental API version: {0}")]
+    UnsupportedVersion(u64),
+    #[error("failed to read version: {0}")]
+    IoError(#[from] std::io::Error),
+}
+
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum APIVersion {
     Version0_0_1,
 }
 
 impl APIVersion {
-    fn from_u64(version: u64) -> Self {
+    fn from_u64(version: u64) -> Result<Self, VersionError> {
         match version {
-            0 => Self::Version0_0_1,
-            _ => panic!("unsupported incremental API version: {version}"),
+            0 => Ok(Self::Version0_0_1),
+            v => Err(VersionError::UnsupportedVersion(v)),
         }
     }
 
