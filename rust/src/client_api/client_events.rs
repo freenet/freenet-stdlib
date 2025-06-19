@@ -253,11 +253,18 @@ pub enum ClientRequest<'a> {
     Authenticate {
         token: String,
     },
-    NodeQueries(ConnectedPeers),
+    NodeQueries(NodeQuery),
     /// Gracefully disconnect from the host.
     Close,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum NodeQuery {
+    ConnectedPeers,
+    SubscriptionInfo,
+}
+
+// For backward compatibility
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConnectedPeers {}
 
@@ -717,8 +724,22 @@ pub enum HostResponse<T = WrappedState> {
 type Peer = String;
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct SubscriptionInfo {
+    pub contract_key: ContractKey,
+    pub client_id: usize,
+    pub last_update: Option<std::time::SystemTime>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct NetworkDebugInfo {
+    pub subscriptions: Vec<SubscriptionInfo>,
+    pub connected_peers: Vec<(Peer, SocketAddr)>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub enum QueryResponse {
     ConnectedPeers { peers: Vec<(Peer, SocketAddr)> },
+    NetworkDebug(NetworkDebugInfo),
 }
 
 impl HostResponse {
