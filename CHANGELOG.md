@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.9] - 2025-06-19
+
+### Added
+- NodeQuery enum with ConnectedPeers and SubscriptionInfo variants
+- SubscriptionInfo struct for tracking contract subscriptions
+- NetworkDebugInfo struct for network debugging information
+- QueryResponse::NetworkDebug variant for debugging responses
+
+### Note
+- These APIs were present in 0.1.7 but missing from main branch
+- This release combines the panic fix from 0.1.8 with the missing APIs from 0.1.7
+
 ## [0.1.8] - 2025-06-19
 
 ### Fixed
