@@ -749,18 +749,8 @@ pub struct NodeDiagnosticsResponse {
     /// Contract states for specific contracts
     pub contract_states: std::collections::HashMap<ContractKey, ContractState>,
 
-    /// Recent operations/events
-    pub recent_operations: Vec<OperationInfo>,
-
     /// System metrics
     pub system_metrics: Option<SystemMetrics>,
-
-    /// Update propagation tracking for specific contracts
-    pub update_propagation_info:
-        std::collections::HashMap<ContractKey, std::collections::HashMap<String, String>>,
-
-    /// Information about cached contracts
-    pub cached_contracts: Vec<CachedContractInfo>,
 
     /// Information about connected peers with detailed data
     pub connected_peers_detailed: Vec<ConnectedPeerInfo>,
@@ -778,90 +768,33 @@ pub struct NodeInfo {
 pub struct NetworkInfo {
     pub connected_peers: Vec<(String, String)>, // (peer_id, address)
     pub active_connections: usize,
-    pub peer_connections: Vec<(String, String)>, // (peer_id, address)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ContractState {
-    pub last_update: chrono::DateTime<chrono::Utc>,
-    pub size_bytes: u64,
-    pub has_state: bool,
+    /// Number of nodes subscribed to this contract
     pub subscribers: u32,
     /// Peer IDs of nodes that are subscribed to this contract
     pub subscriber_peer_ids: Vec<String>,
-    /// Detailed subscription information
-    pub subscription_details: Vec<SubscriptionDetail>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct OperationInfo {
-    pub transaction_id: String,
-    pub operation_type: String,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub status: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SystemMetrics {
-    pub memory_usage_bytes: u64,
-    pub cpu_usage_percent: f64,
     pub active_connections: u32,
-    pub pending_operations: u32,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ConnectionInfo {
-    pub peer_id: String,
-    pub address: String,
-    pub connection_type: String, // "inbound", "outbound", "gateway"
-    pub connected_since_seconds: u64,
+    pub seeding_contracts: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SubscriptionInfo {
     pub contract_key: ContractKey,
     pub client_id: usize,
-    pub last_update: Option<std::time::SystemTime>,
 }
 
-/// Information about a cached contract
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CachedContractInfo {
-    pub contract_key: ContractKey,
-    pub size_bytes: u64,
-    pub cached_since: chrono::DateTime<chrono::Utc>,
-    pub last_accessed: chrono::DateTime<chrono::Utc>,
-    pub access_count: u64,
-    pub is_pinned: bool,
-    pub has_code: bool,
-    pub has_state: bool,
-}
-
-/// Detailed information about a connected peer
+/// Basic information about a connected peer
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConnectedPeerInfo {
     pub peer_id: String,
     pub address: String,
-    pub connection_type: String, // "inbound", "outbound", "gateway"
-    pub connected_since: chrono::DateTime<chrono::Utc>,
-    pub connection_duration_seconds: u64,
-    pub is_gateway: bool,
-    pub location: Option<f64>, // Ring location if available
-    pub last_seen: chrono::DateTime<chrono::Utc>,
-    pub bytes_sent: u64,
-    pub bytes_received: u64,
-    pub ping_ms: Option<f64>, // Latency in milliseconds if available
-    pub shared_contracts: Vec<ContractKey>, // Contracts this peer is known to have
-}
-
-/// Detailed subscription information
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SubscriptionDetail {
-    pub peer_id: String,
-    pub client_id: usize,
-    pub subscribed_since: chrono::DateTime<chrono::Utc>,
-    pub last_update_sent: Option<chrono::DateTime<chrono::Utc>>,
-    pub updates_sent_count: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -888,20 +821,8 @@ pub struct NodeDiagnosticsConfig {
     /// Include contract states for specific contracts (empty = all contracts)
     pub contract_keys: Vec<ContractKey>,
 
-    /// Include recent operations/events from logs
-    pub include_recent_operations: bool,
-
-    /// Maximum number of recent operations to include
-    pub max_recent_operations: usize,
-
     /// Include memory and performance metrics
     pub include_system_metrics: bool,
-
-    /// Include detailed propagation tracking for specific contracts
-    pub track_update_propagation: bool,
-
-    /// Include information about cached contracts
-    pub include_cached_contracts: bool,
 
     /// Include detailed information about connected peers (vs basic peer list)
     pub include_detailed_peer_info: bool,
@@ -918,11 +839,7 @@ impl NodeDiagnosticsConfig {
             include_network_info: true,
             include_subscriptions: true,
             contract_keys: vec![contract_key],
-            include_recent_operations: true,
-            max_recent_operations: 100,
             include_system_metrics: true,
-            track_update_propagation: true,
-            include_cached_contracts: true,
             include_detailed_peer_info: true,
             include_subscriber_peer_ids: true,
         }
@@ -935,11 +852,7 @@ impl NodeDiagnosticsConfig {
             include_network_info: true,
             include_subscriptions: false,
             contract_keys: vec![],
-            include_recent_operations: false,
-            max_recent_operations: 0,
             include_system_metrics: false,
-            track_update_propagation: false,
-            include_cached_contracts: false,
             include_detailed_peer_info: false,
             include_subscriber_peer_ids: false,
         }
@@ -952,11 +865,7 @@ impl NodeDiagnosticsConfig {
             include_network_info: true,
             include_subscriptions: true,
             contract_keys: vec![], // empty = all contracts
-            include_recent_operations: true,
-            max_recent_operations: 200,
             include_system_metrics: true,
-            track_update_propagation: true,
-            include_cached_contracts: true,
             include_detailed_peer_info: true,
             include_subscriber_peer_ids: true,
         }
