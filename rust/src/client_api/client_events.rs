@@ -259,14 +259,13 @@ pub enum ClientRequest<'a> {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum NodeQuery {
-    ConnectedPeers,
-    SubscriptionInfo,
-}
-
-// For backward compatibility
-#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConnectedPeers {}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NodeDiagnostics {
+    /// Optional contract key to filter diagnostics for specific contract
+    pub contract_key: Option<ContractKey>,
+}
 
 impl ClientRequest<'_> {
     pub fn into_owned(self) -> ClientRequest<'static> {
@@ -724,22 +723,153 @@ pub enum HostResponse<T = WrappedState> {
 type Peer = String;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct SubscriptionInfo {
-    pub contract_key: ContractKey,
-    pub client_id: usize,
-    pub last_update: Option<std::time::SystemTime>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct NetworkDebugInfo {
-    pub subscriptions: Vec<SubscriptionInfo>,
-    pub connected_peers: Vec<(Peer, SocketAddr)>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
 pub enum QueryResponse {
     ConnectedPeers { peers: Vec<(Peer, SocketAddr)> },
     NetworkDebug(NetworkDebugInfo),
+    NodeDiagnostics(NodeDiagnosticsResponse),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NetworkDebugInfo {
+    pub subscriptions: Vec<SubscriptionInfo>,
+    pub connected_peers: Vec<(String, SocketAddr)>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NodeDiagnosticsResponse {
+    /// Node information
+    pub node_info: Option<NodeInfo>,
+
+    /// Network connectivity information
+    pub network_info: Option<NetworkInfo>,
+
+    /// Contract subscription information
+    pub subscriptions: Vec<SubscriptionInfo>,
+
+    /// Contract states for specific contracts
+    pub contract_states: std::collections::HashMap<ContractKey, ContractState>,
+
+    /// System metrics
+    pub system_metrics: Option<SystemMetrics>,
+
+    /// Information about connected peers with detailed data
+    pub connected_peers_detailed: Vec<ConnectedPeerInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NodeInfo {
+    pub peer_id: String,
+    pub is_gateway: bool,
+    pub location: String,
+    pub uptime_seconds: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NetworkInfo {
+    pub connected_peers: Vec<(String, String)>, // (peer_id, address)
+    pub active_connections: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ContractState {
+    /// Number of nodes subscribed to this contract
+    pub subscribers: u32,
+    /// Peer IDs of nodes that are subscribed to this contract
+    pub subscriber_peer_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SystemMetrics {
+    pub active_connections: u32,
+    pub seeding_contracts: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SubscriptionInfo {
+    pub contract_key: ContractKey,
+    pub client_id: usize,
+}
+
+/// Basic information about a connected peer
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ConnectedPeerInfo {
+    pub peer_id: String,
+    pub address: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum NodeQuery {
+    ConnectedPeers,
+    SubscriptionInfo,
+    NodeDiagnostics {
+        /// Diagnostic configuration specifying what information to collect
+        config: NodeDiagnosticsConfig,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NodeDiagnosticsConfig {
+    /// Include basic node information (ID, location, uptime, etc.)
+    pub include_node_info: bool,
+
+    /// Include network connectivity information
+    pub include_network_info: bool,
+
+    /// Include contract subscription information
+    pub include_subscriptions: bool,
+
+    /// Include contract states for specific contracts (empty = all contracts)
+    pub contract_keys: Vec<ContractKey>,
+
+    /// Include memory and performance metrics
+    pub include_system_metrics: bool,
+
+    /// Include detailed information about connected peers (vs basic peer list)
+    pub include_detailed_peer_info: bool,
+
+    /// Include peer IDs of subscribers in contract state information
+    pub include_subscriber_peer_ids: bool,
+}
+
+impl NodeDiagnosticsConfig {
+    /// Create a comprehensive diagnostic config for debugging update propagation issues
+    pub fn for_update_propagation_debugging(contract_key: ContractKey) -> Self {
+        Self {
+            include_node_info: true,
+            include_network_info: true,
+            include_subscriptions: true,
+            contract_keys: vec![contract_key],
+            include_system_metrics: true,
+            include_detailed_peer_info: true,
+            include_subscriber_peer_ids: true,
+        }
+    }
+
+    /// Create a lightweight diagnostic config for basic node status
+    pub fn basic_status() -> Self {
+        Self {
+            include_node_info: true,
+            include_network_info: true,
+            include_subscriptions: false,
+            contract_keys: vec![],
+            include_system_metrics: false,
+            include_detailed_peer_info: false,
+            include_subscriber_peer_ids: false,
+        }
+    }
+
+    /// Create a full diagnostic config (all information)
+    pub fn full() -> Self {
+        Self {
+            include_node_info: true,
+            include_network_info: true,
+            include_subscriptions: true,
+            contract_keys: vec![], // empty = all contracts
+            include_system_metrics: true,
+            include_detailed_peer_info: true,
+            include_subscriber_peer_ids: true,
+        }
+    }
 }
 
 impl HostResponse {
