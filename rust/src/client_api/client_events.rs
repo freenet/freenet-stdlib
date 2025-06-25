@@ -760,7 +760,8 @@ pub struct NodeDiagnosticsResponse {
 pub struct NodeInfo {
     pub peer_id: String,
     pub is_gateway: bool,
-    pub location: String,
+    pub location: Option<String>,
+    pub listening_address: Option<String>,
     pub uptime_seconds: u64,
 }
 
