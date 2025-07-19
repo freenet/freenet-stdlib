@@ -769,6 +769,19 @@ pub struct NodeInfo {
 pub struct NetworkInfo {
     pub connected_peers: Vec<(String, String)>, // (peer_id, address)
     pub active_connections: usize,
+    /// Connection details with encryption key hashes for gateway debugging
+    pub connection_details: Vec<ConnectionDetail>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ConnectionDetail {
+    pub peer_id: String,
+    pub address: String,
+    pub inbound_key_hash: String,  // Hash of the inbound encryption key
+    pub outbound_key_hash: String, // Hash of the outbound encryption key
+    pub connection_state: String,  // "active", "established", "handshaking", "residual"
+    pub connected_at: Option<String>, // ISO timestamp when connection was established
+    pub last_activity: Option<String>, // ISO timestamp of last packet
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -830,6 +843,9 @@ pub struct NodeDiagnosticsConfig {
 
     /// Include peer IDs of subscribers in contract state information
     pub include_subscriber_peer_ids: bool,
+
+    /// Include detailed connection information with encryption key hashes for debugging
+    pub include_connection_details: bool,
 }
 
 impl NodeDiagnosticsConfig {
@@ -843,6 +859,7 @@ impl NodeDiagnosticsConfig {
             include_system_metrics: true,
             include_detailed_peer_info: true,
             include_subscriber_peer_ids: true,
+            include_connection_details: true,
         }
     }
 
@@ -856,6 +873,7 @@ impl NodeDiagnosticsConfig {
             include_system_metrics: false,
             include_detailed_peer_info: false,
             include_subscriber_peer_ids: false,
+            include_connection_details: false,
         }
     }
 
@@ -869,6 +887,7 @@ impl NodeDiagnosticsConfig {
             include_system_metrics: true,
             include_detailed_peer_info: true,
             include_subscriber_peer_ids: true,
+            include_connection_details: true,
         }
     }
 }
