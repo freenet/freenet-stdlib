@@ -4,7 +4,7 @@ macro_rules! info {
         #[cfg(not(feature = "contract"))]
         tracing::info!($($arg)*);
         #[cfg(feature = "contract")]
-        info(&format!($($arg)*));
+        ::freenet_stdlib::log::info(&format!($($arg)*));
     };
 }
 
@@ -14,7 +14,6 @@ pub fn info(msg: &str) {
         __frnt__logger__info(crate::global::INSTANCE_ID, ptr, msg.len() as _);
     }
 }
-
 
 #[link(wasm_import_module = "freenet_log")]
 extern "C" {
