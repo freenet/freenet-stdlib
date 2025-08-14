@@ -1,10 +1,10 @@
 #[macro_export]
 macro_rules! info {
-    ($fmt:expr, $($args:tt)*) => {
-        #[cfg(not(feature="contract"))]
-        tracing::info!($fmt, $($args)*);
-        #[cfg(feature="contract")]
-        info(&format!($fmt, $($args)*));
+    ($($arg:tt)*) => {
+        #[cfg(not(feature = "contract"))]
+        tracing::info!($($arg)*);
+        #[cfg(feature = "contract")]
+        info(&format!($($arg)*));
     };
 }
 
@@ -14,6 +14,7 @@ pub fn info(msg: &str) {
         __frnt__logger__info(crate::global::INSTANCE_ID, ptr, msg.len() as _);
     }
 }
+
 
 #[link(wasm_import_module = "freenet_log")]
 extern "C" {
@@ -29,4 +30,5 @@ fn log_non_contract() {
         .with_max_level(LevelFilter::INFO)
         .init();
     info!("n={}, y={:?}", 1, 2);
+    info!("zk");
 }
