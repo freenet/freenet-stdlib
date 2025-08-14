@@ -26,7 +26,6 @@ pub(crate) mod common_generated {
 }
 
 pub mod client_api;
-#[cfg(feature = "contract")]
 pub mod log;
 #[cfg(feature = "contract")]
 pub mod rand;
