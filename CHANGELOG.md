@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.14] - 2025-09-04
+
+### Changed
+- Updated `tokio-tungstenite` from 0.26.1 to 0.27.0
+- Updated `rand` from 0.8 to 0.9 (dev dependency)
+- Fixed `from_entropy()` to use `from_os_rng()` for rand 0.9 compatibility
+
+### Note
+- [AI-assisted debugging and comment]
+- This release updates dependencies to support freenet-core dependency updates
+
 ## [0.1.9] - 2025-06-19
 
 ### Added
