@@ -54,7 +54,7 @@ use crate::{
 
 use super::WsApiError;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClientError {
     kind: Box<ErrorKind>,
 }
@@ -321,7 +321,7 @@ impl ClientRequest<'_> {
         matches!(self, Self::Disconnect { .. })
     }
 
-    pub fn try_decode_fbs(msg: &[u8]) -> Result<ClientRequest, WsApiError> {
+    pub fn try_decode_fbs(msg: &[u8]) -> Result<ClientRequest<'_>, WsApiError> {
         let req = {
             match root_as_client_request(msg) {
                 Ok(client_request) => match client_request.client_request_type() {
@@ -707,7 +707,7 @@ impl<'a> TryFromFbs<&FbsDelegateRequest<'a>> for DelegateRequest<'a> {
 }
 
 /// A response to a previous [`ClientRequest`]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[non_exhaustive]
 pub enum HostResponse<T = WrappedState> {
     ContractResponse(#[serde(bound(deserialize = "T: DeserializeOwned"))] ContractResponse<T>),
@@ -722,7 +722,7 @@ pub enum HostResponse<T = WrappedState> {
 
 type Peer = String;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum QueryResponse {
     ConnectedPeers { peers: Vec<(Peer, SocketAddr)> },
     NetworkDebug(NetworkDebugInfo),

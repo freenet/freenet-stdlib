@@ -4707,7 +4707,7 @@ pub mod client_request {
     /// `root_as_client_request_unchecked`.
     pub fn root_as_client_request(
         buf: &[u8],
-    ) -> Result<ClientRequest, flatbuffers::InvalidFlatbuffer> {
+    ) -> Result<ClientRequest<'_>, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::root::<ClientRequest>(buf)
     }
     #[inline]
@@ -4719,7 +4719,7 @@ pub mod client_request {
     /// `size_prefixed_root_as_client_request_unchecked`.
     pub fn size_prefixed_root_as_client_request(
         buf: &[u8],
-    ) -> Result<ClientRequest, flatbuffers::InvalidFlatbuffer> {
+    ) -> Result<ClientRequest<'_>, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::size_prefixed_root::<ClientRequest>(buf)
     }
     #[inline]
@@ -4752,14 +4752,14 @@ pub mod client_request {
     /// Assumes, without verification, that a buffer of bytes contains a ClientRequest and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid `ClientRequest`.
-    pub unsafe fn root_as_client_request_unchecked(buf: &[u8]) -> ClientRequest {
+    pub unsafe fn root_as_client_request_unchecked(buf: &[u8]) -> ClientRequest<'_> {
         flatbuffers::root_unchecked::<ClientRequest>(buf)
     }
     #[inline]
     /// Assumes, without verification, that a buffer of bytes contains a size prefixed ClientRequest and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid size prefixed `ClientRequest`.
-    pub unsafe fn size_prefixed_root_as_client_request_unchecked(buf: &[u8]) -> ClientRequest {
+    pub unsafe fn size_prefixed_root_as_client_request_unchecked(buf: &[u8]) -> ClientRequest<'_> {
         flatbuffers::size_prefixed_root_unchecked::<ClientRequest>(buf)
     }
     #[inline]

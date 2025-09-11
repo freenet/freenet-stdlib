@@ -50,7 +50,7 @@ impl DelegateContainer {
         }
     }
 
-    pub fn code(&self) -> &DelegateCode {
+    pub fn code(&self) -> &DelegateCode<'_> {
         match self {
             Self::Wasm(DelegateWasmAPIVersion::V1(delegate_v1)) => delegate_v1.code(),
         }
