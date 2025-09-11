@@ -321,7 +321,7 @@ impl ClientRequest<'_> {
         matches!(self, Self::Disconnect { .. })
     }
 
-    pub fn try_decode_fbs(msg: &[u8]) -> Result<ClientRequest, WsApiError> {
+    pub fn try_decode_fbs(msg: &[u8]) -> Result<ClientRequest<'_>, WsApiError> {
         let req = {
             match root_as_client_request(msg) {
                 Ok(client_request) => match client_request.client_request_type() {
