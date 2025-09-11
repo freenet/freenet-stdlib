@@ -16,7 +16,7 @@ jobs:
 
     strategy:
       matrix:
-        args: ["--features contract,net,testing,trace", "--no-default-features"]
+        args: ["--features contract,net,testing,trace", ""]
     env:
       FREENET_LOG: error
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -37,7 +37,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Test - features
-        working-directory: rust
+        working-directory: rust  
         run: cargo test ${{ matrix.args }}
 
   build_targets:
