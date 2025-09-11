@@ -1554,7 +1554,7 @@ pub(crate) mod wasm_interface {
 mod test {
     use super::*;
     use once_cell::sync::Lazy;
-    use rand::{rngs::SmallRng, rng, Rng, SeedableRng};
+    use rand::{rng, rngs::SmallRng, Rng, SeedableRng};
 
     static RND_BYTES: Lazy<[u8; 1024]> = Lazy::new(|| {
         let mut bytes = [0; 1024];
