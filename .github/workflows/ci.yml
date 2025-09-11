@@ -38,7 +38,7 @@ jobs:
 
       - name: Test - features
         working-directory: rust  
-        run: cargo test ${{ matrix.args }}
+        run: cargo test --lib ${{ matrix.args }}
 
   build_targets:
     name: Build targets
