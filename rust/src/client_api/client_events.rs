@@ -733,6 +733,8 @@ pub enum QueryResponse {
 pub struct NetworkDebugInfo {
     pub subscriptions: Vec<SubscriptionInfo>,
     pub connected_peers: Vec<(String, SocketAddr)>,
+    /// Network-level subscriptions (contract -> list of subscribing peers)
+    pub network_subscriptions: Vec<NetworkSubscriptionInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -789,6 +791,15 @@ pub struct SystemMetrics {
 pub struct SubscriptionInfo {
     pub contract_key: ContractKey,
     pub client_id: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NetworkSubscriptionInfo {
+    pub contract_key: ContractKey,
+    /// Peers that have subscribed to this contract on this node
+    pub subscribers: Vec<String>,
+    /// Whether this node is at optimal location for the contract
+    pub is_optimal_location: bool,
 }
 
 /// Basic information about a connected peer
