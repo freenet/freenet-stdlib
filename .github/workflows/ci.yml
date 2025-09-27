@@ -109,6 +109,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+          components: rustfmt
 
       - name: Check code formatting
         run: cargo fmt -- --check
