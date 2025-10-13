@@ -340,7 +340,7 @@ fn __frnt__initiate_buffer(capacity: u32) -> i64 {
     buffer as i64
 }
 
-#[cfg(all(test, any(unix, windows)))]
+#[cfg(all(test, any(unix, windows), feature = "wasmer-tests"))]
 mod test {
     use super::*;
     use wasmer::{

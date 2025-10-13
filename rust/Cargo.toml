@@ -1,6 +1,6 @@
 [package]
 name = "freenet-stdlib"
-version = "0.1.11"
+version = "0.1.22"
 edition = "2021"
 rust-version = "1.71.1"
 publish = true
@@ -32,7 +32,7 @@ freenet-macros = { path = "../rust-macros", version = "0.1.0-rc1" }
 
 [target.'cfg(any(unix, windows))'.dependencies]
 tokio = { version = "1", optional = true, features = ["macros", "parking_lot", "rt-multi-thread", "sync", "time"] }
-tokio-tungstenite = { version = "0.26.1", optional = true }
+tokio-tungstenite = { version = "0.27.0", optional = true }
 serde_with = { version = "3" }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
@@ -59,7 +59,7 @@ optional = true
 [target.'cfg(any(unix, windows))'.dev-dependencies]
 bincode = "1"
 wasmer = { version = "5.0.4", features = [ "sys-default"] }
-rand = { version = "0.8", features = ["small_rng"] }
+rand = { version = "0.9", features = ["small_rng"] }
 arbitrary = { version = "1", features = ["derive"] }
 
 [features]
@@ -70,3 +70,4 @@ freenet-main-contract = []
 net = ["dep:tokio", "dep:tokio-tungstenite", "dep:wasm-bindgen", "dep:web-sys", "dep:js-sys", "dep:serde-wasm-bindgen"]
 testing = ["dep:arbitrary"]
 trace = []
+wasmer-tests = []

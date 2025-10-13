@@ -54,7 +54,7 @@ use crate::{
 
 use super::WsApiError;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClientError {
     kind: Box<ErrorKind>,
 }
@@ -321,7 +321,7 @@ impl ClientRequest<'_> {
         matches!(self, Self::Disconnect { .. })
     }
 
-    pub fn try_decode_fbs(msg: &[u8]) -> Result<ClientRequest, WsApiError> {
+    pub fn try_decode_fbs(msg: &[u8]) -> Result<ClientRequest<'_>, WsApiError> {
         let req = {
             match root_as_client_request(msg) {
                 Ok(client_request) => match client_request.client_request_type() {
@@ -707,7 +707,7 @@ impl<'a> TryFromFbs<&FbsDelegateRequest<'a>> for DelegateRequest<'a> {
 }
 
 /// A response to a previous [`ClientRequest`]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[non_exhaustive]
 pub enum HostResponse<T = WrappedState> {
     ContractResponse(#[serde(bound(deserialize = "T: DeserializeOwned"))] ContractResponse<T>),
@@ -722,11 +722,12 @@ pub enum HostResponse<T = WrappedState> {
 
 type Peer = String;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum QueryResponse {
     ConnectedPeers { peers: Vec<(Peer, SocketAddr)> },
     NetworkDebug(NetworkDebugInfo),
     NodeDiagnostics(NodeDiagnosticsResponse),
+    ProximityCache(ProximityCacheInfo),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -806,6 +807,57 @@ pub enum NodeQuery {
         /// Diagnostic configuration specifying what information to collect
         config: NodeDiagnosticsConfig,
     },
+    /// Phase 3: Query proximity cache information for update propagation
+    ProximityCacheInfo,
+}
+
+/// Phase 3: Proximity cache information for update propagation
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProximityCacheInfo {
+    /// Contracts this node is currently caching
+    pub my_cache: Vec<ContractCacheEntry>,
+    /// What we know about neighbor caches
+    pub neighbor_caches: Vec<NeighborCacheInfo>,
+    /// Proximity propagation statistics
+    pub stats: ProximityStats,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ContractCacheEntry {
+    /// Full contract key as string
+    pub contract_key: String,
+    /// 32-bit hash for proximity matching
+    pub cache_hash: u32,
+    /// When this contract was cached (Unix timestamp)
+    pub cached_since: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NeighborCacheInfo {
+    /// Peer identifier
+    pub peer_id: String,
+    /// Contract hashes this neighbor is known to cache
+    pub known_contracts: Vec<u32>,
+    /// Last update received from this neighbor (Unix timestamp)
+    pub last_update: u64,
+    /// Number of updates received from this neighbor
+    pub update_count: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProximityStats {
+    /// Number of cache announcements sent
+    pub cache_announces_sent: u64,
+    /// Number of cache announcements received
+    pub cache_announces_received: u64,
+    /// Updates forwarded via proximity (not subscription)
+    pub updates_via_proximity: u64,
+    /// Updates forwarded via subscription
+    pub updates_via_subscription: u64,
+    /// False positives due to hash collisions
+    pub false_positive_forwards: u64,
+    /// Average number of contracts per neighbor
+    pub avg_neighbor_cache_size: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

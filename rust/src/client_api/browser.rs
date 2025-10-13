@@ -88,9 +88,12 @@ impl WebApi {
         conn.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
         onerror_callback.forget();
 
-        let onopen_callback = Closure::<dyn FnOnce()>::once(move || {
-            onopen_handler();
-        });
+        let onopen_handler = Rc::new(RefCell::new(Some(onopen_handler)));
+        let onopen_callback = Closure::wrap(Box::new(move || {
+            if let Some(handler) = onopen_handler.borrow_mut().take() {
+                handler();
+            }
+        }) as Box<dyn FnMut()>);
         // conn.add_event_listener_with_callback("open", onopen_callback.as_ref().unchecked_ref());
         conn.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
         onopen_callback.forget();

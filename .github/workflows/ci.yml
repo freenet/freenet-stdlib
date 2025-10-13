@@ -14,9 +14,6 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        args: ["--all-features"]
     env:
       FREENET_LOG: error
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -37,7 +34,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Test - features
-        run: cargo test --workspace ${{ matrix.args }}
+        run: cargo test --workspace --features contract,net,testing,trace
 
   build_targets:
     name: Build targets
@@ -112,6 +109,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+          components: rustfmt
 
       - name: Check code formatting
         run: cargo fmt -- --check

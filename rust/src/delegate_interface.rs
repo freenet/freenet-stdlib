@@ -40,7 +40,7 @@ impl Delegate<'_> {
         &self.key
     }
 
-    pub fn code(&self) -> &DelegateCode {
+    pub fn code(&self) -> &DelegateCode<'_> {
         &self.data
     }
 
@@ -48,7 +48,7 @@ impl Delegate<'_> {
         &self.data.code_hash
     }
 
-    pub fn params(&self) -> &Parameters {
+    pub fn params(&self) -> &Parameters<'_> {
         &self.parameters
     }
 
