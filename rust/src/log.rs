@@ -1,3 +1,13 @@
+#[macro_export]
+macro_rules! info {
+    ($($arg:tt)*) => {
+        #[cfg(not(feature = "contract"))]
+        tracing::info!($($arg)*);
+        #[cfg(feature = "contract")]
+        ::freenet_stdlib::log::info(&format!($($arg)*));
+    };
+}
+
 pub fn info(msg: &str) {
     let ptr = msg.as_ptr() as _;
     unsafe {
