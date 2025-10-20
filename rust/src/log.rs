@@ -15,8 +15,16 @@ pub fn info(msg: &str) {
     }
 }
 
+#[cfg(target_family = "wasm")]
 #[link(wasm_import_module = "freenet_log")]
 extern "C" {
     #[doc(hidden)]
     fn __frnt__logger__info(id: i64, ptr: i64, len: i32);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[allow(non_snake_case)]
+unsafe fn __frnt__logger__info(_id: i64, _ptr: i64, _len: i32) {
+    // Stub implementation for non-WASM targets (e.g., Windows native compilation)
+    // These contracts are meant to run only in WASM runtime
 }

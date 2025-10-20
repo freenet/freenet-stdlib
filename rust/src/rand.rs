@@ -33,8 +33,16 @@ pub fn rand_bytes(number: u32) -> Vec<u8> {
     }
 }
 
+#[cfg(target_family = "wasm")]
 #[link(wasm_import_module = "freenet_rand")]
 extern "C" {
     #[doc(hidden)]
     fn __frnt__rand__rand_bytes(id: i64, ptr: i64, len: u32);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[allow(non_snake_case)]
+unsafe fn __frnt__rand__rand_bytes(_id: i64, _ptr: i64, _len: u32) {
+    // Stub implementation for non-WASM targets (e.g., Windows native compilation)
+    // These contracts are meant to run only in WASM runtime
 }
