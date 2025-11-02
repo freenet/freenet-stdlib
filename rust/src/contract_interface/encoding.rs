@@ -1,10 +1,13 @@
 //! Helper types for interaction between wasm and host boundaries.
-use std::{collections::{HashMap, HashSet}, marker::PhantomData};
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+};
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::parameters::Parameters;
 use super::*;
+use crate::parameters::Parameters;
 
 pub enum MergeResult {
     Success,
@@ -78,8 +81,7 @@ impl RelatedContractsContainer {
     pub fn get<C: TypedContract>(
         &self,
         params: &C::Parameters,
-    ) -> Result<Related<C>, <<C as EncodingAdapter>::SelfEncoder as Encoder<C>>::Error>
-    {
+    ) -> Result<Related<C>, <<C as EncodingAdapter>::SelfEncoder as Encoder<C>>::Error> {
         let id = <C as TypedContract>::instance_id(params);
         if let Some(res) = self.contracts.get(&id) {
             match <<C as EncodingAdapter>::SelfEncoder>::deserialize(res.as_ref()) {
@@ -335,12 +337,9 @@ where
             <T as EncodingAdapter>::Parameters,
         >>::Error,
     >,
-    ContractError:
-        From<
-            <<T as EncodingAdapter>::SummaryEncoder as Encoder<
-                <T as EncodingAdapter>::Summary,
-            >>::Error,
-        >,
+    ContractError: From<
+        <<T as EncodingAdapter>::SummaryEncoder as Encoder<<T as EncodingAdapter>::Summary>>::Error,
+    >,
 {
     let typed_params =
         <<T as EncodingAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
@@ -363,12 +362,9 @@ where
             <T as EncodingAdapter>::Parameters,
         >>::Error,
     >,
-    ContractError:
-        From<
-            <<T as EncodingAdapter>::SummaryEncoder as Encoder<
-                <T as EncodingAdapter>::Summary,
-            >>::Error,
-        >,
+    ContractError: From<
+        <<T as EncodingAdapter>::SummaryEncoder as Encoder<<T as EncodingAdapter>::Summary>>::Error,
+    >,
     ContractError: From<
         <<T as EncodingAdapter>::DeltaEncoder as Encoder<<T as EncodingAdapter>::Delta>>::Error,
     >,
@@ -376,8 +372,7 @@ where
     let typed_params =
         <<T as EncodingAdapter>::ParametersEncoder>::deserialize(parameters.as_ref())?;
     let typed_state = <<T as EncodingAdapter>::SelfEncoder>::deserialize(state.as_ref())?;
-    let typed_summary =
-        <<T as EncodingAdapter>::SummaryEncoder>::deserialize(summary.as_ref())?;
+    let typed_summary = <<T as EncodingAdapter>::SummaryEncoder>::deserialize(summary.as_ref())?;
     let summary = typed_state.delta(typed_params, typed_summary)?;
     let encoded = <<T as EncodingAdapter>::DeltaEncoder>::serialize(&summary)?;
     Ok(encoded.into())

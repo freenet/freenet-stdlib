@@ -6,28 +6,28 @@
 
 pub(crate) const CONTRACT_KEY_SIZE: usize = 32;
 
-mod error;
-mod state;
-mod key;
 mod code;
-mod update;
 mod contract;
-mod wrapped;
-mod trait_def;
-pub(crate) mod wasm_interface;
 pub mod encoding;
+mod error;
+mod key;
+mod state;
+mod trait_def;
+mod update;
+pub(crate) mod wasm_interface;
+mod wrapped;
 
 #[cfg(all(test, any(unix, windows)))]
 mod tests;
 
 // Re-export all public types
-pub use error::ContractError;
-pub use state::{State, StateDelta, StateSummary};
-pub use key::{ContractInstanceId, ContractKey};
 pub use code::ContractCode;
-pub use update::{
-    UpdateData, UpdateModification, RelatedContracts, RelatedContract, RelatedMode, ValidateResult,
-};
 pub use contract::Contract;
-pub use wrapped::{WrappedState, WrappedContract};
+pub use error::ContractError;
+pub use key::{ContractInstanceId, ContractKey};
+pub use state::{State, StateDelta, StateSummary};
 pub use trait_def::ContractInterface;
+pub use update::{
+    RelatedContract, RelatedContracts, RelatedMode, UpdateData, UpdateModification, ValidateResult,
+};
+pub use wrapped::{WrappedContract, WrappedState};
