@@ -15,7 +15,8 @@ use crate::delegate_interface::DelegateContext;
 use crate::generated::common::{
     ApplicationMessage as FbsApplicationMessage, ApplicationMessageArgs, ContractCode,
     ContractCodeArgs, ContractContainer as FbsContractContainer, ContractContainerArgs,
-    ContractInstanceId, ContractInstanceIdArgs, ContractKey as FbsContractKey, ContractKeyArgs,
+    ContractInstanceId as FbsContractInstanceId, ContractInstanceIdArgs,
+    ContractKey as FbsContractKey, ContractKeyArgs,
     ContractType, DeltaUpdate, DeltaUpdateArgs, GetSecretRequest as FbsGetSecretRequest,
     GetSecretRequestArgs, GetSecretResponse as FbsGetSecretResponse, GetSecretResponseArgs,
     RelatedDeltaUpdate, RelatedDeltaUpdateArgs, RelatedStateAndDeltaUpdate,
@@ -46,8 +47,8 @@ use crate::prelude::UpdateData::{
 use crate::{
     delegate_interface::{DelegateKey, InboundDelegateMsg, OutboundDelegateMsg},
     prelude::{
-        ContractKey, DelegateContainer, GetSecretRequest, Parameters, RelatedContracts, SecretsId,
-        StateSummary, UpdateData, WrappedState,
+        ContractInstanceId, ContractKey, DelegateContainer, GetSecretRequest, Parameters,
+        RelatedContracts, SecretsId, StateSummary, UpdateData, WrappedState,
     },
     versioning::ContractContainer,
 };
@@ -385,8 +386,9 @@ pub enum ContractRequest<'a> {
     },
     /// Fetch the current state from a contract corresponding to the provided key.
     Get {
-        /// Key of the contract.
-        key: ContractKey,
+        /// Instance ID of the contract (the hash of code + params).
+        /// Only the instance ID is needed since the client doesn't have the code hash yet.
+        key: ContractInstanceId,
         /// If this flag is set then fetch also the contract itself.
         return_contract_code: bool,
         /// If this flag is set then subscribe to updates for this contract.
@@ -395,7 +397,8 @@ pub enum ContractRequest<'a> {
     /// Subscribe to the changes in a given contract. Implicitly starts a get operation
     /// if the contract is not present yet.
     Subscribe {
-        key: ContractKey,
+        /// Instance ID of the contract.
+        key: ContractInstanceId,
         summary: Option<StateSummary<'a>>,
     },
 }
@@ -448,7 +451,11 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
             match request.contract_request_type() {
                 ContractRequestType::Get => {
                     let get = request.contract_request_as_get().unwrap();
-                    let key = ContractKey::try_decode_fbs(&get.key())?;
+                    // Extract just the instance ID - GET only needs the instance ID,
+                    // not the full key (which may not be complete on the client side)
+                    let fbs_key = get.key();
+                    let key_bytes: [u8; 32] = fbs_key.instance().data().bytes().try_into().unwrap();
+                    let key = ContractInstanceId::new(key_bytes);
                     let fetch_contract = get.fetch_contract();
                     let subscribe = get.subscribe();
                     ContractRequest::Get {
@@ -479,7 +486,10 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                 }
                 ContractRequestType::Subscribe => {
                     let subscribe = request.contract_request_as_subscribe().unwrap();
-                    let key = ContractKey::try_decode_fbs(&subscribe.key())?;
+                    // Extract just the instance ID for Subscribe
+                    let fbs_key = subscribe.key();
+                    let key_bytes: [u8; 32] = fbs_key.instance().data().bytes().try_into().unwrap();
+                    let key = ContractInstanceId::new(key_bytes);
                     let summary = subscribe
                         .summary()
                         .map(|summary_data| StateSummary::from(summary_data.bytes()));
@@ -951,7 +961,7 @@ impl HostResponse {
             HostResponse::ContractResponse(res) => match res {
                 ContractResponse::PutResponse { key } => {
                     let instance_data = builder.create_vector(key.as_bytes());
-                    let instance_offset = ContractInstanceId::create(
+                    let instance_offset = FbsContractInstanceId::create(
                         &mut builder,
                         &ContractInstanceIdArgs {
                             data: Some(instance_data),
@@ -995,7 +1005,7 @@ impl HostResponse {
                 }
                 ContractResponse::UpdateResponse { key, summary } => {
                     let instance_data = builder.create_vector(key.as_bytes());
-                    let instance_offset = ContractInstanceId::create(
+                    let instance_offset = FbsContractInstanceId::create(
                         &mut builder,
                         &ContractInstanceIdArgs {
                             data: Some(instance_data),
@@ -1047,7 +1057,7 @@ impl HostResponse {
                     state,
                 } => {
                     let instance_data = builder.create_vector(key.as_bytes());
-                    let instance_offset = ContractInstanceId::create(
+                    let instance_offset = FbsContractInstanceId::create(
                         &mut builder,
                         &ContractInstanceIdArgs {
                             data: Some(instance_data),
@@ -1066,7 +1076,7 @@ impl HostResponse {
                     let container_offset = if let Some(contract) = contract_container {
                         let data = builder.create_vector(contract.key().as_bytes());
 
-                        let instance_offset = ContractInstanceId::create(
+                        let instance_offset = FbsContractInstanceId::create(
                             &mut builder,
                             &ContractInstanceIdArgs { data: Some(data) },
                         );
@@ -1150,7 +1160,7 @@ impl HostResponse {
                 }
                 ContractResponse::UpdateNotification { key, update } => {
                     let instance_data = builder.create_vector(key.as_bytes());
-                    let instance_offset = ContractInstanceId::create(
+                    let instance_offset = FbsContractInstanceId::create(
                         &mut builder,
                         &ContractInstanceIdArgs {
                             data: Some(instance_data),
@@ -1224,7 +1234,7 @@ impl HostResponse {
                             let instance_data =
                                 builder.create_vector(related_to.encode().as_bytes());
 
-                            let instance_offset = ContractInstanceId::create(
+                            let instance_offset = FbsContractInstanceId::create(
                                 &mut builder,
                                 &ContractInstanceIdArgs {
                                     data: Some(instance_data),
@@ -1252,7 +1262,7 @@ impl HostResponse {
                                 builder.create_vector(related_to.encode().as_bytes());
                             let delta_data = builder.create_vector(&delta.into_bytes());
 
-                            let instance_offset = ContractInstanceId::create(
+                            let instance_offset = FbsContractInstanceId::create(
                                 &mut builder,
                                 &ContractInstanceIdArgs {
                                     data: Some(instance_data),
@@ -1285,7 +1295,7 @@ impl HostResponse {
                             let state_data = builder.create_vector(&state.into_bytes());
                             let delta_data = builder.create_vector(&delta.into_bytes());
 
-                            let instance_offset = ContractInstanceId::create(
+                            let instance_offset = FbsContractInstanceId::create(
                                 &mut builder,
                                 &ContractInstanceIdArgs {
                                     data: Some(instance_data),
@@ -1354,7 +1364,7 @@ impl HostResponse {
                 values.iter().for_each(|msg| match msg {
                     OutboundDelegateMsg::ApplicationMessage(app) => {
                         let instance_data = builder.create_vector(key.bytes());
-                        let instance_offset = ContractInstanceId::create(
+                        let instance_offset = FbsContractInstanceId::create(
                             &mut builder,
                             &ContractInstanceIdArgs {
                                 data: Some(instance_data),
@@ -1694,7 +1704,7 @@ mod client_request_test {
                 return_contract_code: fetch_contract,
                 subscribe,
             } => {
-                assert_eq!(key.encoded_contract_id(), EXPECTED_ENCODED_CONTRACT_ID);
+                assert_eq!(key.encode(), EXPECTED_ENCODED_CONTRACT_ID);
                 assert!(!fetch_contract);
                 assert!(!subscribe);
             }
