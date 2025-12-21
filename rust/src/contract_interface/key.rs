@@ -1,8 +1,8 @@
 //! Contract key types and identifiers.
 //!
 //! This module provides the core types for identifying contracts:
-//! - `ContractInstanceId`: The hash of contract code and parameters
-//! - `ContractKey`: A complete key specification with optional code hash
+//! - `ContractInstanceId`: The hash of contract code and parameters (use for routing/lookup)
+//! - `ContractKey`: A complete key specification with code hash (use for storage/execution)
 
 use std::borrow::Borrow;
 use std::fmt::Display;
@@ -104,6 +104,11 @@ impl std::fmt::Debug for ContractInstanceId {
 }
 
 /// A complete key specification, that represents a cryptographic hash that identifies the contract.
+///
+/// This type always contains both the instance ID and the code hash.
+/// Use `ContractInstanceId` for operations that only need to identify the contract
+/// (routing, client requests), and `ContractKey` for operations that need the full
+/// specification (storage, execution).
 #[serde_as]
 #[derive(Debug, Eq, Copy, Clone, Serialize, Deserialize)]
 #[cfg_attr(
@@ -112,7 +117,7 @@ impl std::fmt::Debug for ContractInstanceId {
 )]
 pub struct ContractKey {
     instance: ContractInstanceId,
-    code: Option<CodeHash>,
+    code: CodeHash,
 }
 
 impl ContractKey {
@@ -122,20 +127,11 @@ impl ContractKey {
     ) -> Self {
         let code = wasm_code.borrow();
         let id = generate_id(params.borrow(), code);
-        let code_hash = code.hash();
+        let code_hash = *code.hash();
         Self {
             instance: id,
-            code: Some(*code_hash),
+            code: code_hash,
         }
-    }
-
-    /// Builds a partial [`ContractKey`](ContractKey), the contract code part is unspecified.
-    pub fn from_id(instance: impl Into<String>) -> Result<Self, bs58::decode::Error> {
-        let instance = ContractInstanceId::try_from(instance.into())?;
-        Ok(Self {
-            instance,
-            code: None,
-        })
     }
 
     /// Gets the whole spec key hash.
@@ -143,18 +139,16 @@ impl ContractKey {
         self.instance.0.as_ref()
     }
 
-    /// Returns the hash of the contract code only, if the key is fully specified.
-    pub fn code_hash(&self) -> Option<&CodeHash> {
-        self.code.as_ref()
+    /// Returns the hash of the contract code.
+    pub fn code_hash(&self) -> &CodeHash {
+        &self.code
     }
 
-    /// Returns the encoded hash of the contract code, if the key is fully specified.
-    pub fn encoded_code_hash(&self) -> Option<String> {
-        self.code.as_ref().map(|c| {
-            bs58::encode(c.0)
-                .with_alphabet(bs58::Alphabet::BITCOIN)
-                .into_string()
-        })
+    /// Returns the encoded hash of the contract code.
+    pub fn encoded_code_hash(&self) -> String {
+        bs58::encode(self.code.0)
+            .with_alphabet(bs58::Alphabet::BITCOIN)
+            .into_string()
     }
 
     /// Returns the contract key from the encoded hash of the contract code and the given
@@ -177,7 +171,7 @@ impl ContractKey {
         spec.copy_from_slice(&full_key_arr);
         Ok(Self {
             instance: ContractInstanceId(spec),
-            code: Some(CodeHash(code_key)),
+            code: CodeHash(code_key),
         })
     }
 
@@ -203,14 +197,6 @@ impl std::hash::Hash for ContractKey {
     }
 }
 
-impl From<ContractInstanceId> for ContractKey {
-    fn from(instance: ContractInstanceId) -> Self {
-        Self {
-            instance,
-            code: None,
-        }
-    }
-}
 
 impl From<ContractKey> for ContractInstanceId {
     fn from(key: ContractKey) -> Self {
@@ -238,7 +224,8 @@ impl<'a> TryFromFbs<&FbsContractKey<'a>> for ContractKey {
         let instance = ContractInstanceId::new(key_bytes);
         let code = key
             .code()
-            .map(|code_hash| CodeHash::from_code(code_hash.bytes()));
+            .map(|code_hash| CodeHash::from_code(code_hash.bytes()))
+            .ok_or_else(|| WsApiError::deserialization("ContractKey missing code hash".into()))?;
         Ok(ContractKey { instance, code })
     }
 }

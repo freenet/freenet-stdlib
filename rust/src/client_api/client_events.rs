@@ -958,9 +958,7 @@ impl HostResponse {
                         },
                     );
 
-                    let code = key
-                        .code_hash()
-                        .map(|code| builder.create_vector(code.0.as_ref()));
+                    let code = Some(builder.create_vector(&key.code_hash().0));
                     let key_offset = FbsContractKey::create(
                         &mut builder,
                         &ContractKeyArgs {
@@ -1004,9 +1002,7 @@ impl HostResponse {
                         },
                     );
 
-                    let code = key
-                        .code_hash()
-                        .map(|code| builder.create_vector(code.0.as_ref()));
+                    let code = Some(builder.create_vector(&key.code_hash().0));
 
                     let key_offset = FbsContractKey::create(
                         &mut builder,
@@ -1058,7 +1054,7 @@ impl HostResponse {
                         },
                     );
 
-                    let code = key.code_hash().map(|code| builder.create_vector(&code.0));
+                    let code = Some(builder.create_vector(&key.code_hash().0));
                     let key_offset = FbsContractKey::create(
                         &mut builder,
                         &ContractKeyArgs {
@@ -1075,10 +1071,7 @@ impl HostResponse {
                             &ContractInstanceIdArgs { data: Some(data) },
                         );
 
-                        let code = contract
-                            .key()
-                            .code_hash()
-                            .map(|code| builder.create_vector(&code.0));
+                        let code = Some(builder.create_vector(&contract.key().code_hash().0));
                         let contract_key_offset = FbsContractKey::create(
                             &mut builder,
                             &ContractKeyArgs {
@@ -1164,9 +1157,7 @@ impl HostResponse {
                         },
                     );
 
-                    let code = key
-                        .code_hash()
-                        .map(|code| builder.create_vector(code.0.as_ref()));
+                    let code = Some(builder.create_vector(&key.code_hash().0));
                     let key_offset = FbsContractKey::create(
                         &mut builder,
                         &ContractKeyArgs {
