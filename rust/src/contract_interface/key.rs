@@ -183,6 +183,18 @@ impl ContractKey {
     pub fn id(&self) -> &ContractInstanceId {
         &self.instance
     }
+
+    /// Constructs a ContractKey from a pre-computed instance ID and code hash.
+    ///
+    /// This is useful when the node needs to reconstruct a key from stored index data.
+    /// Callers must ensure the instance_id was correctly derived from the code_hash
+    /// and parameters, as this constructor does not verify consistency.
+    pub fn from_id_and_code(instance_id: ContractInstanceId, code_hash: CodeHash) -> Self {
+        Self {
+            instance: instance_id,
+            code: code_hash,
+        }
+    }
 }
 
 impl PartialEq for ContractKey {
