@@ -35,6 +35,13 @@ pub struct ContractInterfaceResult {
 }
 
 impl ContractInterfaceResult {
+    /// Deserialize a validate state result from WASM memory.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `mem` is a valid WASM linear memory containing
+    /// the serialized result at the offset specified by `self.ptr`, with at least
+    /// `self.size` bytes available.
     pub unsafe fn unwrap_validate_state_res(
         self,
         mem: WasmLinearMem,
@@ -55,6 +62,13 @@ impl ContractInterfaceResult {
         }
     }
 
+    /// Deserialize an update state result from WASM memory.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `mem` is a valid WASM linear memory containing
+    /// the serialized result at the offset specified by `self.ptr`, with at least
+    /// `self.size` bytes available.
     pub unsafe fn unwrap_update_state(
         self,
         mem: WasmLinearMem,
@@ -77,6 +91,13 @@ impl ContractInterfaceResult {
         }
     }
 
+    /// Deserialize a summarize state result from WASM memory.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `mem` is a valid WASM linear memory containing
+    /// the serialized result at the offset specified by `self.ptr`, with at least
+    /// `self.size` bytes available.
     pub unsafe fn unwrap_summarize_state(
         self,
         mem: WasmLinearMem,
@@ -99,6 +120,13 @@ impl ContractInterfaceResult {
         }
     }
 
+    /// Deserialize a state delta result from WASM memory.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `mem` is a valid WASM linear memory containing
+    /// the serialized result at the offset specified by `self.ptr`, with at least
+    /// `self.size` bytes available.
     pub unsafe fn unwrap_get_state_delta(
         self,
         mem: WasmLinearMem,
@@ -135,6 +163,14 @@ impl ContractInterfaceResult {
         ptr as _
     }
 
+    /// Reconstruct a `ContractInterfaceResult` from a raw pointer in WASM memory.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - `ptr` points to a valid `ContractInterfaceResult` within the WASM linear memory
+    /// - `mem` is a valid WASM linear memory reference
+    /// - The pointer was previously created by `into_raw`
     pub unsafe fn from_raw(ptr: i64, mem: &WasmLinearMem) -> Self {
         let result = Box::leak(Box::from_raw(crate::memory::buf::compute_ptr(
             ptr as *mut Self,

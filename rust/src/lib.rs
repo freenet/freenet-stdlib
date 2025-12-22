@@ -11,7 +11,7 @@ mod versioning;
 
 pub use contract_interface::encoding as typed_contract;
 
-#[allow(dead_code, unused_imports, clippy::all)]
+#[allow(dead_code, unused_imports, clippy::all, mismatched_lifetime_syntaxes)]
 pub(crate) mod generated {
     mod client_request_generated;
     pub(crate) use client_request_generated::*;
