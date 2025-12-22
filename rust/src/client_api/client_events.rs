@@ -798,7 +798,7 @@ pub struct SystemMetrics {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SubscriptionInfo {
-    pub contract_key: ContractKey,
+    pub contract_key: ContractInstanceId,
     pub client_id: usize,
 }
 
