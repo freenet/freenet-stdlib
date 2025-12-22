@@ -3338,7 +3338,7 @@ pub mod host_response {
     /// `root_as_host_response_unchecked`.
     pub fn root_as_host_response(
         buf: &[u8],
-    ) -> Result<HostResponse<'_>, flatbuffers::InvalidFlatbuffer> {
+    ) -> Result<HostResponse, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::root::<HostResponse>(buf)
     }
     #[inline]
@@ -3350,7 +3350,7 @@ pub mod host_response {
     /// `size_prefixed_root_as_host_response_unchecked`.
     pub fn size_prefixed_root_as_host_response(
         buf: &[u8],
-    ) -> Result<HostResponse<'_>, flatbuffers::InvalidFlatbuffer> {
+    ) -> Result<HostResponse, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::size_prefixed_root::<HostResponse>(buf)
     }
     #[inline]
@@ -3383,14 +3383,14 @@ pub mod host_response {
     /// Assumes, without verification, that a buffer of bytes contains a HostResponse and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid `HostResponse`.
-    pub unsafe fn root_as_host_response_unchecked(buf: &[u8]) -> HostResponse<'_> {
+    pub unsafe fn root_as_host_response_unchecked(buf: &[u8]) -> HostResponse {
         flatbuffers::root_unchecked::<HostResponse>(buf)
     }
     #[inline]
     /// Assumes, without verification, that a buffer of bytes contains a size prefixed HostResponse and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid size prefixed `HostResponse`.
-    pub unsafe fn size_prefixed_root_as_host_response_unchecked(buf: &[u8]) -> HostResponse<'_> {
+    pub unsafe fn size_prefixed_root_as_host_response_unchecked(buf: &[u8]) -> HostResponse {
         flatbuffers::size_prefixed_root_unchecked::<HostResponse>(buf)
     }
     #[inline]
