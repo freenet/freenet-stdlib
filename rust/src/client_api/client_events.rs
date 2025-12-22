@@ -31,10 +31,10 @@ use crate::generated::host_response::{
     ContractResponse as FbsContractResponse, ContractResponseArgs, ContractResponseType,
     DelegateKey as FbsDelegateKey, DelegateKeyArgs, DelegateResponse as FbsDelegateResponse,
     DelegateResponseArgs, GetResponse as FbsGetResponse, GetResponseArgs,
-    HostResponse as FbsHostResponse, HostResponseArgs, HostResponseType, Ok as FbsOk, OkArgs,
-    OutboundDelegateMsg as FbsOutboundDelegateMsg, OutboundDelegateMsgArgs,
-    OutboundDelegateMsgType, PutResponse as FbsPutResponse, PutResponseArgs,
-    RequestUserInput as FbsRequestUserInput, RequestUserInputArgs,
+    HostResponse as FbsHostResponse, HostResponseArgs, HostResponseType, NotFound as FbsNotFound,
+    NotFoundArgs, Ok as FbsOk, OkArgs, OutboundDelegateMsg as FbsOutboundDelegateMsg,
+    OutboundDelegateMsgArgs, OutboundDelegateMsgType, PutResponse as FbsPutResponse,
+    PutResponseArgs, RequestUserInput as FbsRequestUserInput, RequestUserInputArgs,
     SetSecretRequest as FbsSetSecretRequest, SetSecretRequestArgs,
     UpdateNotification as FbsUpdateNotification, UpdateNotificationArgs,
     UpdateResponse as FbsUpdateResponse, UpdateResponseArgs,
@@ -1349,6 +1349,41 @@ impl HostResponse {
                     Ok(builder.finished_data().to_vec())
                 }
                 ContractResponse::SubscribeResponse { .. } => todo!(),
+                ContractResponse::NotFound { instance_id } => {
+                    let instance_data = builder.create_vector(instance_id.as_bytes());
+                    let instance_offset = FbsContractInstanceId::create(
+                        &mut builder,
+                        &ContractInstanceIdArgs {
+                            data: Some(instance_data),
+                        },
+                    );
+
+                    let not_found_offset = FbsNotFound::create(
+                        &mut builder,
+                        &NotFoundArgs {
+                            instance_id: Some(instance_offset),
+                        },
+                    );
+
+                    let contract_response_offset = FbsContractResponse::create(
+                        &mut builder,
+                        &ContractResponseArgs {
+                            contract_response_type: ContractResponseType::NotFound,
+                            contract_response: Some(not_found_offset.as_union_value()),
+                        },
+                    );
+
+                    let response_offset = FbsHostResponse::create(
+                        &mut builder,
+                        &HostResponseArgs {
+                            response: Some(contract_response_offset.as_union_value()),
+                            response_type: HostResponseType::ContractResponse,
+                        },
+                    );
+
+                    finish_host_response_buffer(&mut builder, response_offset);
+                    Ok(builder.finished_data().to_vec())
+                }
             },
             HostResponse::DelegateResponse { key, values } => {
                 let key_data = builder.create_vector(key.bytes());
@@ -1588,6 +1623,9 @@ impl Display for HostResponse {
                 ContractResponse::SubscribeResponse { key, .. } => {
                     f.write_fmt(format_args!("subscribe response for `{key}`"))
                 }
+                ContractResponse::NotFound { instance_id } => {
+                    f.write_fmt(format_args!("not found for `{instance_id}`"))
+                }
             },
             HostResponse::DelegateResponse { .. } => write!(f, "delegate responses"),
             HostResponse::Ok => write!(f, "ok response"),
@@ -1623,6 +1661,13 @@ pub enum ContractResponse<T = WrappedState> {
     SubscribeResponse {
         key: ContractKey,
         subscribed: bool,
+    },
+    /// Contract was not found after exhaustive search.
+    /// This is an explicit response that distinguishes "contract doesn't exist"
+    /// from other failure modes like timeouts or network errors.
+    NotFound {
+        /// The instance ID that was searched for.
+        instance_id: ContractInstanceId,
     },
 }
 

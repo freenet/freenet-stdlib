@@ -28,18 +28,19 @@ pub mod host_response {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_CONTRACT_RESPONSE_TYPE: u8 = 4;
+    pub const ENUM_MAX_CONTRACT_RESPONSE_TYPE: u8 = 5;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_CONTRACT_RESPONSE_TYPE: [ContractResponseType; 5] = [
+    pub const ENUM_VALUES_CONTRACT_RESPONSE_TYPE: [ContractResponseType; 6] = [
         ContractResponseType::NONE,
         ContractResponseType::GetResponse,
         ContractResponseType::PutResponse,
         ContractResponseType::UpdateNotification,
         ContractResponseType::UpdateResponse,
+        ContractResponseType::NotFound,
     ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -52,15 +53,17 @@ pub mod host_response {
         pub const PutResponse: Self = Self(2);
         pub const UpdateNotification: Self = Self(3);
         pub const UpdateResponse: Self = Self(4);
+        pub const NotFound: Self = Self(5);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 4;
+        pub const ENUM_MAX: u8 = 5;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::GetResponse,
             Self::PutResponse,
             Self::UpdateNotification,
             Self::UpdateResponse,
+            Self::NotFound,
         ];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
@@ -70,6 +73,7 @@ pub mod host_response {
                 Self::PutResponse => Some("PutResponse"),
                 Self::UpdateNotification => Some("UpdateNotification"),
                 Self::UpdateResponse => Some("UpdateResponse"),
+                Self::NotFound => Some("NotFound"),
                 _ => None,
             }
         }
@@ -996,6 +1000,134 @@ pub mod host_response {
             ds.finish()
         }
     }
+    pub enum NotFoundOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct NotFound<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for NotFound<'a> {
+        type Inner = NotFound<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
+        }
+    }
+
+    impl<'a> NotFound<'a> {
+        pub const VT_INSTANCE_ID: flatbuffers::VOffsetT = 4;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            NotFound { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args NotFoundArgs<'args>,
+        ) -> flatbuffers::WIPOffset<NotFound<'bldr>> {
+            let mut builder = NotFoundBuilder::new(_fbb);
+            if let Some(x) = args.instance_id {
+                builder.add_instance_id(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn instance_id(&self) -> super::common::ContractInstanceId<'a> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<super::common::ContractInstanceId>>(
+                        NotFound::VT_INSTANCE_ID,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for NotFound<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<super::common::ContractInstanceId>>(
+                    "instance_id",
+                    Self::VT_INSTANCE_ID,
+                    true,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct NotFoundArgs<'a> {
+        pub instance_id: Option<flatbuffers::WIPOffset<super::common::ContractInstanceId<'a>>>,
+    }
+    impl<'a> Default for NotFoundArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            NotFoundArgs {
+                instance_id: None, // required field
+            }
+        }
+    }
+
+    pub struct NotFoundBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> NotFoundBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_instance_id(
+            &mut self,
+            instance_id: flatbuffers::WIPOffset<super::common::ContractInstanceId<'b>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<super::common::ContractInstanceId>>(
+                    NotFound::VT_INSTANCE_ID,
+                    instance_id,
+                );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> NotFoundBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            NotFoundBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<NotFound<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_
+                .required(o, NotFound::VT_INSTANCE_ID, "instance_id");
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for NotFound<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("NotFound");
+            ds.field("instance_id", &self.instance_id());
+            ds.finish()
+        }
+    }
     pub enum ContractResponseOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -1122,6 +1254,20 @@ pub mod host_response {
                 None
             }
         }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn contract_response_as_not_found(&self) -> Option<NotFound<'a>> {
+            if self.contract_response_type() == ContractResponseType::NotFound {
+                let u = self.contract_response();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { NotFound::init_from_table(u) })
+            } else {
+                None
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for ContractResponse<'_> {
@@ -1138,6 +1284,7 @@ pub mod host_response {
           ContractResponseType::PutResponse => v.verify_union_variant::<flatbuffers::ForwardsUOffset<PutResponse>>("ContractResponseType::PutResponse", pos),
           ContractResponseType::UpdateNotification => v.verify_union_variant::<flatbuffers::ForwardsUOffset<UpdateNotification>>("ContractResponseType::UpdateNotification", pos),
           ContractResponseType::UpdateResponse => v.verify_union_variant::<flatbuffers::ForwardsUOffset<UpdateResponse>>("ContractResponseType::UpdateResponse", pos),
+          ContractResponseType::NotFound => v.verify_union_variant::<flatbuffers::ForwardsUOffset<NotFound>>("ContractResponseType::NotFound", pos),
           _ => Ok(()),
         }
      })?
@@ -1241,6 +1388,16 @@ pub mod host_response {
                 }
                 ContractResponseType::UpdateResponse => {
                     if let Some(x) = self.contract_response_as_update_response() {
+                        ds.field("contract_response", &x)
+                    } else {
+                        ds.field(
+                            "contract_response",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
+                    }
+                }
+                ContractResponseType::NotFound => {
+                    if let Some(x) = self.contract_response_as_not_found() {
                         ds.field("contract_response", &x)
                     } else {
                         ds.field(
@@ -3338,7 +3495,7 @@ pub mod host_response {
     /// `root_as_host_response_unchecked`.
     pub fn root_as_host_response(
         buf: &[u8],
-    ) -> Result<HostResponse<'_>, flatbuffers::InvalidFlatbuffer> {
+    ) -> Result<HostResponse, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::root::<HostResponse>(buf)
     }
     #[inline]
@@ -3350,7 +3507,7 @@ pub mod host_response {
     /// `size_prefixed_root_as_host_response_unchecked`.
     pub fn size_prefixed_root_as_host_response(
         buf: &[u8],
-    ) -> Result<HostResponse<'_>, flatbuffers::InvalidFlatbuffer> {
+    ) -> Result<HostResponse, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::size_prefixed_root::<HostResponse>(buf)
     }
     #[inline]
@@ -3383,14 +3540,14 @@ pub mod host_response {
     /// Assumes, without verification, that a buffer of bytes contains a HostResponse and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid `HostResponse`.
-    pub unsafe fn root_as_host_response_unchecked(buf: &[u8]) -> HostResponse<'_> {
+    pub unsafe fn root_as_host_response_unchecked(buf: &[u8]) -> HostResponse {
         flatbuffers::root_unchecked::<HostResponse>(buf)
     }
     #[inline]
     /// Assumes, without verification, that a buffer of bytes contains a size prefixed HostResponse and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid size prefixed `HostResponse`.
-    pub unsafe fn size_prefixed_root_as_host_response_unchecked(buf: &[u8]) -> HostResponse<'_> {
+    pub unsafe fn size_prefixed_root_as_host_response_unchecked(buf: &[u8]) -> HostResponse {
         flatbuffers::size_prefixed_root_unchecked::<HostResponse>(buf)
     }
     #[inline]

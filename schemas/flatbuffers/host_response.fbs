@@ -21,11 +21,16 @@ table UpdateResponse {
   summary: [ubyte](required);
 }
 
+table NotFound {
+  instance_id: common.ContractInstanceId(required);
+}
+
 union ContractResponseType {
   GetResponse,
   PutResponse,
   UpdateNotification,
-  UpdateResponse
+  UpdateResponse,
+  NotFound
 }
 
 table ContractResponse {
