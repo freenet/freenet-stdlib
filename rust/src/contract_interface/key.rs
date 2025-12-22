@@ -209,7 +209,6 @@ impl std::hash::Hash for ContractKey {
     }
 }
 
-
 impl From<ContractKey> for ContractInstanceId {
     fn from(key: ContractKey) -> Self {
         key.instance
