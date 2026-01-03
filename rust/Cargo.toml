@@ -1,6 +1,6 @@
 [package]
 name = "freenet-stdlib"
-version = "0.1.29"
+version = "0.1.30"
 edition = "2021"
 rust-version = "1.71.1"
 publish = true
@@ -44,6 +44,7 @@ version = "0.3"
 features = [
   "BinaryType",
   "Blob",
+  "CloseEvent",
   "ErrorEvent",
   "FileReader",
   "MessageEvent",

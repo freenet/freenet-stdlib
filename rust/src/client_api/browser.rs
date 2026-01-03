@@ -98,14 +98,15 @@ impl WebApi {
         conn.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
         onopen_callback.forget();
 
-        // let mut eh = error_handler.clone();
-        // let onclose_callback = Closure::<dyn FnOnce()>::once(move || {
-        //     tracing::warn!("connection closed");
-        //     eh(Error::ConnectionError(
-        //         serde_json::json!({ "error": "connection closed", "source": "close" }),
-        //     ));
-        // });
-        // conn.set_onclose(Some(onclose_callback.as_ref().unchecked_ref()));
+        let mut eh = error_handler.clone();
+        let onclose_callback = Closure::<dyn FnMut(_)>::new(move |_: web_sys::CloseEvent| {
+            tracing::warn!("WebSocket connection closed");
+            eh(Error::ConnectionError(
+                serde_json::json!({ "error": "connection closed", "source": "close" }),
+            ));
+        });
+        conn.set_onclose(Some(onclose_callback.as_ref().unchecked_ref()));
+        onclose_callback.forget();
 
         conn.set_binary_type(web_sys::BinaryType::Blob);
         WebApi {
@@ -115,10 +116,26 @@ impl WebApi {
     }
 
     pub async fn send(&mut self, request: ClientRequest<'static>) -> Result<(), Error> {
-        // (self.error_handler)(Error::ConnectionError(serde_json::json!({
-        //     "request": format!("{request:?}"),
-        //     "action": "sending request"
-        // })));
+        // Check WebSocket ready state before sending
+        // Per WebSocket spec, send() silently discards data when socket is CLOSING/CLOSED
+        let ready_state = self.conn.ready_state();
+        if ready_state != web_sys::WebSocket::OPEN {
+            let state_name = match ready_state {
+                0 => "CONNECTING",
+                1 => "OPEN",
+                2 => "CLOSING",
+                3 => "CLOSED",
+                _ => "UNKNOWN",
+            };
+            let err = serde_json::json!({
+                "error": format!("WebSocket is not open (state: {})", state_name),
+                "origin": "send precondition check",
+                "request": format!("{request:?}"),
+            });
+            (self.error_handler)(Error::ConnectionError(err.clone()));
+            return Err(Error::ConnectionError(err));
+        }
+
         let send = bincode::serialize(&request)?;
         self.conn.send_with_u8_array(&send).map_err(|err| {
             let err: serde_json::Value = match serde_wasm_bindgen::from_value(err) {
