@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "freenet-macros"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "freenet-stdlib"
-version = "0.1.3"
+version = "0.1.30"
 dependencies = [
  "bincode",
  "blake3",

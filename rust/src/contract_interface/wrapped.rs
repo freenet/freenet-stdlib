@@ -9,6 +9,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_with::{Bytes, DeserializeAs, SerializeAs};
 
 use crate::parameters::Parameters;
 
@@ -41,14 +42,14 @@ impl WrappedState {
     where
         S: serde::Serializer,
     {
-        serde_bytes::serialize(&**data, ser)
+        Bytes::serialize_as(&**data, ser)
     }
 
     fn deser_state<'de, D>(deser: D) -> Result<Arc<Vec<u8>>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let data: Vec<u8> = serde_bytes::deserialize(deser)?;
+        let data: Vec<u8> = Bytes::deserialize_as(deser)?;
         Ok(Arc::new(data))
     }
 }

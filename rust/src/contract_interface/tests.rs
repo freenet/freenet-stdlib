@@ -1,9 +1,10 @@
+use std::sync::LazyLock;
+
 use super::*;
 use crate::parameters::Parameters;
-use once_cell::sync::Lazy;
 use rand::{rng, rngs::SmallRng, Rng, SeedableRng};
 
-static RND_BYTES: Lazy<[u8; 1024]> = Lazy::new(|| {
+static RND_BYTES: LazyLock<[u8; 1024]> = LazyLock::new(|| {
     let mut bytes = [0; 1024];
     let mut rng = SmallRng::from_rng(&mut rng());
     rng.fill(&mut bytes);
