@@ -19,7 +19,7 @@ use crate::generated::client_request::{
 use crate::common_generated::common::SecretsId as FbsSecretsId;
 
 use crate::client_api::{TryFromFbs, WsApiError};
-use crate::prelude::{ContractInstanceId, CONTRACT_KEY_SIZE};
+use crate::prelude::{ContractInstanceId, WrappedState, CONTRACT_KEY_SIZE};
 use crate::{code_hash::CodeHash, prelude::Parameters};
 
 const DELEGATE_HASH_LENGTH: usize = 32;
@@ -427,6 +427,7 @@ pub enum InboundDelegateMsg<'a> {
     GetSecretResponse(GetSecretResponse),
     UserResponse(#[serde(borrow)] UserInputResponse<'a>),
     GetSecretRequest(GetSecretRequest),
+    GetContractResponse(GetContractResponse),
 }
 
 impl InboundDelegateMsg<'_> {
@@ -436,6 +437,9 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::GetSecretResponse(r) => InboundDelegateMsg::GetSecretResponse(r),
             InboundDelegateMsg::UserResponse(r) => InboundDelegateMsg::UserResponse(r.into_owned()),
             InboundDelegateMsg::GetSecretRequest(r) => InboundDelegateMsg::GetSecretRequest(r),
+            InboundDelegateMsg::GetContractResponse(r) => {
+                InboundDelegateMsg::GetContractResponse(r)
+            }
         }
     }
 
@@ -445,6 +449,9 @@ impl InboundDelegateMsg<'_> {
                 Some(context)
             }
             InboundDelegateMsg::GetSecretResponse(GetSecretResponse { context, .. }) => {
+                Some(context)
+            }
+            InboundDelegateMsg::GetContractResponse(GetContractResponse { context, .. }) => {
                 Some(context)
             }
             _ => None,
@@ -457,6 +464,9 @@ impl InboundDelegateMsg<'_> {
                 Some(context)
             }
             InboundDelegateMsg::GetSecretResponse(GetSecretResponse { context, .. }) => {
+                Some(context)
+            }
+            InboundDelegateMsg::GetContractResponse(GetContractResponse { context, .. }) => {
                 Some(context)
             }
             _ => None,
@@ -594,10 +604,7 @@ pub enum OutboundDelegateMsg {
     // from the node
     GetSecretRequest(GetSecretRequest),
     SetSecretRequest(SetSecretRequest),
-    // GetContractRequest {
-    //     mode: RelatedMode,
-    //     contract_id: ContractInstanceId,
-    // },
+    GetContractRequest(GetContractRequest),
     GetSecretResponse(GetSecretResponse),
 }
 
@@ -610,6 +617,12 @@ impl From<GetSecretRequest> for OutboundDelegateMsg {
 impl From<ApplicationMessage> for OutboundDelegateMsg {
     fn from(req: ApplicationMessage) -> Self {
         Self::ApplicationMessage(req)
+    }
+}
+
+impl From<GetContractRequest> for OutboundDelegateMsg {
+    fn from(req: GetContractRequest) -> Self {
+        Self::GetContractRequest(req)
     }
 }
 
@@ -626,6 +639,7 @@ impl OutboundDelegateMsg {
         match self {
             OutboundDelegateMsg::ApplicationMessage(msg) => msg.processed,
             OutboundDelegateMsg::GetSecretRequest(msg) => msg.processed,
+            OutboundDelegateMsg::GetContractRequest(msg) => msg.processed,
             OutboundDelegateMsg::SetSecretRequest(_) => false,
             OutboundDelegateMsg::RequestUserInput(_) => true,
             OutboundDelegateMsg::ContextUpdated(_) => true,
@@ -641,6 +655,9 @@ impl OutboundDelegateMsg {
             OutboundDelegateMsg::GetSecretRequest(GetSecretRequest { context, .. }) => {
                 Some(context)
             }
+            OutboundDelegateMsg::GetContractRequest(GetContractRequest { context, .. }) => {
+                Some(context)
+            }
             _ => None,
         }
     }
@@ -651,6 +668,9 @@ impl OutboundDelegateMsg {
                 Some(context)
             }
             OutboundDelegateMsg::GetSecretRequest(GetSecretRequest { context, .. }) => {
+                Some(context)
+            }
+            OutboundDelegateMsg::GetContractRequest(GetContractRequest { context, .. }) => {
                 Some(context)
             }
             _ => None,
@@ -680,6 +700,33 @@ pub struct SetSecretRequest {
     pub key: SecretsId,
     /// Sets or unsets (if none) a value associated with the key.
     pub value: Option<Secret>,
+}
+
+/// Request to get contract state from within a delegate.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GetContractRequest {
+    pub contract_id: ContractInstanceId,
+    pub context: DelegateContext,
+    pub processed: bool,
+}
+
+impl GetContractRequest {
+    pub fn new(contract_id: ContractInstanceId) -> Self {
+        Self {
+            contract_id,
+            context: Default::default(),
+            processed: false,
+        }
+    }
+}
+
+/// Response containing contract state for a delegate.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GetContractResponse {
+    pub contract_id: ContractInstanceId,
+    /// The contract state, or None if the contract was not found locally.
+    pub state: Option<WrappedState>,
+    pub context: DelegateContext,
 }
 
 #[serde_as]
