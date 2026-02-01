@@ -19,7 +19,9 @@ use crate::generated::client_request::{
 use crate::common_generated::common::SecretsId as FbsSecretsId;
 
 use crate::client_api::{TryFromFbs, WsApiError};
+use crate::contract_interface::RelatedContracts;
 use crate::prelude::{ContractInstanceId, WrappedState, CONTRACT_KEY_SIZE};
+use crate::versioning::ContractContainer;
 use crate::{code_hash::CodeHash, prelude::Parameters};
 
 const DELEGATE_HASH_LENGTH: usize = 32;
@@ -458,6 +460,7 @@ pub enum InboundDelegateMsg<'a> {
     ApplicationMessage(ApplicationMessage),
     UserResponse(#[serde(borrow)] UserInputResponse<'a>),
     GetContractResponse(GetContractResponse),
+    PutContractResponse(PutContractResponse),
 }
 
 impl InboundDelegateMsg<'_> {
@@ -467,6 +470,9 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::UserResponse(r) => InboundDelegateMsg::UserResponse(r.into_owned()),
             InboundDelegateMsg::GetContractResponse(r) => {
                 InboundDelegateMsg::GetContractResponse(r)
+            }
+            InboundDelegateMsg::PutContractResponse(r) => {
+                InboundDelegateMsg::PutContractResponse(r)
             }
         }
     }
@@ -479,6 +485,9 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::GetContractResponse(GetContractResponse { context, .. }) => {
                 Some(context)
             }
+            InboundDelegateMsg::PutContractResponse(PutContractResponse { context, .. }) => {
+                Some(context)
+            }
             _ => None,
         }
     }
@@ -489,6 +498,9 @@ impl InboundDelegateMsg<'_> {
                 Some(context)
             }
             InboundDelegateMsg::GetContractResponse(GetContractResponse { context, .. }) => {
+                Some(context)
+            }
+            InboundDelegateMsg::PutContractResponse(PutContractResponse { context, .. }) => {
                 Some(context)
             }
             _ => None,
@@ -593,6 +605,7 @@ pub enum OutboundDelegateMsg {
     // todo: remove when context can be accessed from the delegate environment and we pass it as reference
     ContextUpdated(DelegateContext),
     GetContractRequest(GetContractRequest),
+    PutContractRequest(PutContractRequest),
 }
 
 impl From<ApplicationMessage> for OutboundDelegateMsg {
@@ -604,6 +617,12 @@ impl From<ApplicationMessage> for OutboundDelegateMsg {
 impl From<GetContractRequest> for OutboundDelegateMsg {
     fn from(req: GetContractRequest) -> Self {
         Self::GetContractRequest(req)
+    }
+}
+
+impl From<PutContractRequest> for OutboundDelegateMsg {
+    fn from(req: PutContractRequest) -> Self {
+        Self::PutContractRequest(req)
     }
 }
 
@@ -620,6 +639,7 @@ impl OutboundDelegateMsg {
         match self {
             OutboundDelegateMsg::ApplicationMessage(msg) => msg.processed,
             OutboundDelegateMsg::GetContractRequest(msg) => msg.processed,
+            OutboundDelegateMsg::PutContractRequest(msg) => msg.processed,
             OutboundDelegateMsg::RequestUserInput(_) => true,
             OutboundDelegateMsg::ContextUpdated(_) => true,
         }
@@ -633,6 +653,9 @@ impl OutboundDelegateMsg {
             OutboundDelegateMsg::GetContractRequest(GetContractRequest { context, .. }) => {
                 Some(context)
             }
+            OutboundDelegateMsg::PutContractRequest(PutContractRequest { context, .. }) => {
+                Some(context)
+            }
             _ => None,
         }
     }
@@ -643,6 +666,9 @@ impl OutboundDelegateMsg {
                 Some(context)
             }
             OutboundDelegateMsg::GetContractRequest(GetContractRequest { context, .. }) => {
+                Some(context)
+            }
+            OutboundDelegateMsg::PutContractRequest(PutContractRequest { context, .. }) => {
                 Some(context)
             }
             _ => None,
@@ -674,6 +700,49 @@ pub struct GetContractResponse {
     pub contract_id: ContractInstanceId,
     /// The contract state, or None if the contract was not found locally.
     pub state: Option<WrappedState>,
+    pub context: DelegateContext,
+}
+
+/// Request to store a new contract from within a delegate.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PutContractRequest {
+    /// The contract code and parameters.
+    pub contract: ContractContainer,
+    /// The initial state for the contract.
+    pub state: WrappedState,
+    /// Related contracts that this contract depends on.
+    #[serde(deserialize_with = "RelatedContracts::deser_related_contracts")]
+    pub related_contracts: RelatedContracts<'static>,
+    /// Context for the delegate.
+    pub context: DelegateContext,
+    /// Whether this request has been processed.
+    pub processed: bool,
+}
+
+impl PutContractRequest {
+    pub fn new(
+        contract: ContractContainer,
+        state: WrappedState,
+        related_contracts: RelatedContracts<'static>,
+    ) -> Self {
+        Self {
+            contract,
+            state,
+            related_contracts,
+            context: Default::default(),
+            processed: false,
+        }
+    }
+}
+
+/// Response after attempting to store a contract from a delegate.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PutContractResponse {
+    /// The ID of the contract that was (attempted to be) stored.
+    pub contract_id: ContractInstanceId,
+    /// Success (Ok) or error message (Err).
+    pub result: Result<(), String>,
+    /// Context for the delegate.
     pub context: DelegateContext,
 }
 
