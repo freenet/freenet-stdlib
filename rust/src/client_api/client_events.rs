@@ -1568,6 +1568,13 @@ impl HostResponse {
                         );
                         messages.push(msg);
                     }
+                    OutboundDelegateMsg::GetContractRequest(_) => {
+                        // GetContractRequest should be handled by the executor and never
+                        // reach client serialization. If we get here, it's a bug.
+                        tracing::error!(
+                            "GetContractRequest reached client serialization - this is a bug"
+                        );
+                    }
                 });
                 let messages_offset = builder.create_vector(&messages);
                 let delegate_response_offset = FbsDelegateResponse::create(
