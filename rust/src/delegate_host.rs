@@ -51,8 +51,7 @@ extern "C" {
 #[link(wasm_import_module = "freenet_delegate_secrets")]
 extern "C" {
     /// Get a secret. Returns bytes written to `out_ptr`, or -1 if not found.
-    fn __frnt__delegate__get_secret(key_ptr: i64, key_len: i32, out_ptr: i64, out_len: i32)
-        -> i32;
+    fn __frnt__delegate__get_secret(key_ptr: i64, key_len: i32, out_ptr: i64, out_len: i32) -> i32;
     /// Store a secret. Returns 0 on success, -1 on error.
     fn __frnt__delegate__set_secret(key_ptr: i64, key_len: i32, val_ptr: i64, val_len: i32) -> i32;
     /// Check if a secret exists. Returns 1 if yes, 0 if no.
@@ -95,7 +94,11 @@ impl DelegateCtx {
         #[cfg(target_family = "wasm")]
         {
             let len = unsafe { __frnt__delegate__ctx_len() };
-            if len < 0 { 0 } else { len as usize }
+            if len < 0 {
+                0
+            } else {
+                len as usize
+            }
         }
         #[cfg(not(target_family = "wasm"))]
         {
@@ -136,9 +139,8 @@ impl DelegateCtx {
     pub fn read_into(&self, buf: &mut [u8]) -> usize {
         #[cfg(target_family = "wasm")]
         {
-            let read = unsafe {
-                __frnt__delegate__ctx_read(buf.as_mut_ptr() as i64, buf.len() as i32)
-            };
+            let read =
+                unsafe { __frnt__delegate__ctx_read(buf.as_mut_ptr() as i64, buf.len() as i32) };
             read.max(0) as usize
         }
         #[cfg(not(target_family = "wasm"))]
