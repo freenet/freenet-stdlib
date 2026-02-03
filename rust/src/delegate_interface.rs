@@ -378,6 +378,61 @@ impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
 ///    the delegate to sign messages, it will ask the user for permission
 ///  * A delegate monitors an inbox contract and downloads new messages when
 ///    they arrive
+///
+/// # Example
+///
+/// ```ignore
+/// use freenet_stdlib::prelude::*;
+///
+/// struct MyDelegate;
+///
+/// #[delegate]
+/// impl DelegateInterface for MyDelegate {
+///     fn process(
+///         ctx: &mut DelegateCtx,
+///         secrets: &mut SecretsStore,
+///         _params: Parameters<'static>,
+///         _attested: Option<&'static [u8]>,
+///         message: InboundDelegateMsg,
+///     ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
+///         // Access secrets synchronously - no round-trip needed!
+///         if let Some(key) = secrets.get(b"private_key") {
+///             // use key...
+///         }
+///
+///         // Read/write context for temporary state within a batch
+///         ctx.write(b"some state");
+///
+///         Ok(vec![])
+///     }
+/// }
+/// ```
+#[cfg(feature = "contract")]
+pub trait DelegateInterface {
+    /// Process inbound message, producing zero or more outbound messages in response.
+    ///
+    /// # Arguments
+    /// - `ctx`: Mutable handle to the delegate's context. Context persists across
+    ///   messages within a single batch but is reset between separate runtime calls.
+    /// - `secrets`: Mutable handle to the delegate's secret store. Secrets persist
+    ///   across all delegate invocations.
+    /// - `parameters`: The delegate's initialization parameters.
+    /// - `attested`: An optional identifier for the client of this function. Usually
+    ///   will be a [`ContractInstanceId`].
+    /// - `message`: The inbound message to process.
+    fn process(
+        ctx: &mut crate::delegate_host::DelegateCtx,
+        secrets: &mut crate::delegate_host::SecretsStore,
+        parameters: Parameters<'static>,
+        attested: Option<&'static [u8]>,
+        message: InboundDelegateMsg,
+    ) -> Result<Vec<OutboundDelegateMsg>, DelegateError>;
+}
+
+/// Legacy delegate interface without host function access.
+///
+/// This is used when the `contract` feature is not enabled.
+#[cfg(not(feature = "contract"))]
 pub trait DelegateInterface {
     /// Process inbound message, producing zero or more outbound messages in response.
     /// All state for the delegate must be stored using the secret mechanism.
