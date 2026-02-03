@@ -31,6 +31,44 @@
 //!     }
 //! }
 //! ```
+//!
+//! # Error Codes
+//!
+//! Host functions return negative values to indicate errors:
+//!
+//! | Code | Meaning |
+//! |------|---------|
+//! | 0    | Success |
+//! | -1   | Called outside process() context |
+//! | -2   | Secret not found |
+//! | -3   | Storage operation failed |
+//! | -4   | Invalid parameter (e.g., negative length) |
+//! | -5   | Context too large (exceeds i32::MAX) |
+//! | -6   | Buffer too small |
+//!
+//! The wrapper methods in [`DelegateCtx`] and [`SecretsStore`] handle these
+//! error codes and present a more ergonomic API.
+
+/// Error codes returned by host functions.
+///
+/// Negative values indicate errors, non-negative values indicate success
+/// (usually the number of bytes read/written).
+pub mod error_codes {
+    /// Operation succeeded.
+    pub const SUCCESS: i32 = 0;
+    /// Called outside of a process() context.
+    pub const ERR_NOT_IN_PROCESS: i32 = -1;
+    /// Secret not found.
+    pub const ERR_SECRET_NOT_FOUND: i32 = -2;
+    /// Storage operation failed.
+    pub const ERR_STORAGE_FAILED: i32 = -3;
+    /// Invalid parameter (e.g., negative length).
+    pub const ERR_INVALID_PARAM: i32 = -4;
+    /// Context too large (exceeds i32::MAX).
+    pub const ERR_CONTEXT_TOO_LARGE: i32 = -5;
+    /// Buffer too small to hold the data.
+    pub const ERR_BUFFER_TOO_SMALL: i32 = -6;
+}
 
 // ============================================================================
 // Host function declarations (WASM only)
@@ -39,24 +77,26 @@
 #[cfg(target_family = "wasm")]
 #[link(wasm_import_module = "freenet_delegate_ctx")]
 extern "C" {
-    /// Returns the current context length in bytes.
+    /// Returns the current context length in bytes, or negative error code.
     fn __frnt__delegate__ctx_len() -> i32;
-    /// Reads context into the buffer at `ptr` (max `len` bytes). Returns bytes written.
+    /// Reads context into the buffer at `ptr` (max `len` bytes). Returns bytes written, or negative error code.
     fn __frnt__delegate__ctx_read(ptr: i64, len: i32) -> i32;
-    /// Writes `len` bytes from `ptr` into the context, replacing existing content.
-    fn __frnt__delegate__ctx_write(ptr: i64, len: i32);
+    /// Writes `len` bytes from `ptr` into the context, replacing existing content. Returns 0 on success, or negative error code.
+    fn __frnt__delegate__ctx_write(ptr: i64, len: i32) -> i32;
 }
 
 #[cfg(target_family = "wasm")]
 #[link(wasm_import_module = "freenet_delegate_secrets")]
 extern "C" {
-    /// Get a secret. Returns bytes written to `out_ptr`, or -1 if not found.
+    /// Get a secret. Returns bytes written to `out_ptr`, or negative error code.
     fn __frnt__delegate__get_secret(key_ptr: i64, key_len: i32, out_ptr: i64, out_len: i32) -> i32;
-    /// Store a secret. Returns 0 on success, -1 on error.
+    /// Get secret length without fetching value. Returns length, or negative error code.
+    fn __frnt__delegate__get_secret_len(key_ptr: i64, key_len: i32) -> i32;
+    /// Store a secret. Returns 0 on success, or negative error code.
     fn __frnt__delegate__set_secret(key_ptr: i64, key_len: i32, val_ptr: i64, val_len: i32) -> i32;
-    /// Check if a secret exists. Returns 1 if yes, 0 if no.
+    /// Check if a secret exists. Returns 1 if yes, 0 if no, or negative error code.
     fn __frnt__delegate__has_secret(key_ptr: i64, key_len: i32) -> i32;
-    /// Remove a secret. Returns 0 on success, -1 if not found.
+    /// Remove a secret. Returns 0 on success, or negative error code.
     fn __frnt__delegate__remove_secret(key_ptr: i64, key_len: i32) -> i32;
 }
 
@@ -151,16 +191,20 @@ impl DelegateCtx {
     }
 
     /// Write new context bytes, replacing any existing content.
-    pub fn write(&mut self, data: &[u8]) {
+    ///
+    /// Returns `true` on success, `false` on error.
+    pub fn write(&mut self, data: &[u8]) -> bool {
         #[cfg(target_family = "wasm")]
         {
-            unsafe {
-                __frnt__delegate__ctx_write(data.as_ptr() as i64, data.len() as i32);
-            }
+            let result = unsafe {
+                __frnt__delegate__ctx_write(data.as_ptr() as i64, data.len() as i32)
+            };
+            result == 0
         }
         #[cfg(not(target_family = "wasm"))]
         {
             let _ = data;
+            false
         }
     }
 
@@ -182,9 +226,6 @@ impl std::fmt::Debug for DelegateCtx {
 // ============================================================================
 // SecretsStore - Opaque handle to secret storage
 // ============================================================================
-
-/// Maximum buffer size for reading secrets.
-const SECRET_MAX_SIZE: usize = 64 * 1024; // 64 KB
 
 /// Opaque handle to the delegate's secret store.
 ///
@@ -211,13 +252,45 @@ impl SecretsStore {
         Self { _private: () }
     }
 
+    /// Get the length of a secret without retrieving its value.
+    ///
+    /// Returns `None` if the secret does not exist.
+    pub fn get_len(&self, key: &[u8]) -> Option<usize> {
+        #[cfg(target_family = "wasm")]
+        {
+            let result = unsafe {
+                __frnt__delegate__get_secret_len(key.as_ptr() as i64, key.len() as i32)
+            };
+            if result < 0 {
+                None
+            } else {
+                Some(result as usize)
+            }
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = key;
+            None
+        }
+    }
+
     /// Get a secret by key.
     ///
     /// Returns `None` if the secret does not exist.
     pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         #[cfg(target_family = "wasm")]
         {
-            let mut out = vec![0u8; SECRET_MAX_SIZE];
+            // First get the length to allocate the right buffer size
+            let len = match self.get_len(key) {
+                Some(len) => len,
+                None => return None,
+            };
+
+            if len == 0 {
+                return Some(Vec::new());
+            }
+
+            let mut out = vec![0u8; len];
             let result = unsafe {
                 __frnt__delegate__get_secret(
                     key.as_ptr() as i64,
