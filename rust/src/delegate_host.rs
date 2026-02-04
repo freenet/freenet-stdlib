@@ -12,25 +12,32 @@
 //! impl DelegateInterface for MyDelegate {
 //!     fn process(
 //!         ctx: &mut DelegateCtx,
-//!         secrets: &mut SecretsStore,
 //!         _params: Parameters<'static>,
 //!         _attested: Option<&'static [u8]>,
 //!         message: InboundDelegateMsg,
 //!     ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
-//!         // Read/write context directly
+//!         // Read/write temporary context
 //!         let data = ctx.read();
 //!         ctx.write(b"new state");
 //!
-//!         // Access secrets synchronously
-//!         if let Some(key) = secrets.get(b"private_key") {
+//!         // Access persistent secrets
+//!         if let Some(key) = ctx.get_secret(b"private_key") {
 //!             // use key...
 //!         }
-//!         secrets.set(b"new_secret", b"value");
+//!         ctx.set_secret(b"new_secret", b"value");
 //!
 //!         Ok(vec![])
 //!     }
 //! }
 //! ```
+//!
+//! # Context vs Secrets
+//!
+//! - **Context** (`read`/`write`): Temporary state within a single message batch.
+//!   Reset between separate runtime calls. Use for intermediate processing state.
+//!
+//! - **Secrets** (`get_secret`/`set_secret`): Persistent encrypted storage.
+//!   Survives across all delegate invocations. Use for private keys, tokens, etc.
 //!
 //! # Error Codes
 //!
@@ -46,8 +53,8 @@
 //! | -5   | Context too large (exceeds i32::MAX) |
 //! | -6   | Buffer too small |
 //!
-//! The wrapper methods in [`DelegateCtx`] and [`SecretsStore`] handle these
-//! error codes and present a more ergonomic API.
+//! The wrapper methods in [`DelegateCtx`] handle these error codes and present
+//! a more ergonomic API.
 
 /// Error codes returned by host functions.
 ///
@@ -101,16 +108,21 @@ extern "C" {
 }
 
 // ============================================================================
-// DelegateCtx - Opaque handle to mutable context
+// DelegateCtx - Unified handle to context and secrets
 // ============================================================================
 
-/// Opaque handle to the delegate's mutable context.
+/// Opaque handle to the delegate's execution environment.
 ///
-/// Context persists across messages within a single `inbound_app_message` batch,
-/// but is reset between separate runtime calls. Use this for temporary state
-/// that needs to be shared across multiple messages in one batch.
+/// Provides access to both:
+/// - **Temporary context**: State shared within a single message batch (reset between calls)
+/// - **Persistent secrets**: Encrypted storage that survives across all invocations
 ///
-/// For persistent state, use [`SecretsStore`] instead.
+/// # Context Methods
+/// - [`read`](Self::read), [`write`](Self::write), [`len`](Self::len), [`clear`](Self::clear)
+///
+/// # Secret Methods
+/// - [`get_secret`](Self::get_secret), [`set_secret`](Self::set_secret),
+///   [`has_secret`](Self::has_secret), [`remove_secret`](Self::remove_secret)
 #[repr(transparent)]
 pub struct DelegateCtx {
     _private: (),
@@ -127,6 +139,10 @@ impl DelegateCtx {
     pub unsafe fn __new() -> Self {
         Self { _private: () }
     }
+
+    // ========================================================================
+    // Context methods (temporary state within a batch)
+    // ========================================================================
 
     /// Returns the current context length in bytes.
     #[inline]
@@ -196,9 +212,8 @@ impl DelegateCtx {
     pub fn write(&mut self, data: &[u8]) -> bool {
         #[cfg(target_family = "wasm")]
         {
-            let result = unsafe {
-                __frnt__delegate__ctx_write(data.as_ptr() as i64, data.len() as i32)
-            };
+            let result =
+                unsafe { __frnt__delegate__ctx_write(data.as_ptr() as i64, data.len() as i32) };
             result == 0
         }
         #[cfg(not(target_family = "wasm"))]
@@ -213,54 +228,19 @@ impl DelegateCtx {
     pub fn clear(&mut self) {
         self.write(&[]);
     }
-}
 
-impl std::fmt::Debug for DelegateCtx {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DelegateCtx")
-            .field("len", &self.len())
-            .finish()
-    }
-}
-
-// ============================================================================
-// SecretsStore - Opaque handle to secret storage
-// ============================================================================
-
-/// Opaque handle to the delegate's secret store.
-///
-/// Secrets are persistent across all delegate invocations and are stored
-/// securely by the runtime. Use this for sensitive data like private keys,
-/// tokens, or other credentials.
-///
-/// Each delegate has its own isolated secret namespace - secrets from one
-/// delegate cannot be accessed by another.
-#[repr(transparent)]
-pub struct SecretsStore {
-    _private: (),
-}
-
-impl SecretsStore {
-    /// Creates the secrets store handle.
-    ///
-    /// # Safety
-    ///
-    /// This should only be called by macro-generated code when the runtime
-    /// has set up the delegate execution environment.
-    #[doc(hidden)]
-    pub unsafe fn __new() -> Self {
-        Self { _private: () }
-    }
+    // ========================================================================
+    // Secret methods (persistent encrypted storage)
+    // ========================================================================
 
     /// Get the length of a secret without retrieving its value.
     ///
     /// Returns `None` if the secret does not exist.
-    pub fn get_len(&self, key: &[u8]) -> Option<usize> {
+    pub fn get_secret_len(&self, key: &[u8]) -> Option<usize> {
         #[cfg(target_family = "wasm")]
         {
-            let result = unsafe {
-                __frnt__delegate__get_secret_len(key.as_ptr() as i64, key.len() as i32)
-            };
+            let result =
+                unsafe { __frnt__delegate__get_secret_len(key.as_ptr() as i64, key.len() as i32) };
             if result < 0 {
                 None
             } else {
@@ -277,14 +257,11 @@ impl SecretsStore {
     /// Get a secret by key.
     ///
     /// Returns `None` if the secret does not exist.
-    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+    pub fn get_secret(&self, key: &[u8]) -> Option<Vec<u8>> {
         #[cfg(target_family = "wasm")]
         {
             // First get the length to allocate the right buffer size
-            let len = match self.get_len(key) {
-                Some(len) => len,
-                None => return None,
-            };
+            let len = self.get_secret_len(key)?;
 
             if len == 0 {
                 return Some(Vec::new());
@@ -316,7 +293,7 @@ impl SecretsStore {
     /// Store a secret.
     ///
     /// Returns `true` on success, `false` on error.
-    pub fn set(&mut self, key: &[u8], value: &[u8]) -> bool {
+    pub fn set_secret(&mut self, key: &[u8], value: &[u8]) -> bool {
         #[cfg(target_family = "wasm")]
         {
             let result = unsafe {
@@ -337,7 +314,7 @@ impl SecretsStore {
     }
 
     /// Check if a secret exists.
-    pub fn has(&self, key: &[u8]) -> bool {
+    pub fn has_secret(&self, key: &[u8]) -> bool {
         #[cfg(target_family = "wasm")]
         {
             let result =
@@ -354,7 +331,7 @@ impl SecretsStore {
     /// Remove a secret.
     ///
     /// Returns `true` if the secret was removed, `false` if it didn't exist.
-    pub fn remove(&mut self, key: &[u8]) -> bool {
+    pub fn remove_secret(&mut self, key: &[u8]) -> bool {
         #[cfg(target_family = "wasm")]
         {
             let result =
@@ -369,8 +346,30 @@ impl SecretsStore {
     }
 }
 
-impl std::fmt::Debug for SecretsStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SecretsStore").finish_non_exhaustive()
+impl Default for DelegateCtx {
+    fn default() -> Self {
+        Self { _private: () }
     }
 }
+
+impl std::fmt::Debug for DelegateCtx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DelegateCtx")
+            .field("context_len", &self.len())
+            .finish_non_exhaustive()
+    }
+}
+
+// ============================================================================
+// SecretsStore - Deprecated, use DelegateCtx instead
+// ============================================================================
+
+/// Deprecated: Use [`DelegateCtx`] methods instead.
+///
+/// This type alias exists for backward compatibility. New code should use
+/// `ctx.get_secret()`, `ctx.set_secret()`, etc. directly on [`DelegateCtx`].
+#[deprecated(
+    since = "0.2.0",
+    note = "Use DelegateCtx methods (get_secret, set_secret, etc.) instead"
+)]
+pub type SecretsStore = DelegateCtx;

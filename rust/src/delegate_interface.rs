@@ -390,15 +390,15 @@ impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
 /// impl DelegateInterface for MyDelegate {
 ///     fn process(
 ///         ctx: &mut DelegateCtx,
-///         secrets: &mut SecretsStore,
 ///         _params: Parameters<'static>,
 ///         _attested: Option<&'static [u8]>,
 ///         message: InboundDelegateMsg,
 ///     ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
 ///         // Access secrets synchronously - no round-trip needed!
-///         if let Some(key) = secrets.get(b"private_key") {
+///         if let Some(key) = ctx.get_secret(b"private_key") {
 ///             // use key...
 ///         }
+///         ctx.set_secret(b"new_key", b"value");
 ///
 ///         // Read/write context for temporary state within a batch
 ///         ctx.write(b"some state");
@@ -412,17 +412,15 @@ pub trait DelegateInterface {
     /// Process inbound message, producing zero or more outbound messages in response.
     ///
     /// # Arguments
-    /// - `ctx`: Mutable handle to the delegate's context. Context persists across
-    ///   messages within a single batch but is reset between separate runtime calls.
-    /// - `secrets`: Mutable handle to the delegate's secret store. Secrets persist
-    ///   across all delegate invocations.
+    /// - `ctx`: Mutable handle to the delegate's execution environment. Provides:
+    ///   - **Context** (temporary): `read()`, `write()`, `len()`, `clear()` - state within a batch
+    ///   - **Secrets** (persistent): `get_secret()`, `set_secret()`, `has_secret()`, `remove_secret()`
     /// - `parameters`: The delegate's initialization parameters.
     /// - `attested`: An optional identifier for the client of this function. Usually
     ///   will be a [`ContractInstanceId`].
     /// - `message`: The inbound message to process.
     fn process(
         ctx: &mut crate::delegate_host::DelegateCtx,
-        secrets: &mut crate::delegate_host::SecretsStore,
         parameters: Parameters<'static>,
         attested: Option<&'static [u8]>,
         message: InboundDelegateMsg,

@@ -62,15 +62,13 @@ impl ImplStruct {
                     }
                 };
 
-                // Create opaque handles for context and secrets access.
+                // Create opaque handle for context access (includes secrets).
                 // SAFETY: The runtime has set up the delegate execution environment
                 // before calling this function, so the host functions are available.
                 let mut ctx = unsafe { ::freenet_stdlib::prelude::DelegateCtx::__new() };
-                let mut secrets = unsafe { ::freenet_stdlib::prelude::SecretsStore::__new() };
 
                 let result = <#type_name as ::freenet_stdlib::prelude::DelegateInterface>::process(
                     &mut ctx,
-                    &mut secrets,
                     parameters,
                     attested,
                     inbound
