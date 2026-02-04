@@ -123,6 +123,7 @@ extern "C" {
 /// # Secret Methods
 /// - [`get_secret`](Self::get_secret), [`set_secret`](Self::set_secret),
 ///   [`has_secret`](Self::has_secret), [`remove_secret`](Self::remove_secret)
+#[derive(Default)]
 #[repr(transparent)]
 pub struct DelegateCtx {
     _private: (),
@@ -343,12 +344,6 @@ impl DelegateCtx {
             let _ = key;
             false
         }
-    }
-}
-
-impl Default for DelegateCtx {
-    fn default() -> Self {
-        Self { _private: () }
     }
 }
 
