@@ -407,7 +407,6 @@ impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
 ///     }
 /// }
 /// ```
-#[cfg(feature = "contract")]
 pub trait DelegateInterface {
     /// Process inbound message, producing zero or more outbound messages in response.
     ///
@@ -421,24 +420,6 @@ pub trait DelegateInterface {
     /// - `message`: The inbound message to process.
     fn process(
         ctx: &mut crate::delegate_host::DelegateCtx,
-        parameters: Parameters<'static>,
-        attested: Option<&'static [u8]>,
-        message: InboundDelegateMsg,
-    ) -> Result<Vec<OutboundDelegateMsg>, DelegateError>;
-}
-
-/// Legacy delegate interface without host function access.
-///
-/// This is used when the `contract` feature is not enabled.
-#[cfg(not(feature = "contract"))]
-pub trait DelegateInterface {
-    /// Process inbound message, producing zero or more outbound messages in response.
-    /// All state for the delegate must be stored using the secret mechanism.
-    ///
-    /// # Arguments
-    /// - attested: an optional identifier for the client of this function. Usually will
-    ///   be a [`ContractInstanceId`].
-    fn process(
         parameters: Parameters<'static>,
         attested: Option<&'static [u8]>,
         message: InboundDelegateMsg,
