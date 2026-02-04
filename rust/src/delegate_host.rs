@@ -359,17 +359,3 @@ impl std::fmt::Debug for DelegateCtx {
             .finish_non_exhaustive()
     }
 }
-
-// ============================================================================
-// SecretsStore - Deprecated, use DelegateCtx instead
-// ============================================================================
-
-/// Deprecated: Use [`DelegateCtx`] methods instead.
-///
-/// This type alias exists for backward compatibility. New code should use
-/// `ctx.get_secret()`, `ctx.set_secret()`, etc. directly on [`DelegateCtx`].
-#[deprecated(
-    since = "0.2.0",
-    note = "Use DelegateCtx methods (get_secret, set_secret, etc.) instead"
-)]
-pub type SecretsStore = DelegateCtx;
