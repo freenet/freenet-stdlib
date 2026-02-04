@@ -3,6 +3,7 @@ mod code_hash;
 #[cfg(feature = "unstable")]
 pub mod contract_composition;
 mod contract_interface;
+pub mod delegate_host;
 mod delegate_interface;
 pub(crate) mod global;
 pub mod memory;
@@ -37,6 +38,7 @@ pub mod prelude {
     pub use crate::code_hash::*;
     pub use crate::contract_interface::wasm_interface::ContractInterfaceResult;
     pub use crate::contract_interface::*;
+    pub use crate::delegate_host::{error_codes, DelegateCtx};
     pub use crate::delegate_interface::wasm_interface::DelegateInterfaceResult;
     pub use crate::delegate_interface::*;
     pub use crate::parameters::*;

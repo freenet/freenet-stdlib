@@ -378,14 +378,48 @@ impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
 ///    the delegate to sign messages, it will ask the user for permission
 ///  * A delegate monitors an inbox contract and downloads new messages when
 ///    they arrive
+///
+/// # Example
+///
+/// ```ignore
+/// use freenet_stdlib::prelude::*;
+///
+/// struct MyDelegate;
+///
+/// #[delegate]
+/// impl DelegateInterface for MyDelegate {
+///     fn process(
+///         ctx: &mut DelegateCtx,
+///         _params: Parameters<'static>,
+///         _attested: Option<&'static [u8]>,
+///         message: InboundDelegateMsg,
+///     ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
+///         // Access secrets synchronously - no round-trip needed!
+///         if let Some(key) = ctx.get_secret(b"private_key") {
+///             // use key...
+///         }
+///         ctx.set_secret(b"new_key", b"value");
+///
+///         // Read/write context for temporary state within a batch
+///         ctx.write(b"some state");
+///
+///         Ok(vec![])
+///     }
+/// }
+/// ```
 pub trait DelegateInterface {
     /// Process inbound message, producing zero or more outbound messages in response.
-    /// All state for the delegate must be stored using the secret mechanism.
     ///
     /// # Arguments
-    /// - attested: an optional identifier for the client of this function. Usually will
-    ///   be a [`ContractInstanceId`].
+    /// - `ctx`: Mutable handle to the delegate's execution environment. Provides:
+    ///   - **Context** (temporary): `read()`, `write()`, `len()`, `clear()` - state within a batch
+    ///   - **Secrets** (persistent): `get_secret()`, `set_secret()`, `has_secret()`, `remove_secret()`
+    /// - `parameters`: The delegate's initialization parameters.
+    /// - `attested`: An optional identifier for the client of this function. Usually
+    ///   will be a [`ContractInstanceId`].
+    /// - `message`: The inbound message to process.
     fn process(
+        ctx: &mut crate::delegate_host::DelegateCtx,
         parameters: Parameters<'static>,
         attested: Option<&'static [u8]>,
         message: InboundDelegateMsg,
