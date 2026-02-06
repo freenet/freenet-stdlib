@@ -66,18 +66,10 @@ table ContextUpdated {
     context: [ubyte](required);
 }
 
-table SetSecretRequest {
-    key: common.SecretsId(required);
-    value: [ubyte](required);
-}
-
 union OutboundDelegateMsgType {
     common.ApplicationMessage,
     RequestUserInput,
     ContextUpdated,
-    common.GetSecretRequest,
-    SetSecretRequest,
-    common.GetSecretResponse,
 }
 
 table OutboundDelegateMsg {

@@ -217,18 +217,16 @@ pub mod client_request {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_INBOUND_DELEGATE_MSG_TYPE: u8 = 4;
+    pub const ENUM_MAX_INBOUND_DELEGATE_MSG_TYPE: u8 = 2;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_INBOUND_DELEGATE_MSG_TYPE: [InboundDelegateMsgType; 5] = [
+    pub const ENUM_VALUES_INBOUND_DELEGATE_MSG_TYPE: [InboundDelegateMsgType; 3] = [
         InboundDelegateMsgType::NONE,
         InboundDelegateMsgType::common_ApplicationMessage,
-        InboundDelegateMsgType::common_GetSecretResponse,
         InboundDelegateMsgType::UserInputResponse,
-        InboundDelegateMsgType::common_GetSecretRequest,
     ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -238,27 +236,21 @@ pub mod client_request {
     impl InboundDelegateMsgType {
         pub const NONE: Self = Self(0);
         pub const common_ApplicationMessage: Self = Self(1);
-        pub const common_GetSecretResponse: Self = Self(2);
-        pub const UserInputResponse: Self = Self(3);
-        pub const common_GetSecretRequest: Self = Self(4);
+        pub const UserInputResponse: Self = Self(2);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 4;
+        pub const ENUM_MAX: u8 = 2;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::common_ApplicationMessage,
-            Self::common_GetSecretResponse,
             Self::UserInputResponse,
-            Self::common_GetSecretRequest,
         ];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
             match self {
                 Self::NONE => Some("NONE"),
                 Self::common_ApplicationMessage => Some("common_ApplicationMessage"),
-                Self::common_GetSecretResponse => Some("common_GetSecretResponse"),
                 Self::UserInputResponse => Some("UserInputResponse"),
-                Self::common_GetSecretRequest => Some("common_GetSecretRequest"),
                 _ => None,
             }
         }
@@ -325,16 +317,15 @@ pub mod client_request {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_DELEGATE_REQUEST_TYPE: u8 = 4;
+    pub const ENUM_MAX_DELEGATE_REQUEST_TYPE: u8 = 3;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_DELEGATE_REQUEST_TYPE: [DelegateRequestType; 5] = [
+    pub const ENUM_VALUES_DELEGATE_REQUEST_TYPE: [DelegateRequestType; 4] = [
         DelegateRequestType::NONE,
         DelegateRequestType::ApplicationMessages,
-        DelegateRequestType::GetSecretRequestType,
         DelegateRequestType::RegisterDelegate,
         DelegateRequestType::UnregisterDelegate,
     ];
@@ -346,16 +337,14 @@ pub mod client_request {
     impl DelegateRequestType {
         pub const NONE: Self = Self(0);
         pub const ApplicationMessages: Self = Self(1);
-        pub const GetSecretRequestType: Self = Self(2);
-        pub const RegisterDelegate: Self = Self(3);
-        pub const UnregisterDelegate: Self = Self(4);
+        pub const RegisterDelegate: Self = Self(2);
+        pub const UnregisterDelegate: Self = Self(3);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 4;
+        pub const ENUM_MAX: u8 = 3;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::ApplicationMessages,
-            Self::GetSecretRequestType,
             Self::RegisterDelegate,
             Self::UnregisterDelegate,
         ];
@@ -364,7 +353,6 @@ pub mod client_request {
             match self {
                 Self::NONE => Some("NONE"),
                 Self::ApplicationMessages => Some("ApplicationMessages"),
-                Self::GetSecretRequestType => Some("GetSecretRequestType"),
                 Self::RegisterDelegate => Some("RegisterDelegate"),
                 Self::UnregisterDelegate => Some("UnregisterDelegate"),
                 _ => None,
@@ -2791,22 +2779,6 @@ pub mod client_request {
 
         #[inline]
         #[allow(non_snake_case)]
-        pub fn inbound_as_common_get_secret_response(
-            &self,
-        ) -> Option<super::common::GetSecretResponse<'a>> {
-            if self.inbound_type() == InboundDelegateMsgType::common_GetSecretResponse {
-                let u = self.inbound();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { super::common::GetSecretResponse::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
         pub fn inbound_as_user_input_response(&self) -> Option<UserInputResponse<'a>> {
             if self.inbound_type() == InboundDelegateMsgType::UserInputResponse {
                 let u = self.inbound();
@@ -2814,22 +2786,6 @@ pub mod client_request {
                 // Created from a valid Table for this object
                 // Which contains a valid union in this slot
                 Some(unsafe { UserInputResponse::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn inbound_as_common_get_secret_request(
-            &self,
-        ) -> Option<super::common::GetSecretRequest<'a>> {
-            if self.inbound_type() == InboundDelegateMsgType::common_GetSecretRequest {
-                let u = self.inbound();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { super::common::GetSecretRequest::init_from_table(u) })
             } else {
                 None
             }
@@ -2846,9 +2802,7 @@ pub mod client_request {
      .visit_union::<InboundDelegateMsgType, _>("inbound_type", Self::VT_INBOUND_TYPE, "inbound", Self::VT_INBOUND, true, |key, v, pos| {
         match key {
           InboundDelegateMsgType::common_ApplicationMessage => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<super::common::ApplicationMessage>>("InboundDelegateMsgType::common_ApplicationMessage", pos),
-          InboundDelegateMsgType::common_GetSecretResponse => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<super::common::GetSecretResponse>>("InboundDelegateMsgType::common_GetSecretResponse", pos),
           InboundDelegateMsgType::UserInputResponse => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<UserInputResponse>>("InboundDelegateMsgType::UserInputResponse", pos),
-          InboundDelegateMsgType::common_GetSecretRequest => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<super::common::GetSecretRequest>>("InboundDelegateMsgType::common_GetSecretRequest", pos),
           _ => Ok(()),
         }
      })?
@@ -2927,28 +2881,8 @@ pub mod client_request {
                         )
                     }
                 }
-                InboundDelegateMsgType::common_GetSecretResponse => {
-                    if let Some(x) = self.inbound_as_common_get_secret_response() {
-                        ds.field("inbound", &x)
-                    } else {
-                        ds.field(
-                            "inbound",
-                            &"InvalidFlatbuffer: Union discriminant does not match value.",
-                        )
-                    }
-                }
                 InboundDelegateMsgType::UserInputResponse => {
                     if let Some(x) = self.inbound_as_user_input_response() {
-                        ds.field("inbound", &x)
-                    } else {
-                        ds.field(
-                            "inbound",
-                            &"InvalidFlatbuffer: Union discriminant does not match value.",
-                        )
-                    }
-                }
-                InboundDelegateMsgType::common_GetSecretRequest => {
-                    if let Some(x) = self.inbound_as_common_get_secret_request() {
                         ds.field("inbound", &x)
                     } else {
                         ds.field(
@@ -3170,206 +3104,6 @@ pub mod client_request {
             ds.field("key", &self.key());
             ds.field("params", &self.params());
             ds.field("inbound", &self.inbound());
-            ds.finish()
-        }
-    }
-    pub enum GetSecretRequestTypeOffset {}
-    #[derive(Copy, Clone, PartialEq)]
-
-    pub struct GetSecretRequestType<'a> {
-        pub _tab: ::flatbuffers::Table<'a>,
-    }
-
-    impl<'a> ::flatbuffers::Follow<'a> for GetSecretRequestType<'a> {
-        type Inner = GetSecretRequestType<'a>;
-        #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self {
-                _tab: unsafe { ::flatbuffers::Table::new(buf, loc) },
-            }
-        }
-    }
-
-    impl<'a> GetSecretRequestType<'a> {
-        pub const VT_KEY: ::flatbuffers::VOffsetT = 4;
-        pub const VT_PARAMS: ::flatbuffers::VOffsetT = 6;
-        pub const VT_GET_REQUEST: ::flatbuffers::VOffsetT = 8;
-
-        #[inline]
-        pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
-            GetSecretRequestType { _tab: table }
-        }
-        #[allow(unused_mut)]
-        pub fn create<
-            'bldr: 'args,
-            'args: 'mut_bldr,
-            'mut_bldr,
-            A: ::flatbuffers::Allocator + 'bldr,
-        >(
-            _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args GetSecretRequestTypeArgs<'args>,
-        ) -> ::flatbuffers::WIPOffset<GetSecretRequestType<'bldr>> {
-            let mut builder = GetSecretRequestTypeBuilder::new(_fbb);
-            if let Some(x) = args.get_request {
-                builder.add_get_request(x);
-            }
-            if let Some(x) = args.params {
-                builder.add_params(x);
-            }
-            if let Some(x) = args.key {
-                builder.add_key(x);
-            }
-            builder.finish()
-        }
-
-        #[inline]
-        pub fn key(&self) -> DelegateKey<'a> {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<::flatbuffers::ForwardsUOffset<DelegateKey>>(
-                        GetSecretRequestType::VT_KEY,
-                        None,
-                    )
-                    .unwrap()
-            }
-        }
-        #[inline]
-        pub fn params(&self) -> ::flatbuffers::Vector<'a, u8> {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, u8>>>(
-                        GetSecretRequestType::VT_PARAMS,
-                        None,
-                    )
-                    .unwrap()
-            }
-        }
-        #[inline]
-        pub fn get_request(&self) -> super::common::GetSecretRequest<'a> {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<::flatbuffers::ForwardsUOffset<super::common::GetSecretRequest>>(
-                        GetSecretRequestType::VT_GET_REQUEST,
-                        None,
-                    )
-                    .unwrap()
-            }
-        }
-    }
-
-    impl ::flatbuffers::Verifiable for GetSecretRequestType<'_> {
-        #[inline]
-        fn run_verifier(
-            v: &mut ::flatbuffers::Verifier,
-            pos: usize,
-        ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
-            v.visit_table(pos)?
-                .visit_field::<::flatbuffers::ForwardsUOffset<DelegateKey>>(
-                    "key",
-                    Self::VT_KEY,
-                    true,
-                )?
-                .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, u8>>>(
-                    "params",
-                    Self::VT_PARAMS,
-                    true,
-                )?
-                .visit_field::<::flatbuffers::ForwardsUOffset<super::common::GetSecretRequest>>(
-                    "get_request",
-                    Self::VT_GET_REQUEST,
-                    true,
-                )?
-                .finish();
-            Ok(())
-        }
-    }
-    pub struct GetSecretRequestTypeArgs<'a> {
-        pub key: Option<::flatbuffers::WIPOffset<DelegateKey<'a>>>,
-        pub params: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, u8>>>,
-        pub get_request: Option<::flatbuffers::WIPOffset<super::common::GetSecretRequest<'a>>>,
-    }
-    impl<'a> Default for GetSecretRequestTypeArgs<'a> {
-        #[inline]
-        fn default() -> Self {
-            GetSecretRequestTypeArgs {
-                key: None,         // required field
-                params: None,      // required field
-                get_request: None, // required field
-            }
-        }
-    }
-
-    pub struct GetSecretRequestTypeBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
-        fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
-        start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
-    }
-    impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> GetSecretRequestTypeBuilder<'a, 'b, A> {
-        #[inline]
-        pub fn add_key(&mut self, key: ::flatbuffers::WIPOffset<DelegateKey<'b>>) {
-            self.fbb_
-                .push_slot_always::<::flatbuffers::WIPOffset<DelegateKey>>(
-                    GetSecretRequestType::VT_KEY,
-                    key,
-                );
-        }
-        #[inline]
-        pub fn add_params(
-            &mut self,
-            params: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b, u8>>,
-        ) {
-            self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-                GetSecretRequestType::VT_PARAMS,
-                params,
-            );
-        }
-        #[inline]
-        pub fn add_get_request(
-            &mut self,
-            get_request: ::flatbuffers::WIPOffset<super::common::GetSecretRequest<'b>>,
-        ) {
-            self.fbb_
-                .push_slot_always::<::flatbuffers::WIPOffset<super::common::GetSecretRequest>>(
-                    GetSecretRequestType::VT_GET_REQUEST,
-                    get_request,
-                );
-        }
-        #[inline]
-        pub fn new(
-            _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
-        ) -> GetSecretRequestTypeBuilder<'a, 'b, A> {
-            let start = _fbb.start_table();
-            GetSecretRequestTypeBuilder {
-                fbb_: _fbb,
-                start_: start,
-            }
-        }
-        #[inline]
-        pub fn finish(self) -> ::flatbuffers::WIPOffset<GetSecretRequestType<'a>> {
-            let o = self.fbb_.end_table(self.start_);
-            self.fbb_.required(o, GetSecretRequestType::VT_KEY, "key");
-            self.fbb_
-                .required(o, GetSecretRequestType::VT_PARAMS, "params");
-            self.fbb_
-                .required(o, GetSecretRequestType::VT_GET_REQUEST, "get_request");
-            ::flatbuffers::WIPOffset::new(o.value())
-        }
-    }
-
-    impl ::core::fmt::Debug for GetSecretRequestType<'_> {
-        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-            let mut ds = f.debug_struct("GetSecretRequestType");
-            ds.field("key", &self.key());
-            ds.field("params", &self.params());
-            ds.field("get_request", &self.get_request());
             ds.finish()
         }
     }
@@ -4057,22 +3791,6 @@ pub mod client_request {
 
         #[inline]
         #[allow(non_snake_case)]
-        pub fn delegate_request_as_get_secret_request_type(
-            &self,
-        ) -> Option<GetSecretRequestType<'a>> {
-            if self.delegate_request_type() == DelegateRequestType::GetSecretRequestType {
-                let u = self.delegate_request();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { GetSecretRequestType::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
         pub fn delegate_request_as_register_delegate(&self) -> Option<RegisterDelegate<'a>> {
             if self.delegate_request_type() == DelegateRequestType::RegisterDelegate {
                 let u = self.delegate_request();
@@ -4110,7 +3828,6 @@ pub mod client_request {
      .visit_union::<DelegateRequestType, _>("delegate_request_type", Self::VT_DELEGATE_REQUEST_TYPE, "delegate_request", Self::VT_DELEGATE_REQUEST, true, |key, v, pos| {
         match key {
           DelegateRequestType::ApplicationMessages => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<ApplicationMessages>>("DelegateRequestType::ApplicationMessages", pos),
-          DelegateRequestType::GetSecretRequestType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<GetSecretRequestType>>("DelegateRequestType::GetSecretRequestType", pos),
           DelegateRequestType::RegisterDelegate => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<RegisterDelegate>>("DelegateRequestType::RegisterDelegate", pos),
           DelegateRequestType::UnregisterDelegate => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<UnregisterDelegate>>("DelegateRequestType::UnregisterDelegate", pos),
           _ => Ok(()),
@@ -4183,16 +3900,6 @@ pub mod client_request {
             match self.delegate_request_type() {
                 DelegateRequestType::ApplicationMessages => {
                     if let Some(x) = self.delegate_request_as_application_messages() {
-                        ds.field("delegate_request", &x)
-                    } else {
-                        ds.field(
-                            "delegate_request",
-                            &"InvalidFlatbuffer: Union discriminant does not match value.",
-                        )
-                    }
-                }
-                DelegateRequestType::GetSecretRequestType => {
-                    if let Some(x) = self.delegate_request_as_get_secret_request_type() {
                         ds.field("delegate_request", &x)
                     } else {
                         ds.field(

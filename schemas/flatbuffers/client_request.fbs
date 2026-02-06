@@ -82,9 +82,7 @@ table UserInputResponse {
 
 union InboundDelegateMsgType {
     common.ApplicationMessage,
-    common.GetSecretResponse,
     UserInputResponse,
-    common.GetSecretRequest,
 }
 
 table InboundDelegateMsg {
@@ -95,12 +93,6 @@ table ApplicationMessages {
     key:DelegateKey(required);
     params:[ubyte](required);
     inbound:[InboundDelegateMsg](required);
-}
-
-table GetSecretRequestType {
-    key:DelegateKey(required);
-    params:[ubyte](required);
-    get_request:common.GetSecretRequest(required);
 }
 
 table RegisterDelegate {
@@ -115,7 +107,6 @@ table UnregisterDelegate {
 
 union DelegateRequestType {
   ApplicationMessages,
-  GetSecretRequestType,
   RegisterDelegate,
   UnregisterDelegate
 }
