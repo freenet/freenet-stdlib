@@ -43,6 +43,7 @@ table Put {
   wrapped_state:[ubyte](required);
   related_contracts:RelatedContracts(required);
   subscribe:bool;
+  blocking_subscribe:bool;
 }
 
 table Update {
@@ -54,6 +55,7 @@ table Get {
   key:common.ContractKey(required);
   fetch_contract:bool;
   subscribe:bool;
+  blocking_subscribe:bool;
 }
 
 table Subscribe {
