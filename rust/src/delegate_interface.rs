@@ -24,8 +24,6 @@ use crate::{code_hash::CodeHash, prelude::Parameters};
 
 const DELEGATE_HASH_LENGTH: usize = 32;
 
-type Secret = Vec<u8>;
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Delegate<'a> {
     #[serde(borrow)]
@@ -458,9 +456,7 @@ impl AsRef<[u8]> for DelegateContext {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum InboundDelegateMsg<'a> {
     ApplicationMessage(ApplicationMessage),
-    GetSecretResponse(GetSecretResponse),
     UserResponse(#[serde(borrow)] UserInputResponse<'a>),
-    GetSecretRequest(GetSecretRequest),
     GetContractResponse(GetContractResponse),
 }
 
@@ -468,9 +464,7 @@ impl InboundDelegateMsg<'_> {
     pub fn into_owned(self) -> InboundDelegateMsg<'static> {
         match self {
             InboundDelegateMsg::ApplicationMessage(r) => InboundDelegateMsg::ApplicationMessage(r),
-            InboundDelegateMsg::GetSecretResponse(r) => InboundDelegateMsg::GetSecretResponse(r),
             InboundDelegateMsg::UserResponse(r) => InboundDelegateMsg::UserResponse(r.into_owned()),
-            InboundDelegateMsg::GetSecretRequest(r) => InboundDelegateMsg::GetSecretRequest(r),
             InboundDelegateMsg::GetContractResponse(r) => {
                 InboundDelegateMsg::GetContractResponse(r)
             }
@@ -480,9 +474,6 @@ impl InboundDelegateMsg<'_> {
     pub fn get_context(&self) -> Option<&DelegateContext> {
         match self {
             InboundDelegateMsg::ApplicationMessage(ApplicationMessage { context, .. }) => {
-                Some(context)
-            }
-            InboundDelegateMsg::GetSecretResponse(GetSecretResponse { context, .. }) => {
                 Some(context)
             }
             InboundDelegateMsg::GetContractResponse(GetContractResponse { context, .. }) => {
@@ -497,20 +488,11 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::ApplicationMessage(ApplicationMessage { context, .. }) => {
                 Some(context)
             }
-            InboundDelegateMsg::GetSecretResponse(GetSecretResponse { context, .. }) => {
-                Some(context)
-            }
             InboundDelegateMsg::GetContractResponse(GetContractResponse { context, .. }) => {
                 Some(context)
             }
             _ => None,
         }
-    }
-}
-
-impl From<GetSecretRequest> for InboundDelegateMsg<'_> {
-    fn from(value: GetSecretRequest) -> Self {
-        Self::GetSecretRequest(value)
     }
 }
 
@@ -536,15 +518,6 @@ impl<'a> TryFromFbs<&FbsInboundDelegateMsg<'a>> for InboundDelegateMsg<'a> {
                 };
                 Ok(InboundDelegateMsg::ApplicationMessage(app_msg))
             }
-            InboundDelegateMsgType::common_GetSecretResponse => {
-                let get_secret = msg.inbound_as_common_get_secret_response().unwrap();
-                let get_secret = GetSecretResponse {
-                    key: SecretsId::try_decode_fbs(&get_secret.key())?,
-                    value: get_secret.value().map(|value| value.bytes().to_vec()),
-                    context: DelegateContext::new(get_secret.delegate_context().bytes().to_vec()),
-                };
-                Ok(InboundDelegateMsg::GetSecretResponse(get_secret))
-            }
             InboundDelegateMsgType::UserInputResponse => {
                 let user_response = msg.inbound_as_user_input_response().unwrap();
                 let user_response = UserInputResponse {
@@ -556,25 +529,9 @@ impl<'a> TryFromFbs<&FbsInboundDelegateMsg<'a>> for InboundDelegateMsg<'a> {
                 };
                 Ok(InboundDelegateMsg::UserResponse(user_response))
             }
-            InboundDelegateMsgType::common_GetSecretRequest => {
-                let get_secret = msg.inbound_as_common_get_secret_request().unwrap();
-                let get_secret = GetSecretRequest {
-                    key: SecretsId::try_decode_fbs(&get_secret.key())?,
-                    context: DelegateContext::new(get_secret.delegate_context().bytes().to_vec()),
-                    processed: get_secret.processed(),
-                };
-                Ok(InboundDelegateMsg::GetSecretRequest(get_secret))
-            }
             _ => unreachable!("invalid inbound delegate message type"),
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct GetSecretResponse {
-    pub key: SecretsId,
-    pub value: Option<Secret>,
-    pub context: DelegateContext,
 }
 
 #[non_exhaustive]
@@ -635,17 +592,7 @@ pub enum OutboundDelegateMsg {
     ),
     // todo: remove when context can be accessed from the delegate environment and we pass it as reference
     ContextUpdated(DelegateContext),
-    // from the node
-    GetSecretRequest(GetSecretRequest),
-    SetSecretRequest(SetSecretRequest),
     GetContractRequest(GetContractRequest),
-    GetSecretResponse(GetSecretResponse),
-}
-
-impl From<GetSecretRequest> for OutboundDelegateMsg {
-    fn from(req: GetSecretRequest) -> Self {
-        Self::GetSecretRequest(req)
-    }
 }
 
 impl From<ApplicationMessage> for OutboundDelegateMsg {
@@ -672,21 +619,15 @@ impl OutboundDelegateMsg {
     pub fn processed(&self) -> bool {
         match self {
             OutboundDelegateMsg::ApplicationMessage(msg) => msg.processed,
-            OutboundDelegateMsg::GetSecretRequest(msg) => msg.processed,
             OutboundDelegateMsg::GetContractRequest(msg) => msg.processed,
-            OutboundDelegateMsg::SetSecretRequest(_) => false,
             OutboundDelegateMsg::RequestUserInput(_) => true,
             OutboundDelegateMsg::ContextUpdated(_) => true,
-            OutboundDelegateMsg::GetSecretResponse(_) => true,
         }
     }
 
     pub fn get_context(&self) -> Option<&DelegateContext> {
         match self {
             OutboundDelegateMsg::ApplicationMessage(ApplicationMessage { context, .. }) => {
-                Some(context)
-            }
-            OutboundDelegateMsg::GetSecretRequest(GetSecretRequest { context, .. }) => {
                 Some(context)
             }
             OutboundDelegateMsg::GetContractRequest(GetContractRequest { context, .. }) => {
@@ -701,39 +642,12 @@ impl OutboundDelegateMsg {
             OutboundDelegateMsg::ApplicationMessage(ApplicationMessage { context, .. }) => {
                 Some(context)
             }
-            OutboundDelegateMsg::GetSecretRequest(GetSecretRequest { context, .. }) => {
-                Some(context)
-            }
             OutboundDelegateMsg::GetContractRequest(GetContractRequest { context, .. }) => {
                 Some(context)
             }
             _ => None,
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct GetSecretRequest {
-    pub key: SecretsId,
-    pub context: DelegateContext,
-    pub processed: bool,
-}
-
-impl GetSecretRequest {
-    pub fn new(key: SecretsId) -> Self {
-        Self {
-            key,
-            context: Default::default(),
-            processed: false,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SetSecretRequest {
-    pub key: SecretsId,
-    /// Sets or unsets (if none) a value associated with the key.
-    pub value: Option<Secret>,
 }
 
 /// Request to get contract state from within a delegate.

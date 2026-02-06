@@ -11,16 +11,13 @@ use crate::generated::client_request::{
     ContractRequestType, DelegateRequest as FbsDelegateRequest, DelegateRequestType,
 };
 
-use crate::delegate_interface::DelegateContext;
 use crate::generated::common::{
     ApplicationMessage as FbsApplicationMessage, ApplicationMessageArgs, ContractCode,
     ContractCodeArgs, ContractContainer as FbsContractContainer, ContractContainerArgs,
     ContractInstanceId as FbsContractInstanceId, ContractInstanceIdArgs,
     ContractKey as FbsContractKey, ContractKeyArgs, ContractType, DeltaUpdate, DeltaUpdateArgs,
-    GetSecretRequest as FbsGetSecretRequest, GetSecretRequestArgs,
-    GetSecretResponse as FbsGetSecretResponse, GetSecretResponseArgs, RelatedDeltaUpdate,
-    RelatedDeltaUpdateArgs, RelatedStateAndDeltaUpdate, RelatedStateAndDeltaUpdateArgs,
-    RelatedStateUpdate, RelatedStateUpdateArgs, SecretsId as FbsSecretsId, SecretsIdArgs,
+    RelatedDeltaUpdate, RelatedDeltaUpdateArgs, RelatedStateAndDeltaUpdate,
+    RelatedStateAndDeltaUpdateArgs, RelatedStateUpdate, RelatedStateUpdateArgs,
     StateAndDeltaUpdate, StateAndDeltaUpdateArgs, StateUpdate, StateUpdateArgs,
     UpdateData as FbsUpdateData, UpdateDataArgs, UpdateDataType, WasmContractV1,
     WasmContractV1Args,
@@ -35,7 +32,6 @@ use crate::generated::host_response::{
     NotFoundArgs, Ok as FbsOk, OkArgs, OutboundDelegateMsg as FbsOutboundDelegateMsg,
     OutboundDelegateMsgArgs, OutboundDelegateMsgType, PutResponse as FbsPutResponse,
     PutResponseArgs, RequestUserInput as FbsRequestUserInput, RequestUserInputArgs,
-    SetSecretRequest as FbsSetSecretRequest, SetSecretRequestArgs,
     UpdateNotification as FbsUpdateNotification, UpdateNotificationArgs,
     UpdateResponse as FbsUpdateResponse, UpdateResponseArgs,
 };
@@ -47,8 +43,8 @@ use crate::prelude::UpdateData::{
 use crate::{
     delegate_interface::{DelegateKey, InboundDelegateMsg, OutboundDelegateMsg},
     prelude::{
-        ContractInstanceId, ContractKey, DelegateContainer, GetSecretRequest, Parameters,
-        RelatedContracts, SecretsId, StateSummary, UpdateData, WrappedState,
+        ContractInstanceId, ContractKey, DelegateContainer, Parameters, RelatedContracts,
+        SecretsId, StateSummary, UpdateData, WrappedState,
     },
     versioning::ContractContainer,
 };
@@ -539,12 +535,6 @@ pub enum DelegateRequest<'a> {
         #[serde(borrow)]
         inbound: Vec<InboundDelegateMsg<'a>>,
     },
-    GetSecretRequest {
-        key: DelegateKey,
-        #[serde(borrow)]
-        params: Parameters<'a>,
-        get_request: GetSecretRequest,
-    },
     RegisterDelegate {
         delegate: DelegateContainer,
         cipher: [u8; 32],
@@ -575,15 +565,6 @@ impl DelegateRequest<'_> {
                 params: params.into_owned(),
                 inbound: inbound.into_iter().map(|e| e.into_owned()).collect(),
             },
-            DelegateRequest::GetSecretRequest {
-                key,
-                get_request,
-                params,
-            } => DelegateRequest::GetSecretRequest {
-                key,
-                get_request,
-                params: params.into_owned(),
-            },
             DelegateRequest::RegisterDelegate {
                 delegate,
                 cipher,
@@ -600,7 +581,6 @@ impl DelegateRequest<'_> {
     pub fn key(&self) -> &DelegateKey {
         match self {
             DelegateRequest::ApplicationMessages { key, .. } => key,
-            DelegateRequest::GetSecretRequest { key, .. } => key,
             DelegateRequest::RegisterDelegate { delegate, .. } => delegate.key(),
             DelegateRequest::UnregisterDelegate(key) => key,
         }
@@ -634,34 +614,25 @@ impl Display for ClientRequest<'_> {
                     write!(f, "ContractRequest::Subscribe for `{key}`")
                 }
             },
-            ClientRequest::DelegateOp(op) => {
-                match op {
-                    DelegateRequest::ApplicationMessages { key, inbound, .. } => {
-                        write!(
-                            f,
-                            "DelegateRequest::ApplicationMessages for `{key}` with {} messages",
-                            inbound.len()
-                        )
-                    }
-                    DelegateRequest::GetSecretRequest {
-                        get_request: GetSecretRequest { key: secret_id, .. },
-                        key,
-                        ..
-                    } => {
-                        write!(f, "DelegateRequest::GetSecretRequest secret_id `{secret_id}` for key `{key}`")
-                    }
-                    DelegateRequest::RegisterDelegate { delegate, .. } => {
-                        write!(
-                            f,
-                            "DelegateRequest::RegisterDelegate for delegate.key()=`{}`",
-                            delegate.key()
-                        )
-                    }
-                    DelegateRequest::UnregisterDelegate(key) => {
-                        write!(f, "DelegateRequest::UnregisterDelegate for key `{key}`")
-                    }
+            ClientRequest::DelegateOp(op) => match op {
+                DelegateRequest::ApplicationMessages { key, inbound, .. } => {
+                    write!(
+                        f,
+                        "DelegateRequest::ApplicationMessages for `{key}` with {} messages",
+                        inbound.len()
+                    )
                 }
-            }
+                DelegateRequest::RegisterDelegate { delegate, .. } => {
+                    write!(
+                        f,
+                        "DelegateRequest::RegisterDelegate for delegate.key()=`{}`",
+                        delegate.key()
+                    )
+                }
+                DelegateRequest::UnregisterDelegate(key) => {
+                    write!(f, "DelegateRequest::UnregisterDelegate for key `{key}`")
+                }
+            },
             ClientRequest::Disconnect { .. } => write!(f, "client disconnected"),
             ClientRequest::Authenticate { .. } => write!(f, "authenticate"),
             ClientRequest::NodeQueries(query) => write!(f, "node queries: {:?}", query),
@@ -688,25 +659,6 @@ impl<'a> TryFromFbs<&FbsDelegateRequest<'a>> for DelegateRequest<'a> {
                         key,
                         params,
                         inbound,
-                    }
-                }
-                DelegateRequestType::GetSecretRequestType => {
-                    let get_secret = request
-                        .delegate_request_as_get_secret_request_type()
-                        .unwrap();
-                    let key = DelegateKey::try_decode_fbs(&get_secret.key())?;
-                    let params = Parameters::from(get_secret.params().bytes().to_vec());
-                    let get_request = GetSecretRequest {
-                        key: SecretsId::try_decode_fbs(&get_secret.get_request().key())?,
-                        context: DelegateContext::new(
-                            get_secret.get_request().delegate_context().bytes().to_vec(),
-                        ),
-                        processed: get_secret.get_request().processed(),
-                    };
-                    DelegateRequest::GetSecretRequest {
-                        key,
-                        params,
-                        get_request,
                     }
                 }
                 DelegateRequestType::RegisterDelegate => {
@@ -1489,101 +1441,6 @@ impl HostResponse {
                             &OutboundDelegateMsgArgs {
                                 inbound_type: OutboundDelegateMsgType::ContextUpdated,
                                 inbound: Some(context_offset.as_union_value()),
-                            },
-                        );
-                        messages.push(msg);
-                    }
-                    OutboundDelegateMsg::GetSecretRequest(request) => {
-                        let secret_key_data = builder.create_vector(request.key.key());
-                        let secret_hash_data = builder.create_vector(request.key.hash());
-                        let secret_id_offset = FbsSecretsId::create(
-                            &mut builder,
-                            &SecretsIdArgs {
-                                key: Some(secret_key_data),
-                                hash: Some(secret_hash_data),
-                            },
-                        );
-
-                        let delegate_context_data = builder.create_vector(request.context.as_ref());
-                        let request_offset = FbsGetSecretRequest::create(
-                            &mut builder,
-                            &GetSecretRequestArgs {
-                                key: Some(secret_id_offset),
-                                delegate_context: Some(delegate_context_data),
-                                processed: request.processed,
-                            },
-                        );
-                        let msg = FbsOutboundDelegateMsg::create(
-                            &mut builder,
-                            &OutboundDelegateMsgArgs {
-                                inbound_type: OutboundDelegateMsgType::common_GetSecretRequest,
-                                inbound: Some(request_offset.as_union_value()),
-                            },
-                        );
-                        messages.push(msg);
-                    }
-                    OutboundDelegateMsg::SetSecretRequest(request) => {
-                        let secret_key_data = builder.create_vector(request.key.key());
-                        let secret_hash_data = builder.create_vector(request.key.hash());
-                        let secret_id_offset = FbsSecretsId::create(
-                            &mut builder,
-                            &SecretsIdArgs {
-                                key: Some(secret_key_data),
-                                hash: Some(secret_hash_data),
-                            },
-                        );
-
-                        let value_data = request
-                            .value
-                            .clone()
-                            .map(|value| builder.create_vector(value.as_slice()));
-                        let request_offset = FbsSetSecretRequest::create(
-                            &mut builder,
-                            &SetSecretRequestArgs {
-                                key: Some(secret_id_offset),
-                                value: value_data,
-                            },
-                        );
-                        let msg = FbsOutboundDelegateMsg::create(
-                            &mut builder,
-                            &OutboundDelegateMsgArgs {
-                                inbound_type: OutboundDelegateMsgType::SetSecretRequest,
-                                inbound: Some(request_offset.as_union_value()),
-                            },
-                        );
-                        messages.push(msg);
-                    }
-                    OutboundDelegateMsg::GetSecretResponse(response) => {
-                        let secret_key_data = builder.create_vector(response.key.key());
-                        let secret_hash_data = builder.create_vector(response.key.hash());
-                        let secret_id_offset = FbsSecretsId::create(
-                            &mut builder,
-                            &SecretsIdArgs {
-                                key: Some(secret_key_data),
-                                hash: Some(secret_hash_data),
-                            },
-                        );
-
-                        let value_data = response
-                            .value
-                            .clone()
-                            .map(|value| builder.create_vector(value.as_slice()));
-
-                        let delegate_context_data =
-                            builder.create_vector(response.context.as_ref());
-                        let response_offset = FbsGetSecretResponse::create(
-                            &mut builder,
-                            &GetSecretResponseArgs {
-                                key: Some(secret_id_offset),
-                                value: value_data,
-                                delegate_context: Some(delegate_context_data),
-                            },
-                        );
-                        let msg = FbsOutboundDelegateMsg::create(
-                            &mut builder,
-                            &OutboundDelegateMsgArgs {
-                                inbound_type: OutboundDelegateMsgType::common_GetSecretResponse,
-                                inbound: Some(response_offset.as_union_value()),
                             },
                         );
                         messages.push(msg);

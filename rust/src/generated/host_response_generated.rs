@@ -130,20 +130,17 @@ pub mod host_response {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_OUTBOUND_DELEGATE_MSG_TYPE: u8 = 6;
+    pub const ENUM_MAX_OUTBOUND_DELEGATE_MSG_TYPE: u8 = 3;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_OUTBOUND_DELEGATE_MSG_TYPE: [OutboundDelegateMsgType; 7] = [
+    pub const ENUM_VALUES_OUTBOUND_DELEGATE_MSG_TYPE: [OutboundDelegateMsgType; 4] = [
         OutboundDelegateMsgType::NONE,
         OutboundDelegateMsgType::common_ApplicationMessage,
         OutboundDelegateMsgType::RequestUserInput,
         OutboundDelegateMsgType::ContextUpdated,
-        OutboundDelegateMsgType::common_GetSecretRequest,
-        OutboundDelegateMsgType::SetSecretRequest,
-        OutboundDelegateMsgType::common_GetSecretResponse,
     ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -155,20 +152,14 @@ pub mod host_response {
         pub const common_ApplicationMessage: Self = Self(1);
         pub const RequestUserInput: Self = Self(2);
         pub const ContextUpdated: Self = Self(3);
-        pub const common_GetSecretRequest: Self = Self(4);
-        pub const SetSecretRequest: Self = Self(5);
-        pub const common_GetSecretResponse: Self = Self(6);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 6;
+        pub const ENUM_MAX: u8 = 3;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::common_ApplicationMessage,
             Self::RequestUserInput,
             Self::ContextUpdated,
-            Self::common_GetSecretRequest,
-            Self::SetSecretRequest,
-            Self::common_GetSecretResponse,
         ];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
@@ -177,9 +168,6 @@ pub mod host_response {
                 Self::common_ApplicationMessage => Some("common_ApplicationMessage"),
                 Self::RequestUserInput => Some("RequestUserInput"),
                 Self::ContextUpdated => Some("ContextUpdated"),
-                Self::common_GetSecretRequest => Some("common_GetSecretRequest"),
-                Self::SetSecretRequest => Some("SetSecretRequest"),
-                Self::common_GetSecretResponse => Some("common_GetSecretResponse"),
                 _ => None,
             }
         }
@@ -2178,164 +2166,6 @@ pub mod host_response {
             ds.finish()
         }
     }
-    pub enum SetSecretRequestOffset {}
-    #[derive(Copy, Clone, PartialEq)]
-
-    pub struct SetSecretRequest<'a> {
-        pub _tab: ::flatbuffers::Table<'a>,
-    }
-
-    impl<'a> ::flatbuffers::Follow<'a> for SetSecretRequest<'a> {
-        type Inner = SetSecretRequest<'a>;
-        #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self {
-                _tab: unsafe { ::flatbuffers::Table::new(buf, loc) },
-            }
-        }
-    }
-
-    impl<'a> SetSecretRequest<'a> {
-        pub const VT_KEY: ::flatbuffers::VOffsetT = 4;
-        pub const VT_VALUE: ::flatbuffers::VOffsetT = 6;
-
-        #[inline]
-        pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
-            SetSecretRequest { _tab: table }
-        }
-        #[allow(unused_mut)]
-        pub fn create<
-            'bldr: 'args,
-            'args: 'mut_bldr,
-            'mut_bldr,
-            A: ::flatbuffers::Allocator + 'bldr,
-        >(
-            _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args SetSecretRequestArgs<'args>,
-        ) -> ::flatbuffers::WIPOffset<SetSecretRequest<'bldr>> {
-            let mut builder = SetSecretRequestBuilder::new(_fbb);
-            if let Some(x) = args.value {
-                builder.add_value(x);
-            }
-            if let Some(x) = args.key {
-                builder.add_key(x);
-            }
-            builder.finish()
-        }
-
-        #[inline]
-        pub fn key(&self) -> super::common::SecretsId<'a> {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<::flatbuffers::ForwardsUOffset<super::common::SecretsId>>(
-                        SetSecretRequest::VT_KEY,
-                        None,
-                    )
-                    .unwrap()
-            }
-        }
-        #[inline]
-        pub fn value(&self) -> ::flatbuffers::Vector<'a, u8> {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, u8>>>(
-                        SetSecretRequest::VT_VALUE,
-                        None,
-                    )
-                    .unwrap()
-            }
-        }
-    }
-
-    impl ::flatbuffers::Verifiable for SetSecretRequest<'_> {
-        #[inline]
-        fn run_verifier(
-            v: &mut ::flatbuffers::Verifier,
-            pos: usize,
-        ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
-            v.visit_table(pos)?
-                .visit_field::<::flatbuffers::ForwardsUOffset<super::common::SecretsId>>(
-                    "key",
-                    Self::VT_KEY,
-                    true,
-                )?
-                .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, u8>>>(
-                    "value",
-                    Self::VT_VALUE,
-                    true,
-                )?
-                .finish();
-            Ok(())
-        }
-    }
-    pub struct SetSecretRequestArgs<'a> {
-        pub key: Option<::flatbuffers::WIPOffset<super::common::SecretsId<'a>>>,
-        pub value: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, u8>>>,
-    }
-    impl<'a> Default for SetSecretRequestArgs<'a> {
-        #[inline]
-        fn default() -> Self {
-            SetSecretRequestArgs {
-                key: None,   // required field
-                value: None, // required field
-            }
-        }
-    }
-
-    pub struct SetSecretRequestBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
-        fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
-        start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
-    }
-    impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> SetSecretRequestBuilder<'a, 'b, A> {
-        #[inline]
-        pub fn add_key(&mut self, key: ::flatbuffers::WIPOffset<super::common::SecretsId<'b>>) {
-            self.fbb_
-                .push_slot_always::<::flatbuffers::WIPOffset<super::common::SecretsId>>(
-                    SetSecretRequest::VT_KEY,
-                    key,
-                );
-        }
-        #[inline]
-        pub fn add_value(
-            &mut self,
-            value: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b, u8>>,
-        ) {
-            self.fbb_
-                .push_slot_always::<::flatbuffers::WIPOffset<_>>(SetSecretRequest::VT_VALUE, value);
-        }
-        #[inline]
-        pub fn new(
-            _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
-        ) -> SetSecretRequestBuilder<'a, 'b, A> {
-            let start = _fbb.start_table();
-            SetSecretRequestBuilder {
-                fbb_: _fbb,
-                start_: start,
-            }
-        }
-        #[inline]
-        pub fn finish(self) -> ::flatbuffers::WIPOffset<SetSecretRequest<'a>> {
-            let o = self.fbb_.end_table(self.start_);
-            self.fbb_.required(o, SetSecretRequest::VT_KEY, "key");
-            self.fbb_.required(o, SetSecretRequest::VT_VALUE, "value");
-            ::flatbuffers::WIPOffset::new(o.value())
-        }
-    }
-
-    impl ::core::fmt::Debug for SetSecretRequest<'_> {
-        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-            let mut ds = f.debug_struct("SetSecretRequest");
-            ds.field("key", &self.key());
-            ds.field("value", &self.value());
-            ds.finish()
-        }
-    }
     pub enum OutboundDelegateMsgOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -2450,52 +2280,6 @@ pub mod host_response {
                 None
             }
         }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn inbound_as_common_get_secret_request(
-            &self,
-        ) -> Option<super::common::GetSecretRequest<'a>> {
-            if self.inbound_type() == OutboundDelegateMsgType::common_GetSecretRequest {
-                let u = self.inbound();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { super::common::GetSecretRequest::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn inbound_as_set_secret_request(&self) -> Option<SetSecretRequest<'a>> {
-            if self.inbound_type() == OutboundDelegateMsgType::SetSecretRequest {
-                let u = self.inbound();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { SetSecretRequest::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn inbound_as_common_get_secret_response(
-            &self,
-        ) -> Option<super::common::GetSecretResponse<'a>> {
-            if self.inbound_type() == OutboundDelegateMsgType::common_GetSecretResponse {
-                let u = self.inbound();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { super::common::GetSecretResponse::init_from_table(u) })
-            } else {
-                None
-            }
-        }
     }
 
     impl ::flatbuffers::Verifiable for OutboundDelegateMsg<'_> {
@@ -2510,9 +2294,6 @@ pub mod host_response {
           OutboundDelegateMsgType::common_ApplicationMessage => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<super::common::ApplicationMessage>>("OutboundDelegateMsgType::common_ApplicationMessage", pos),
           OutboundDelegateMsgType::RequestUserInput => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<RequestUserInput>>("OutboundDelegateMsgType::RequestUserInput", pos),
           OutboundDelegateMsgType::ContextUpdated => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<ContextUpdated>>("OutboundDelegateMsgType::ContextUpdated", pos),
-          OutboundDelegateMsgType::common_GetSecretRequest => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<super::common::GetSecretRequest>>("OutboundDelegateMsgType::common_GetSecretRequest", pos),
-          OutboundDelegateMsgType::SetSecretRequest => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<SetSecretRequest>>("OutboundDelegateMsgType::SetSecretRequest", pos),
-          OutboundDelegateMsgType::common_GetSecretResponse => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<super::common::GetSecretResponse>>("OutboundDelegateMsgType::common_GetSecretResponse", pos),
           _ => Ok(()),
         }
      })?
@@ -2603,36 +2384,6 @@ pub mod host_response {
                 }
                 OutboundDelegateMsgType::ContextUpdated => {
                     if let Some(x) = self.inbound_as_context_updated() {
-                        ds.field("inbound", &x)
-                    } else {
-                        ds.field(
-                            "inbound",
-                            &"InvalidFlatbuffer: Union discriminant does not match value.",
-                        )
-                    }
-                }
-                OutboundDelegateMsgType::common_GetSecretRequest => {
-                    if let Some(x) = self.inbound_as_common_get_secret_request() {
-                        ds.field("inbound", &x)
-                    } else {
-                        ds.field(
-                            "inbound",
-                            &"InvalidFlatbuffer: Union discriminant does not match value.",
-                        )
-                    }
-                }
-                OutboundDelegateMsgType::SetSecretRequest => {
-                    if let Some(x) = self.inbound_as_set_secret_request() {
-                        ds.field("inbound", &x)
-                    } else {
-                        ds.field(
-                            "inbound",
-                            &"InvalidFlatbuffer: Union discriminant does not match value.",
-                        )
-                    }
-                }
-                OutboundDelegateMsgType::common_GetSecretResponse => {
-                    if let Some(x) = self.inbound_as_common_get_secret_response() {
                         ds.field("inbound", &x)
                     } else {
                         ds.field(
