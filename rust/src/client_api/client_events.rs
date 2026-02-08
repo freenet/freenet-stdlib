@@ -1452,6 +1452,23 @@ impl HostResponse {
                             "GetContractRequest reached client serialization - this is a bug"
                         );
                     }
+                    OutboundDelegateMsg::PutContractRequest(_) => {
+                        // PutContractRequest should be handled by the executor and never
+                        // reach client serialization. If we get here, it's a bug.
+                        tracing::error!(
+                            "PutContractRequest reached client serialization - this is a bug"
+                        );
+                    }
+                    OutboundDelegateMsg::UpdateContractRequest(_) => {
+                        tracing::error!(
+                            "UpdateContractRequest reached client serialization - this is a bug"
+                        );
+                    }
+                    OutboundDelegateMsg::SubscribeContractRequest(_) => {
+                        tracing::error!(
+                            "SubscribeContractRequest reached client serialization - this is a bug"
+                        );
+                    }
                 });
                 let messages_offset = builder.create_vector(&messages);
                 let delegate_response_offset = FbsDelegateResponse::create(

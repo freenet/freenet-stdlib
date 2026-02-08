@@ -19,7 +19,9 @@ use crate::generated::client_request::{
 use crate::common_generated::common::SecretsId as FbsSecretsId;
 
 use crate::client_api::{TryFromFbs, WsApiError};
+use crate::contract_interface::{RelatedContracts, UpdateData};
 use crate::prelude::{ContractInstanceId, WrappedState, CONTRACT_KEY_SIZE};
+use crate::versioning::ContractContainer;
 use crate::{code_hash::CodeHash, prelude::Parameters};
 
 const DELEGATE_HASH_LENGTH: usize = 32;
@@ -458,6 +460,9 @@ pub enum InboundDelegateMsg<'a> {
     ApplicationMessage(ApplicationMessage),
     UserResponse(#[serde(borrow)] UserInputResponse<'a>),
     GetContractResponse(GetContractResponse),
+    PutContractResponse(PutContractResponse),
+    UpdateContractResponse(UpdateContractResponse),
+    SubscribeContractResponse(SubscribeContractResponse),
 }
 
 impl InboundDelegateMsg<'_> {
@@ -467,6 +472,15 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::UserResponse(r) => InboundDelegateMsg::UserResponse(r.into_owned()),
             InboundDelegateMsg::GetContractResponse(r) => {
                 InboundDelegateMsg::GetContractResponse(r)
+            }
+            InboundDelegateMsg::PutContractResponse(r) => {
+                InboundDelegateMsg::PutContractResponse(r)
+            }
+            InboundDelegateMsg::UpdateContractResponse(r) => {
+                InboundDelegateMsg::UpdateContractResponse(r)
+            }
+            InboundDelegateMsg::SubscribeContractResponse(r) => {
+                InboundDelegateMsg::SubscribeContractResponse(r)
             }
         }
     }
@@ -479,6 +493,16 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::GetContractResponse(GetContractResponse { context, .. }) => {
                 Some(context)
             }
+            InboundDelegateMsg::PutContractResponse(PutContractResponse { context, .. }) => {
+                Some(context)
+            }
+            InboundDelegateMsg::UpdateContractResponse(UpdateContractResponse {
+                context, ..
+            }) => Some(context),
+            InboundDelegateMsg::SubscribeContractResponse(SubscribeContractResponse {
+                context,
+                ..
+            }) => Some(context),
             _ => None,
         }
     }
@@ -491,6 +515,16 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::GetContractResponse(GetContractResponse { context, .. }) => {
                 Some(context)
             }
+            InboundDelegateMsg::PutContractResponse(PutContractResponse { context, .. }) => {
+                Some(context)
+            }
+            InboundDelegateMsg::UpdateContractResponse(UpdateContractResponse {
+                context, ..
+            }) => Some(context),
+            InboundDelegateMsg::SubscribeContractResponse(SubscribeContractResponse {
+                context,
+                ..
+            }) => Some(context),
             _ => None,
         }
     }
@@ -593,6 +627,9 @@ pub enum OutboundDelegateMsg {
     // todo: remove when context can be accessed from the delegate environment and we pass it as reference
     ContextUpdated(DelegateContext),
     GetContractRequest(GetContractRequest),
+    PutContractRequest(PutContractRequest),
+    UpdateContractRequest(UpdateContractRequest),
+    SubscribeContractRequest(SubscribeContractRequest),
 }
 
 impl From<ApplicationMessage> for OutboundDelegateMsg {
@@ -604,6 +641,24 @@ impl From<ApplicationMessage> for OutboundDelegateMsg {
 impl From<GetContractRequest> for OutboundDelegateMsg {
     fn from(req: GetContractRequest) -> Self {
         Self::GetContractRequest(req)
+    }
+}
+
+impl From<PutContractRequest> for OutboundDelegateMsg {
+    fn from(req: PutContractRequest) -> Self {
+        Self::PutContractRequest(req)
+    }
+}
+
+impl From<UpdateContractRequest> for OutboundDelegateMsg {
+    fn from(req: UpdateContractRequest) -> Self {
+        Self::UpdateContractRequest(req)
+    }
+}
+
+impl From<SubscribeContractRequest> for OutboundDelegateMsg {
+    fn from(req: SubscribeContractRequest) -> Self {
+        Self::SubscribeContractRequest(req)
     }
 }
 
@@ -620,6 +675,9 @@ impl OutboundDelegateMsg {
         match self {
             OutboundDelegateMsg::ApplicationMessage(msg) => msg.processed,
             OutboundDelegateMsg::GetContractRequest(msg) => msg.processed,
+            OutboundDelegateMsg::PutContractRequest(msg) => msg.processed,
+            OutboundDelegateMsg::UpdateContractRequest(msg) => msg.processed,
+            OutboundDelegateMsg::SubscribeContractRequest(msg) => msg.processed,
             OutboundDelegateMsg::RequestUserInput(_) => true,
             OutboundDelegateMsg::ContextUpdated(_) => true,
         }
@@ -633,6 +691,16 @@ impl OutboundDelegateMsg {
             OutboundDelegateMsg::GetContractRequest(GetContractRequest { context, .. }) => {
                 Some(context)
             }
+            OutboundDelegateMsg::PutContractRequest(PutContractRequest { context, .. }) => {
+                Some(context)
+            }
+            OutboundDelegateMsg::UpdateContractRequest(UpdateContractRequest {
+                context, ..
+            }) => Some(context),
+            OutboundDelegateMsg::SubscribeContractRequest(SubscribeContractRequest {
+                context,
+                ..
+            }) => Some(context),
             _ => None,
         }
     }
@@ -645,6 +713,16 @@ impl OutboundDelegateMsg {
             OutboundDelegateMsg::GetContractRequest(GetContractRequest { context, .. }) => {
                 Some(context)
             }
+            OutboundDelegateMsg::PutContractRequest(PutContractRequest { context, .. }) => {
+                Some(context)
+            }
+            OutboundDelegateMsg::UpdateContractRequest(UpdateContractRequest {
+                context, ..
+            }) => Some(context),
+            OutboundDelegateMsg::SubscribeContractRequest(SubscribeContractRequest {
+                context,
+                ..
+            }) => Some(context),
             _ => None,
         }
     }
@@ -674,6 +752,129 @@ pub struct GetContractResponse {
     pub contract_id: ContractInstanceId,
     /// The contract state, or None if the contract was not found locally.
     pub state: Option<WrappedState>,
+    pub context: DelegateContext,
+}
+
+/// Request to store a new contract from within a delegate.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PutContractRequest {
+    /// The contract code and parameters.
+    pub contract: ContractContainer,
+    /// The initial state for the contract.
+    pub state: WrappedState,
+    /// Related contracts that this contract depends on.
+    #[serde(deserialize_with = "RelatedContracts::deser_related_contracts")]
+    pub related_contracts: RelatedContracts<'static>,
+    /// Context for the delegate.
+    pub context: DelegateContext,
+    /// Whether this request has been processed.
+    pub processed: bool,
+}
+
+impl PutContractRequest {
+    pub fn new(
+        contract: ContractContainer,
+        state: WrappedState,
+        related_contracts: RelatedContracts<'static>,
+    ) -> Self {
+        Self {
+            contract,
+            state,
+            related_contracts,
+            context: Default::default(),
+            processed: false,
+        }
+    }
+}
+
+/// Response after attempting to store a contract from a delegate.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PutContractResponse {
+    /// The ID of the contract that was (attempted to be) stored.
+    pub contract_id: ContractInstanceId,
+    /// Success (Ok) or error message (Err).
+    pub result: Result<(), String>,
+    /// Context for the delegate.
+    pub context: DelegateContext,
+}
+
+/// Request to update an existing contract's state from within a delegate.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UpdateContractRequest {
+    /// The contract to update.
+    pub contract_id: ContractInstanceId,
+    /// The update to apply (full state or delta).
+    #[serde(deserialize_with = "UpdateContractRequest::deser_update_data")]
+    pub update: UpdateData<'static>,
+    /// Context for the delegate.
+    pub context: DelegateContext,
+    /// Whether this request has been processed.
+    pub processed: bool,
+}
+
+impl UpdateContractRequest {
+    pub fn new(contract_id: ContractInstanceId, update: UpdateData<'static>) -> Self {
+        Self {
+            contract_id,
+            update,
+            context: Default::default(),
+            processed: false,
+        }
+    }
+
+    fn deser_update_data<'de, D>(deser: D) -> Result<UpdateData<'static>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = <UpdateData<'de> as Deserialize>::deserialize(deser)?;
+        Ok(value.into_owned())
+    }
+}
+
+/// Response after attempting to update a contract from a delegate.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UpdateContractResponse {
+    /// The contract that was updated.
+    pub contract_id: ContractInstanceId,
+    /// Success (Ok) or error message (Err).
+    pub result: Result<(), String>,
+    /// Context for the delegate.
+    pub context: DelegateContext,
+}
+
+/// Request to subscribe to a contract's state changes from within a delegate.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SubscribeContractRequest {
+    /// The contract to subscribe to.
+    pub contract_id: ContractInstanceId,
+    /// Context for the delegate.
+    pub context: DelegateContext,
+    /// Whether this request has been processed.
+    pub processed: bool,
+}
+
+impl SubscribeContractRequest {
+    pub fn new(contract_id: ContractInstanceId) -> Self {
+        Self {
+            contract_id,
+            context: Default::default(),
+            processed: false,
+        }
+    }
+}
+
+/// Response after attempting to subscribe to a contract from a delegate.
+///
+/// Note: This confirms subscription registration only. Actual notification
+/// delivery to the delegate when the contract updates is not yet implemented
+/// and will require the async delegate v2 API.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SubscribeContractResponse {
+    /// The contract subscribed to.
+    pub contract_id: ContractInstanceId,
+    /// Success (Ok) or error message (Err).
+    pub result: Result<(), String>,
+    /// Context for the delegate.
     pub context: DelegateContext,
 }
 

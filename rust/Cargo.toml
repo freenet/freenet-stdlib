@@ -14,7 +14,7 @@ bincode = "1"
 byteorder = "1"
 blake3 = { version = "1", features = ["std", "traits-preview"] }
 bs58 = "0.5"
-chrono = { version = "0.4", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["serde"] }
 flatbuffers = "24.3"
 futures = { version = "0.3", default-features = false }
 semver = { version = "1", default-features = false }
