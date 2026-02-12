@@ -760,6 +760,9 @@ pub struct ContractState {
     pub subscribers: u32,
     /// Peer IDs of nodes that are subscribed to this contract
     pub subscriber_peer_ids: Vec<String>,
+    /// Size of the contract state in bytes
+    #[serde(default)]
+    pub size_bytes: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
