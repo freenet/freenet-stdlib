@@ -1,7 +1,7 @@
 //! Host function API for delegates.
 //!
-//! This module provides synchronous access to delegate context and secrets
-//! via host functions, eliminating the need for message round-trips.
+//! This module provides synchronous access to delegate context, secrets, and
+//! contract state via host functions, eliminating the need for message round-trips.
 //!
 //! # Example
 //!
@@ -26,18 +26,29 @@
 //!         }
 //!         ctx.set_secret(b"new_secret", b"value");
 //!
+//!         // V2: Direct contract access (no round-trips!)
+//!         let contract_id = [0u8; 32]; // your contract instance ID
+//!         if let Some(state) = ctx.get_contract_state(&contract_id) {
+//!             // process state...
+//!         }
+//!         ctx.put_contract_state(&contract_id, b"new state");
+//!
 //!         Ok(vec![])
 //!     }
 //! }
 //! ```
 //!
-//! # Context vs Secrets
+//! # Context vs Secrets vs Contracts
 //!
 //! - **Context** (`read`/`write`): Temporary state within a single message batch.
 //!   Reset between separate runtime calls. Use for intermediate processing state.
 //!
 //! - **Secrets** (`get_secret`/`set_secret`): Persistent encrypted storage.
 //!   Survives across all delegate invocations. Use for private keys, tokens, etc.
+//!
+//! - **Contracts** (`get_contract_state`/`put_contract_state`/`update_contract_state`/
+//!   `subscribe_contract`): V2 host functions for direct contract state access.
+//!   Synchronous local reads/writes — no request/response round-trips.
 //!
 //! # Error Codes
 //!
@@ -52,6 +63,9 @@
 //! | -4   | Invalid parameter (e.g., negative length) |
 //! | -5   | Context too large (exceeds i32::MAX) |
 //! | -6   | Buffer too small |
+//! | -7   | Contract not found in local store |
+//! | -8   | Internal state store error |
+//! | -10  | Contract code not registered |
 //!
 //! The wrapper methods in [`DelegateCtx`] handle these error codes and present
 //! a more ergonomic API.
@@ -75,6 +89,12 @@ pub mod error_codes {
     pub const ERR_CONTEXT_TOO_LARGE: i32 = -5;
     /// Buffer too small to hold the data.
     pub const ERR_BUFFER_TOO_SMALL: i32 = -6;
+    /// Contract not found in local store.
+    pub const ERR_CONTRACT_NOT_FOUND: i32 = -7;
+    /// Internal state store error.
+    pub const ERR_STORE_ERROR: i32 = -8;
+    /// Contract code not registered in the index.
+    pub const ERR_CONTRACT_CODE_NOT_REGISTERED: i32 = -10;
 }
 
 // ============================================================================
@@ -107,15 +127,46 @@ extern "C" {
     fn __frnt__delegate__remove_secret(key_ptr: i64, key_len: i32) -> i32;
 }
 
+#[cfg(target_family = "wasm")]
+#[link(wasm_import_module = "freenet_delegate_contracts")]
+extern "C" {
+    /// Get contract state length. Returns byte count, or negative error code (i64).
+    fn __frnt__delegate__get_contract_state_len(id_ptr: i64, id_len: i32) -> i64;
+    /// Get contract state. Returns byte count written, or negative error code (i64).
+    fn __frnt__delegate__get_contract_state(
+        id_ptr: i64,
+        id_len: i32,
+        out_ptr: i64,
+        out_len: i64,
+    ) -> i64;
+    /// Put (store) contract state. Returns 0 on success, or negative error code (i64).
+    fn __frnt__delegate__put_contract_state(
+        id_ptr: i64,
+        id_len: i32,
+        state_ptr: i64,
+        state_len: i64,
+    ) -> i64;
+    /// Update contract state (requires existing state). Returns 0 on success, or negative error code (i64).
+    fn __frnt__delegate__update_contract_state(
+        id_ptr: i64,
+        id_len: i32,
+        state_ptr: i64,
+        state_len: i64,
+    ) -> i64;
+    /// Subscribe to contract updates. Returns 0 on success, or negative error code (i64).
+    fn __frnt__delegate__subscribe_contract(id_ptr: i64, id_len: i32) -> i64;
+}
+
 // ============================================================================
-// DelegateCtx - Unified handle to context and secrets
+// DelegateCtx - Unified handle to context, secrets, and contracts
 // ============================================================================
 
 /// Opaque handle to the delegate's execution environment.
 ///
-/// Provides access to both:
+/// Provides access to:
 /// - **Temporary context**: State shared within a single message batch (reset between calls)
 /// - **Persistent secrets**: Encrypted storage that survives across all invocations
+/// - **Contract state** (V2): Direct synchronous access to local contract state
 ///
 /// # Context Methods
 /// - [`read`](Self::read), [`write`](Self::write), [`len`](Self::len), [`clear`](Self::clear)
@@ -123,6 +174,12 @@ extern "C" {
 /// # Secret Methods
 /// - [`get_secret`](Self::get_secret), [`set_secret`](Self::set_secret),
 ///   [`has_secret`](Self::has_secret), [`remove_secret`](Self::remove_secret)
+///
+/// # Contract Methods (V2)
+/// - [`get_contract_state`](Self::get_contract_state),
+///   [`put_contract_state`](Self::put_contract_state),
+///   [`update_contract_state`](Self::update_contract_state),
+///   [`subscribe_contract`](Self::subscribe_contract)
 #[derive(Default)]
 #[repr(transparent)]
 pub struct DelegateCtx {
@@ -342,6 +399,126 @@ impl DelegateCtx {
         #[cfg(not(target_family = "wasm"))]
         {
             let _ = key;
+            false
+        }
+    }
+
+    // ========================================================================
+    // Contract methods (V2 — direct synchronous access)
+    // ========================================================================
+
+    /// Get contract state by instance ID.
+    ///
+    /// Returns `Some(state_bytes)` if the contract exists locally,
+    /// `None` if not found or on error.
+    ///
+    /// Uses a two-step protocol: first queries the state length, then reads
+    /// the state bytes into an allocated buffer.
+    pub fn get_contract_state(&self, instance_id: &[u8; 32]) -> Option<Vec<u8>> {
+        #[cfg(target_family = "wasm")]
+        {
+            // Step 1: Get the state length
+            let len = unsafe {
+                __frnt__delegate__get_contract_state_len(instance_id.as_ptr() as i64, 32)
+            };
+            if len < 0 {
+                return None;
+            }
+            let len = len as usize;
+            if len == 0 {
+                return Some(Vec::new());
+            }
+
+            // Step 2: Read the state bytes
+            let mut buf = vec![0u8; len];
+            let read = unsafe {
+                __frnt__delegate__get_contract_state(
+                    instance_id.as_ptr() as i64,
+                    32,
+                    buf.as_mut_ptr() as i64,
+                    buf.len() as i64,
+                )
+            };
+            if read < 0 {
+                None
+            } else {
+                buf.truncate(read as usize);
+                Some(buf)
+            }
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = instance_id;
+            None
+        }
+    }
+
+    /// Store (PUT) contract state by instance ID.
+    ///
+    /// The contract's code must already be registered in the runtime's contract
+    /// store. Returns `true` on success, `false` on error.
+    pub fn put_contract_state(&mut self, instance_id: &[u8; 32], state: &[u8]) -> bool {
+        #[cfg(target_family = "wasm")]
+        {
+            let result = unsafe {
+                __frnt__delegate__put_contract_state(
+                    instance_id.as_ptr() as i64,
+                    32,
+                    state.as_ptr() as i64,
+                    state.len() as i64,
+                )
+            };
+            result == 0
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = (instance_id, state);
+            false
+        }
+    }
+
+    /// Update contract state by instance ID.
+    ///
+    /// Like `put_contract_state`, but only succeeds if the contract already has
+    /// stored state. Returns `true` on success, `false` if no prior state exists
+    /// or on other errors.
+    pub fn update_contract_state(&mut self, instance_id: &[u8; 32], state: &[u8]) -> bool {
+        #[cfg(target_family = "wasm")]
+        {
+            let result = unsafe {
+                __frnt__delegate__update_contract_state(
+                    instance_id.as_ptr() as i64,
+                    32,
+                    state.as_ptr() as i64,
+                    state.len() as i64,
+                )
+            };
+            result == 0
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = (instance_id, state);
+            false
+        }
+    }
+
+    /// Subscribe to contract updates by instance ID.
+    ///
+    /// Registers interest in receiving notifications when the contract's state
+    /// changes. Currently validates that the contract is known and returns success;
+    /// actual notification delivery is a follow-up.
+    ///
+    /// Returns `true` on success, `false` if the contract is unknown or on error.
+    pub fn subscribe_contract(&mut self, instance_id: &[u8; 32]) -> bool {
+        #[cfg(target_family = "wasm")]
+        {
+            let result =
+                unsafe { __frnt__delegate__subscribe_contract(instance_id.as_ptr() as i64, 32) };
+            result == 0
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = instance_id;
             false
         }
     }
