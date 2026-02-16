@@ -65,6 +65,7 @@
 //! | -6   | Buffer too small |
 //! | -7   | Contract not found in local store |
 //! | -8   | Internal state store error |
+//! | -9   | WASM memory bounds violation |
 //! | -10  | Contract code not registered |
 //!
 //! The wrapper methods in [`DelegateCtx`] handle these error codes and present
@@ -93,6 +94,8 @@ pub mod error_codes {
     pub const ERR_CONTRACT_NOT_FOUND: i32 = -7;
     /// Internal state store error.
     pub const ERR_STORE_ERROR: i32 = -8;
+    /// WASM memory bounds violation (pointer/length out of range).
+    pub const ERR_MEMORY_BOUNDS: i32 = -9;
     /// Contract code not registered in the index.
     pub const ERR_CONTRACT_CODE_NOT_REGISTERED: i32 = -10;
 }
@@ -480,8 +483,9 @@ impl DelegateCtx {
     /// Update contract state by instance ID.
     ///
     /// Like `put_contract_state`, but only succeeds if the contract already has
-    /// stored state. Returns `true` on success, `false` if no prior state exists
-    /// or on other errors.
+    /// stored state. This performs a full state replacement (not a delta-based
+    /// update through the contract's `update_state` logic). Returns `true` on
+    /// success, `false` if no prior state exists or on other errors.
     pub fn update_contract_state(&mut self, instance_id: &[u8; 32], state: &[u8]) -> bool {
         #[cfg(target_family = "wasm")]
         {
