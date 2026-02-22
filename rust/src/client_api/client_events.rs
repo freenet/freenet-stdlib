@@ -129,6 +129,10 @@ pub enum ErrorKind {
     FailedOperation,
     #[error("peer should shutdown")]
     Shutdown,
+    #[error("no ring connections found")]
+    EmptyRing,
+    #[error("peer has not joined the network yet")]
+    PeerNotJoined,
 }
 
 impl Display for ClientError {
