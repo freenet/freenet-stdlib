@@ -463,6 +463,7 @@ pub enum InboundDelegateMsg<'a> {
     PutContractResponse(PutContractResponse),
     UpdateContractResponse(UpdateContractResponse),
     SubscribeContractResponse(SubscribeContractResponse),
+    ContractNotification(ContractNotification),
 }
 
 impl InboundDelegateMsg<'_> {
@@ -481,6 +482,9 @@ impl InboundDelegateMsg<'_> {
             }
             InboundDelegateMsg::SubscribeContractResponse(r) => {
                 InboundDelegateMsg::SubscribeContractResponse(r)
+            }
+            InboundDelegateMsg::ContractNotification(r) => {
+                InboundDelegateMsg::ContractNotification(r)
             }
         }
     }
@@ -503,6 +507,9 @@ impl InboundDelegateMsg<'_> {
                 context,
                 ..
             }) => Some(context),
+            InboundDelegateMsg::ContractNotification(ContractNotification { context, .. }) => {
+                Some(context)
+            }
             _ => None,
         }
     }
@@ -525,6 +532,9 @@ impl InboundDelegateMsg<'_> {
                 context,
                 ..
             }) => Some(context),
+            InboundDelegateMsg::ContractNotification(ContractNotification { context, .. }) => {
+                Some(context)
+            }
             _ => None,
         }
     }
@@ -864,16 +874,23 @@ impl SubscribeContractRequest {
 }
 
 /// Response after attempting to subscribe to a contract from a delegate.
-///
-/// Note: This confirms subscription registration only. Actual notification
-/// delivery to the delegate when the contract updates is not yet implemented
-/// and will require the async delegate v2 API.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SubscribeContractResponse {
     /// The contract subscribed to.
     pub contract_id: ContractInstanceId,
     /// Success (Ok) or error message (Err).
     pub result: Result<(), String>,
+    /// Context for the delegate.
+    pub context: DelegateContext,
+}
+
+/// Notification delivered to a delegate when a subscribed contract's state changes.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ContractNotification {
+    /// The contract whose state changed.
+    pub contract_id: ContractInstanceId,
+    /// The new state of the contract.
+    pub new_state: WrappedState,
     /// Context for the delegate.
     pub context: DelegateContext,
 }
