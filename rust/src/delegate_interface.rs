@@ -464,6 +464,7 @@ pub enum InboundDelegateMsg<'a> {
     UpdateContractResponse(UpdateContractResponse),
     SubscribeContractResponse(SubscribeContractResponse),
     ContractNotification(ContractNotification),
+    DelegateMessage(DelegateMessage),
 }
 
 impl InboundDelegateMsg<'_> {
@@ -486,6 +487,7 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::ContractNotification(r) => {
                 InboundDelegateMsg::ContractNotification(r)
             }
+            InboundDelegateMsg::DelegateMessage(r) => InboundDelegateMsg::DelegateMessage(r),
         }
     }
 
@@ -510,6 +512,7 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::ContractNotification(ContractNotification { context, .. }) => {
                 Some(context)
             }
+            InboundDelegateMsg::DelegateMessage(DelegateMessage { context, .. }) => Some(context),
             _ => None,
         }
     }
@@ -535,6 +538,7 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::ContractNotification(ContractNotification { context, .. }) => {
                 Some(context)
             }
+            InboundDelegateMsg::DelegateMessage(DelegateMessage { context, .. }) => Some(context),
             _ => None,
         }
     }
@@ -640,6 +644,7 @@ pub enum OutboundDelegateMsg {
     PutContractRequest(PutContractRequest),
     UpdateContractRequest(UpdateContractRequest),
     SubscribeContractRequest(SubscribeContractRequest),
+    SendDelegateMessage(DelegateMessage),
 }
 
 impl From<ApplicationMessage> for OutboundDelegateMsg {
@@ -672,6 +677,12 @@ impl From<SubscribeContractRequest> for OutboundDelegateMsg {
     }
 }
 
+impl From<DelegateMessage> for OutboundDelegateMsg {
+    fn from(msg: DelegateMessage) -> Self {
+        Self::SendDelegateMessage(msg)
+    }
+}
+
 impl OutboundDelegateMsg {
     fn deser_user_input_req<'de, D>(deser: D) -> Result<UserInputRequest<'static>, D::Error>
     where
@@ -688,6 +699,7 @@ impl OutboundDelegateMsg {
             OutboundDelegateMsg::PutContractRequest(msg) => msg.processed,
             OutboundDelegateMsg::UpdateContractRequest(msg) => msg.processed,
             OutboundDelegateMsg::SubscribeContractRequest(msg) => msg.processed,
+            OutboundDelegateMsg::SendDelegateMessage(msg) => msg.processed,
             OutboundDelegateMsg::RequestUserInput(_) => true,
             OutboundDelegateMsg::ContextUpdated(_) => true,
         }
@@ -711,6 +723,9 @@ impl OutboundDelegateMsg {
                 context,
                 ..
             }) => Some(context),
+            OutboundDelegateMsg::SendDelegateMessage(DelegateMessage { context, .. }) => {
+                Some(context)
+            }
             _ => None,
         }
     }
@@ -733,6 +748,9 @@ impl OutboundDelegateMsg {
                 context,
                 ..
             }) => Some(context),
+            OutboundDelegateMsg::SendDelegateMessage(DelegateMessage { context, .. }) => {
+                Some(context)
+            }
             _ => None,
         }
     }
@@ -882,6 +900,41 @@ pub struct SubscribeContractResponse {
     pub result: Result<(), String>,
     /// Context for the delegate.
     pub context: DelegateContext,
+}
+
+/// A message sent from one delegate to another.
+///
+/// Delegates can communicate with each other by emitting
+/// `OutboundDelegateMsg::SendDelegateMessage` with a `DelegateMessage` targeting
+/// another delegate. The runtime delivers it as `InboundDelegateMsg::DelegateMessage`
+/// to the target delegate's `process()` function.
+///
+/// The `sender` field is overwritten by the runtime with the actual sender's key
+/// (sender attestation), so delegates cannot spoof their identity.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DelegateMessage {
+    /// The delegate to deliver this message to.
+    pub target: DelegateKey,
+    /// The delegate that sent this message (overwritten by runtime for attestation).
+    pub sender: DelegateKey,
+    /// Arbitrary message payload.
+    pub payload: Vec<u8>,
+    /// Delegate context, carried through the processing pipeline.
+    pub context: DelegateContext,
+    /// Runtime protocol flag indicating whether this message has been delivered.
+    pub processed: bool,
+}
+
+impl DelegateMessage {
+    pub fn new(target: DelegateKey, sender: DelegateKey, payload: Vec<u8>) -> Self {
+        Self {
+            target,
+            sender,
+            payload,
+            context: DelegateContext::default(),
+            processed: false,
+        }
+    }
 }
 
 /// Notification delivered to a delegate when a subscribed contract's state changes.
