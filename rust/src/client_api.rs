@@ -22,6 +22,9 @@ mod browser;
 #[cfg(all(target_family = "wasm", feature = "net"))]
 pub use browser::*;
 
+#[cfg(feature = "net")]
+pub(crate) mod ws_streaming;
+
 pub use client_events::*;
 
 #[cfg(feature = "net")]

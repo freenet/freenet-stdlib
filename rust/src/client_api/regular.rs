@@ -145,6 +145,8 @@ async fn request_handler(
     mut response_tx: Sender<HostResult>,
     mut conn: Connection,
 ) {
+    let mut reassembly = super::ws_streaming::ChunkReassemblyBuffer::new();
+
     let error = loop {
         tokio::select! {
             req = request_rx.recv() => {
@@ -154,7 +156,7 @@ async fn request_handler(
                 }
             }
             res = conn.next() => {
-                match process_response(&mut conn, &mut response_tx, res).await {
+                match process_response(&mut conn, &mut response_tx, res, &mut reassembly).await {
                     Ok(_) => continue,
                     Err(err) => break err,
                 }
@@ -175,11 +177,23 @@ async fn process_request(
     conn: &mut Connection,
     req: Option<ClientRequest<'static>>,
 ) -> Result<(), Error> {
+    use super::ws_streaming::{self, CHUNK_THRESHOLD};
+
     let req = req.ok_or(Error::ChannelClosed)?;
     let msg = bincode::serialize(&req)
         .map_err(Into::into)
         .map_err(Error::OtherError)?;
-    conn.send(Message::Binary(msg.into())).await?;
+
+    if msg.len() > CHUNK_THRESHOLD {
+        let chunks = ws_streaming::chunk_payload(&msg);
+        for chunk in chunks {
+            conn.send(Message::Binary(chunk.into())).await?;
+        }
+    } else {
+        let wrapped = ws_streaming::wrap_complete(msg);
+        conn.send(Message::Binary(wrapped.into())).await?;
+    }
+
     if let ClientRequest::Disconnect { cause } = req {
         conn.close(cause.map(|c| CloseFrame {
             code: CloseCode::Normal,
@@ -199,18 +213,51 @@ async fn process_response(
     conn: &mut Connection,
     response_tx: &mut Sender<HostResult>,
     res: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+    reassembly: &mut super::ws_streaming::ChunkReassemblyBuffer,
 ) -> Result<(), Error> {
+    use super::ws_streaming::{self, StreamMessage};
+
     let res = res.ok_or(Error::ConnectionClosed)??;
     match res {
         Message::Text(msg) => {
-            let response: HostResult = bincode::deserialize(msg.as_bytes())?;
+            let bytes = match ws_streaming::parse_message(msg.as_bytes())
+                .map_err(|e| Error::OtherError(e.into()))?
+            {
+                StreamMessage::Complete(payload) => payload.to_vec(),
+                StreamMessage::Chunk {
+                    total_chunks,
+                    payload,
+                } => match reassembly
+                    .receive_chunk(total_chunks, payload)
+                    .map_err(|e| Error::OtherError(e.into()))?
+                {
+                    Some(complete) => complete,
+                    None => return Ok(()),
+                },
+            };
+            let response: HostResult = bincode::deserialize(&bytes)?;
             response_tx
                 .send(response)
                 .await
                 .map_err(|_| Error::ChannelClosed)?;
         }
         Message::Binary(binary) => {
-            let response: HostResult = bincode::deserialize(&binary)?;
+            let bytes = match ws_streaming::parse_message(&binary)
+                .map_err(|e| Error::OtherError(e.into()))?
+            {
+                StreamMessage::Complete(payload) => payload.to_vec(),
+                StreamMessage::Chunk {
+                    total_chunks,
+                    payload,
+                } => match reassembly
+                    .receive_chunk(total_chunks, payload)
+                    .map_err(|e| Error::OtherError(e.into()))?
+                {
+                    Some(complete) => complete,
+                    None => return Ok(()),
+                },
+            };
+            let response: HostResult = bincode::deserialize(&bytes)?;
             response_tx
                 .send(response)
                 .await
@@ -253,6 +300,8 @@ mod test {
             self,
             tx: tokio::sync::oneshot::Sender<()>,
         ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            use crate::client_api::ws_streaming;
+
             let (stream, _) =
                 tokio::time::timeout(Duration::from_millis(10), self.listener.accept()).await??;
             let mut stream = tokio_tungstenite::accept_async(stream).await?;
@@ -260,7 +309,8 @@ mod test {
             if !self.recv {
                 let res: HostResult = Ok(HostResponse::Ok);
                 let req = bincode::serialize(&res)?;
-                stream.send(Message::Binary(req.into())).await?;
+                let wrapped = ws_streaming::wrap_complete(req);
+                stream.send(Message::Binary(wrapped.into())).await?;
             }
 
             let Message::Binary(msg) = stream.next().await.ok_or_else(|| "no msg".to_owned())??
@@ -268,10 +318,103 @@ mod test {
                 return Err("wrong msg".to_owned().into());
             };
 
-            let _req: ClientRequest = bincode::deserialize(&msg)?;
+            // Unwrap the streaming envelope
+            let payload = match ws_streaming::parse_message(&msg)? {
+                ws_streaming::StreamMessage::Complete(data) => data.to_vec(),
+                ws_streaming::StreamMessage::Chunk { .. } => {
+                    return Err("unexpected chunk in test".to_owned().into());
+                }
+            };
+
+            let _req: ClientRequest = bincode::deserialize(&payload)?;
             tx.send(()).map_err(|_| "couldn't error".to_owned())?;
             Ok(())
         }
+    }
+
+    struct ChunkedServer {
+        listener: TcpListener,
+        payload_size: usize,
+    }
+
+    impl ChunkedServer {
+        async fn new(port: u16, payload_size: usize) -> Self {
+            let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+                .await
+                .unwrap();
+            ChunkedServer {
+                listener,
+                payload_size,
+            }
+        }
+
+        async fn listen(
+            self,
+            tx: tokio::sync::oneshot::Sender<()>,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            use crate::client_api::ws_streaming;
+            use crate::contract_interface::{ContractCode, ContractKey, WrappedState};
+            use crate::parameters::Parameters;
+
+            let (stream, _) =
+                tokio::time::timeout(Duration::from_millis(100), self.listener.accept()).await??;
+            let mut stream = tokio_tungstenite::accept_async(stream).await?;
+
+            let state = WrappedState::new(vec![0xAB; self.payload_size]);
+            let code = ContractCode::from(vec![1, 2, 3]);
+            let key = ContractKey::from_params_and_code(Parameters::from(vec![]), &code);
+            let res: HostResult = Ok(HostResponse::ContractResponse(
+                crate::client_api::ContractResponse::GetResponse {
+                    key,
+                    contract: None,
+                    state,
+                },
+            ));
+            let serialized = bincode::serialize(&res)?;
+
+            // Send as chunks
+            let chunks = ws_streaming::chunk_payload(&serialized);
+            assert!(chunks.len() > 1, "payload should produce multiple chunks");
+            for chunk in chunks {
+                stream.send(Message::Binary(chunk.into())).await?;
+            }
+
+            // Wait for client disconnect
+            let msg = tokio::time::timeout(Duration::from_millis(100), stream.next()).await;
+            drop(msg);
+            tx.send(()).map_err(|_| "signal failed".to_owned())?;
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_recv_chunked() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use crate::client_api::ContractResponse;
+
+        let port = PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let payload_size = 600 * 1024; // 600 KiB state → multiple chunks
+        let server = ChunkedServer::new(port, payload_size).await;
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server_result = tokio::task::spawn(server.listen(tx));
+        let (ws_conn, _) =
+            tokio_tungstenite::connect_async(format!("ws://localhost:{port}/")).await?;
+        let mut client = WebApi::start(ws_conn);
+
+        let response = client.recv().await?;
+        match response {
+            HostResponse::ContractResponse(ContractResponse::GetResponse { state, .. }) => {
+                assert_eq!(state.size(), payload_size);
+                assert!(state.as_ref().iter().all(|&b| b == 0xAB));
+            }
+            other => panic!("expected GetResponse, got {other:?}"),
+        }
+
+        client
+            .send(ClientRequest::Disconnect { cause: None })
+            .await?;
+        tokio::time::timeout(Duration::from_millis(100), rx).await??;
+        tokio::time::timeout(Duration::from_millis(100), server_result).await???;
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
