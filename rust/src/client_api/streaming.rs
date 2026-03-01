@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+use bytes::Bytes;
+
 use super::{ClientRequest, HostResponse};
 
 /// Default chunk payload size: 256 KiB.
@@ -25,40 +27,51 @@ pub const MAX_CONCURRENT_STREAMS: usize = 8;
 /// Chunks to send before yielding to the tokio runtime.
 pub const MAX_CHUNKS_PER_BATCH: usize = 32;
 
-/// Compute chunking metadata: returns (total_chunks, chunk_iterator).
-fn chunk_data(data: &[u8]) -> impl Iterator<Item = (u32, u32, &[u8])> {
+/// Zero-copy chunking: split `data` into (index, total, slice) tuples using `Bytes::slice()`.
+fn chunk_bytes(data: &Bytes) -> Vec<(u32, u32, Bytes)> {
     let total = data.len().div_ceil(CHUNK_SIZE).max(1) as u32;
-    data.chunks(CHUNK_SIZE)
-        .chain(if data.is_empty() {
-            // Yield a single empty slice for empty payloads
-            Some([].as_slice()).into_iter()
-        } else {
-            None.into_iter()
+    if data.is_empty() {
+        return vec![(0, 1, Bytes::new())];
+    }
+    (0..total as usize)
+        .map(|i| {
+            let start = i * CHUNK_SIZE;
+            let end = (start + CHUNK_SIZE).min(data.len());
+            (i as u32, total, data.slice(start..end))
         })
-        .enumerate()
-        .map(move |(i, chunk)| (i as u32, total, chunk))
+        .collect()
 }
 
 /// Split a serialized request payload into `StreamChunk` client request variants.
+///
+/// Uses `Bytes::slice()` internally for zero-copy: each chunk shares the
+/// original allocation via reference counting instead of copying.
 pub fn chunk_request(data: Vec<u8>, stream_id: u32) -> Vec<ClientRequest<'static>> {
-    chunk_data(&data)
+    let data = Bytes::from(data);
+    chunk_bytes(&data)
+        .into_iter()
         .map(|(index, total, chunk)| ClientRequest::StreamChunk {
             stream_id,
             index,
             total,
-            data: chunk.to_vec(),
+            data: chunk,
         })
         .collect()
 }
 
 /// Split a serialized response payload into `StreamChunk` host response variants.
+///
+/// Uses `Bytes::slice()` internally for zero-copy: each chunk shares the
+/// original allocation via reference counting instead of copying.
 pub fn chunk_response(data: Vec<u8>, stream_id: u32) -> Vec<HostResponse> {
-    chunk_data(&data)
+    let data = Bytes::from(data);
+    chunk_bytes(&data)
+        .into_iter()
         .map(|(index, total, chunk)| HostResponse::StreamChunk {
             stream_id,
             index,
             total,
-            data: chunk.to_vec(),
+            data: chunk,
         })
         .collect()
 }
@@ -92,7 +105,7 @@ pub enum StreamError {
 }
 
 struct StreamState {
-    chunks: Vec<Option<Vec<u8>>>,
+    chunks: Vec<Option<Bytes>>,
     total: u32,
     received: u32,
 }
@@ -116,7 +129,7 @@ impl ReassemblyBuffer {
         stream_id: u32,
         index: u32,
         total: u32,
-        data: &[u8],
+        data: Bytes,
     ) -> Result<Option<Vec<u8>>, StreamError> {
         if total == 0 {
             return Err(StreamError::ZeroTotalChunks);
@@ -165,7 +178,7 @@ impl ReassemblyBuffer {
             return Err(StreamError::DuplicateChunk { stream_id, index });
         }
 
-        state.chunks[idx] = Some(data.to_vec());
+        state.chunks[idx] = Some(data);
         state.received += 1;
 
         if state.received == state.total {
@@ -197,6 +210,7 @@ pub use app_stream::*;
 mod app_stream {
     use super::StreamError;
     use crate::client_api::client_events::StreamContent;
+    use bytes::Bytes;
     use std::pin::Pin;
     use std::task::{Context, Poll};
     use tokio::sync::mpsc;
@@ -207,12 +221,12 @@ mod app_stream {
     /// The corresponding [`WsStreamSender`] feeds chunks into this handle as they arrive.
     ///
     /// Two consumption modes:
-    /// - [`into_stream()`](WsStreamHandle::into_stream) — incremental async `Stream<Item = Vec<u8>>`
+    /// - [`into_stream()`](WsStreamHandle::into_stream) — incremental async `Stream<Item = Bytes>`
     /// - [`assemble()`](WsStreamHandle::assemble) — blocking wait for the complete payload
     pub struct WsStreamHandle {
         content: StreamContent,
         total_bytes: u64,
-        chunk_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        chunk_rx: mpsc::UnboundedReceiver<Bytes>,
     }
 
     impl WsStreamHandle {
@@ -256,11 +270,11 @@ mod app_stream {
 
     /// Async stream of chunk data produced by [`WsStreamHandle::into_stream()`].
     pub struct WsStream {
-        chunk_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        chunk_rx: mpsc::UnboundedReceiver<Bytes>,
     }
 
     impl futures::Stream for WsStream {
-        type Item = Vec<u8>;
+        type Item = Bytes;
 
         fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             self.chunk_rx.poll_recv(cx)
@@ -269,12 +283,12 @@ mod app_stream {
 
     /// Sender side — held by the request handler to feed chunks into the handle.
     pub struct WsStreamSender {
-        chunk_tx: mpsc::UnboundedSender<Vec<u8>>,
+        chunk_tx: mpsc::UnboundedSender<Bytes>,
     }
 
     impl WsStreamSender {
         /// Send a chunk of data to the corresponding [`WsStreamHandle`].
-        pub fn send_chunk(&self, data: Vec<u8>) -> Result<(), StreamError> {
+        pub fn send_chunk(&self, data: Bytes) -> Result<(), StreamError> {
             self.chunk_tx
                 .send(data)
                 .map_err(|_| StreamError::ChannelClosed)
@@ -339,7 +353,7 @@ mod tests {
             } = chunk
             {
                 if let Some(result) = buf
-                    .receive_chunk(*stream_id, *index, *total, chunk_data)
+                    .receive_chunk(*stream_id, *index, *total, chunk_data.clone())
                     .unwrap()
                 {
                     assert_eq!(result, data);
@@ -364,7 +378,7 @@ mod tests {
             } = chunk
             {
                 if let Some(result) = buf
-                    .receive_chunk(*stream_id, *index, *total, chunk_data)
+                    .receive_chunk(*stream_id, *index, *total, chunk_data.clone())
                     .unwrap()
                 {
                     assert_eq!(result, data);
@@ -401,7 +415,10 @@ mod tests {
                 data,
             } = chunk
             {
-                if let Some(r) = buf.receive_chunk(*stream_id, *index, *total, data).unwrap() {
+                if let Some(r) = buf
+                    .receive_chunk(*stream_id, *index, *total, data.clone())
+                    .unwrap()
+                {
                     assert_eq!(r, data_a);
                 }
             }
@@ -415,7 +432,10 @@ mod tests {
                 data,
             } = chunk
             {
-                if let Some(r) = buf.receive_chunk(*stream_id, *index, *total, data).unwrap() {
+                if let Some(r) = buf
+                    .receive_chunk(*stream_id, *index, *total, data.clone())
+                    .unwrap()
+                {
                     assert_eq!(r, data_b);
                 }
             }
@@ -425,30 +445,40 @@ mod tests {
     #[test]
     fn zero_total_chunks_error() {
         let mut buf = ReassemblyBuffer::new();
-        let err = buf.receive_chunk(1, 0, 0, &[1, 2, 3]).unwrap_err();
+        let err = buf
+            .receive_chunk(1, 0, 0, Bytes::from_static(&[1, 2, 3]))
+            .unwrap_err();
         assert!(matches!(err, StreamError::ZeroTotalChunks));
     }
 
     #[test]
     fn total_too_large_error() {
         let mut buf = ReassemblyBuffer::new();
-        let err = buf.receive_chunk(1, 0, 1000, &[1, 2, 3]).unwrap_err();
+        let err = buf
+            .receive_chunk(1, 0, 1000, Bytes::from_static(&[1, 2, 3]))
+            .unwrap_err();
         assert!(matches!(err, StreamError::TotalChunksTooLarge { .. }));
     }
 
     #[test]
     fn total_mismatch_error() {
         let mut buf = ReassemblyBuffer::new();
-        buf.receive_chunk(1, 0, 3, &[1, 2, 3]).unwrap();
-        let err = buf.receive_chunk(1, 1, 5, &[4, 5, 6]).unwrap_err();
+        buf.receive_chunk(1, 0, 3, Bytes::from_static(&[1, 2, 3]))
+            .unwrap();
+        let err = buf
+            .receive_chunk(1, 1, 5, Bytes::from_static(&[4, 5, 6]))
+            .unwrap_err();
         assert!(matches!(err, StreamError::TotalChunksMismatch { .. }));
     }
 
     #[test]
     fn duplicate_chunk_error() {
         let mut buf = ReassemblyBuffer::new();
-        buf.receive_chunk(1, 0, 3, &[1, 2, 3]).unwrap();
-        let err = buf.receive_chunk(1, 0, 3, &[4, 5, 6]).unwrap_err();
+        buf.receive_chunk(1, 0, 3, Bytes::from_static(&[1, 2, 3]))
+            .unwrap();
+        let err = buf
+            .receive_chunk(1, 0, 3, Bytes::from_static(&[4, 5, 6]))
+            .unwrap_err();
         assert!(matches!(
             err,
             StreamError::DuplicateChunk {
@@ -461,7 +491,9 @@ mod tests {
     #[test]
     fn index_out_of_range_error() {
         let mut buf = ReassemblyBuffer::new();
-        let err = buf.receive_chunk(1, 5, 3, &[1, 2, 3]).unwrap_err();
+        let err = buf
+            .receive_chunk(1, 5, 3, Bytes::from_static(&[1, 2, 3]))
+            .unwrap_err();
         assert!(matches!(
             err,
             StreamError::IndexOutOfRange {
@@ -476,10 +508,16 @@ mod tests {
     fn too_many_concurrent_streams_error() {
         let mut buf = ReassemblyBuffer::new();
         for i in 0..MAX_CONCURRENT_STREAMS as u32 {
-            buf.receive_chunk(i, 0, 2, &[1]).unwrap();
+            buf.receive_chunk(i, 0, 2, Bytes::from_static(&[1]))
+                .unwrap();
         }
         let err = buf
-            .receive_chunk(MAX_CONCURRENT_STREAMS as u32, 0, 2, &[1])
+            .receive_chunk(
+                MAX_CONCURRENT_STREAMS as u32,
+                0,
+                2,
+                Bytes::from_static(&[1]),
+            )
             .unwrap_err();
         assert!(matches!(err, StreamError::TooManyConcurrentStreams { .. }));
     }
@@ -500,31 +538,32 @@ mod tests {
                 key,
                 includes_contract: false,
             };
-            let data = vec![0xAB; CHUNK_SIZE * 3];
+            let data = Bytes::from(vec![0xAB; CHUNK_SIZE * 3]);
             let (handle, sender) = ws_stream_pair(content, data.len() as u64);
 
             // Feed chunks in a background task
             let data_clone = data.clone();
             tokio::spawn(async move {
                 for chunk in data_clone.chunks(CHUNK_SIZE) {
-                    sender.send_chunk(chunk.to_vec()).unwrap();
+                    sender.send_chunk(Bytes::copy_from_slice(chunk)).unwrap();
                 }
                 // sender dropped here → handle's rx will close
             });
 
             let result = handle.assemble().await.unwrap();
-            assert_eq!(result, data);
+            assert_eq!(result, &data[..]);
         }
 
         #[tokio::test]
         async fn ws_stream_incremental() {
             let content = StreamContent::Raw;
-            let data = vec![0xCD; CHUNK_SIZE * 2];
+            let data = Bytes::from(vec![0xCD; CHUNK_SIZE * 2]);
             let (handle, sender) = ws_stream_pair(content, data.len() as u64);
 
+            let data_clone = data.clone();
             tokio::spawn(async move {
-                for chunk in data.chunks(CHUNK_SIZE) {
-                    sender.send_chunk(chunk.to_vec()).unwrap();
+                for chunk in data_clone.chunks(CHUNK_SIZE) {
+                    sender.send_chunk(Bytes::copy_from_slice(chunk)).unwrap();
                 }
             });
 

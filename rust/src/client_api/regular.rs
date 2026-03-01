@@ -348,7 +348,7 @@ async fn handle_response_payload(
             } else {
                 // No StreamHeader seen → transparent reassembly (backward compat)
                 match reassembly
-                    .receive_chunk(stream_id, index, total, &data)
+                    .receive_chunk(stream_id, index, total, data)
                     .map_err(|e| Error::OtherError(e.into()))?
                 {
                     Some(complete) => {

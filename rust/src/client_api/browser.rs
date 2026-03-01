@@ -84,7 +84,7 @@ impl WebApi {
                     }) => {
                         match reassembly_clone
                             .borrow_mut()
-                            .receive_chunk(stream_id, index, total, &data)
+                            .receive_chunk(stream_id, index, total, data)
                         {
                             Ok(Some(complete)) => {
                                 let inner: HostResult = match bincode::deserialize(&complete) {

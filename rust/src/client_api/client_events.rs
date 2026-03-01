@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use flatbuffers::WIPOffset;
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -263,7 +264,7 @@ pub enum ClientRequest<'a> {
         stream_id: u32,
         index: u32,
         total: u32,
-        data: Vec<u8>,
+        data: Bytes,
     },
 }
 
@@ -380,7 +381,7 @@ impl ClientRequest<'_> {
                             stream_id: chunk.stream_id(),
                             index: chunk.index(),
                             total: chunk.total(),
-                            data: chunk.data().bytes().to_vec(),
+                            data: Bytes::from(chunk.data().bytes().to_vec()),
                         }
                     }
                     _ => {
@@ -747,7 +748,7 @@ pub enum HostResponse<T = WrappedState> {
         stream_id: u32,
         index: u32,
         total: u32,
-        data: Vec<u8>,
+        data: Bytes,
     },
     /// Header message announcing the start of a streamed response.
     /// Sent before the corresponding [`StreamChunk`] messages so the client
