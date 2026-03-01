@@ -128,11 +128,19 @@ table Authenticate {
   token:string(required);
 }
 
+table StreamChunk {
+    stream_id:uint32;
+    index:uint32;
+    total:uint32;
+    data:[ubyte](required);
+}
+
 union ClientRequestType {
     ContractRequest,
     DelegateRequest,
     Disconnect,
-    Authenticate
+    Authenticate,
+    StreamChunk
 }
 
 table ClientRequest {

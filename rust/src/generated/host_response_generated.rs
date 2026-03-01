@@ -246,19 +246,20 @@ pub mod host_response {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_HOST_RESPONSE_TYPE: u8 = 5;
+    pub const ENUM_MAX_HOST_RESPONSE_TYPE: u8 = 6;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_HOST_RESPONSE_TYPE: [HostResponseType; 6] = [
+    pub const ENUM_VALUES_HOST_RESPONSE_TYPE: [HostResponseType; 7] = [
         HostResponseType::NONE,
         HostResponseType::ContractResponse,
         HostResponseType::DelegateResponse,
         HostResponseType::GenerateRandData,
         HostResponseType::Ok,
         HostResponseType::Error,
+        HostResponseType::StreamChunk,
     ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -272,9 +273,10 @@ pub mod host_response {
         pub const GenerateRandData: Self = Self(3);
         pub const Ok: Self = Self(4);
         pub const Error: Self = Self(5);
+        pub const StreamChunk: Self = Self(6);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 5;
+        pub const ENUM_MAX: u8 = 6;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::ContractResponse,
@@ -282,6 +284,7 @@ pub mod host_response {
             Self::GenerateRandData,
             Self::Ok,
             Self::Error,
+            Self::StreamChunk,
         ];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
@@ -292,6 +295,7 @@ pub mod host_response {
                 Self::GenerateRandData => Some("GenerateRandData"),
                 Self::Ok => Some("Ok"),
                 Self::Error => Some("Error"),
+                Self::StreamChunk => Some("StreamChunk"),
                 _ => None,
             }
         }
@@ -2934,6 +2938,191 @@ pub mod host_response {
             ds.finish()
         }
     }
+    pub enum StreamChunkOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct StreamChunk<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for StreamChunk<'a> {
+        type Inner = StreamChunk<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
+        }
+    }
+
+    impl<'a> StreamChunk<'a> {
+        pub const VT_STREAM_ID: flatbuffers::VOffsetT = 4;
+        pub const VT_INDEX: flatbuffers::VOffsetT = 6;
+        pub const VT_TOTAL: flatbuffers::VOffsetT = 8;
+        pub const VT_DATA: flatbuffers::VOffsetT = 10;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            StreamChunk { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args StreamChunkArgs<'args>,
+        ) -> flatbuffers::WIPOffset<StreamChunk<'bldr>> {
+            let mut builder = StreamChunkBuilder::new(_fbb);
+            if let Some(x) = args.data {
+                builder.add_data(x);
+            }
+            builder.add_total(args.total);
+            builder.add_index(args.index);
+            builder.add_stream_id(args.stream_id);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn stream_id(&self) -> u32 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<u32>(StreamChunk::VT_STREAM_ID, Some(0))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn index(&self) -> u32 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<u32>(StreamChunk::VT_INDEX, Some(0))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn total(&self) -> u32 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<u32>(StreamChunk::VT_TOTAL, Some(0))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn data(&self) -> flatbuffers::Vector<'a, u8> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        StreamChunk::VT_DATA,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for StreamChunk<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<u32>("stream_id", Self::VT_STREAM_ID, false)?
+                .visit_field::<u32>("index", Self::VT_INDEX, false)?
+                .visit_field::<u32>("total", Self::VT_TOTAL, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "data",
+                    Self::VT_DATA,
+                    true,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct StreamChunkArgs<'a> {
+        pub stream_id: u32,
+        pub index: u32,
+        pub total: u32,
+        pub data: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+    }
+    impl<'a> Default for StreamChunkArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            StreamChunkArgs {
+                stream_id: 0,
+                index: 0,
+                total: 0,
+                data: None, // required field
+            }
+        }
+    }
+
+    pub struct StreamChunkBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> StreamChunkBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_stream_id(&mut self, stream_id: u32) {
+            self.fbb_
+                .push_slot::<u32>(StreamChunk::VT_STREAM_ID, stream_id, 0);
+        }
+        #[inline]
+        pub fn add_index(&mut self, index: u32) {
+            self.fbb_.push_slot::<u32>(StreamChunk::VT_INDEX, index, 0);
+        }
+        #[inline]
+        pub fn add_total(&mut self, total: u32) {
+            self.fbb_.push_slot::<u32>(StreamChunk::VT_TOTAL, total, 0);
+        }
+        #[inline]
+        pub fn add_data(&mut self, data: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(StreamChunk::VT_DATA, data);
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> StreamChunkBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            StreamChunkBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<StreamChunk<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, StreamChunk::VT_DATA, "data");
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for StreamChunk<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("StreamChunk");
+            ds.field("stream_id", &self.stream_id());
+            ds.field("index", &self.index());
+            ds.field("total", &self.total());
+            ds.field("data", &self.data());
+            ds.finish()
+        }
+    }
     pub enum HostResponseOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -3074,6 +3263,20 @@ pub mod host_response {
                 None
             }
         }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn response_as_stream_chunk(&self) -> Option<StreamChunk<'a>> {
+            if self.response_type() == HostResponseType::StreamChunk {
+                let u = self.response();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { StreamChunk::init_from_table(u) })
+            } else {
+                None
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for HostResponse<'_> {
@@ -3114,6 +3317,11 @@ pub mod host_response {
                         HostResponseType::Error => v
                             .verify_union_variant::<flatbuffers::ForwardsUOffset<Error>>(
                                 "HostResponseType::Error",
+                                pos,
+                            ),
+                        HostResponseType::StreamChunk => v
+                            .verify_union_variant::<flatbuffers::ForwardsUOffset<StreamChunk>>(
+                                "HostResponseType::StreamChunk",
                                 pos,
                             ),
                         _ => Ok(()),
@@ -3223,6 +3431,16 @@ pub mod host_response {
                 }
                 HostResponseType::Error => {
                     if let Some(x) = self.response_as_error() {
+                        ds.field("response", &x)
+                    } else {
+                        ds.field(
+                            "response",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
+                    }
+                }
+                HostResponseType::StreamChunk => {
+                    if let Some(x) = self.response_as_stream_chunk() {
                         ds.field("response", &x)
                     } else {
                         ds.field(
