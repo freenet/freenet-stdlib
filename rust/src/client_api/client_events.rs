@@ -32,6 +32,7 @@ use crate::generated::host_response::{
     NotFoundArgs, Ok as FbsOk, OkArgs, OutboundDelegateMsg as FbsOutboundDelegateMsg,
     OutboundDelegateMsgArgs, OutboundDelegateMsgType, PutResponse as FbsPutResponse,
     PutResponseArgs, RequestUserInput as FbsRequestUserInput, RequestUserInputArgs,
+    StreamChunk as FbsHostStreamChunk, StreamChunkArgs as FbsHostStreamChunkArgs,
     UpdateNotification as FbsUpdateNotification, UpdateNotificationArgs,
     UpdateResponse as FbsUpdateResponse, UpdateResponseArgs,
 };
@@ -257,6 +258,13 @@ pub enum ClientRequest<'a> {
     NodeQueries(NodeQuery),
     /// Gracefully disconnect from the host.
     Close,
+    /// A chunk of a larger streamed message.
+    StreamChunk {
+        stream_id: u32,
+        index: u32,
+        total: u32,
+        data: Vec<u8>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -319,6 +327,17 @@ impl ClientRequest<'_> {
             ClientRequest::Authenticate { token } => ClientRequest::Authenticate { token },
             ClientRequest::NodeQueries(query) => ClientRequest::NodeQueries(query),
             ClientRequest::Close => ClientRequest::Close,
+            ClientRequest::StreamChunk {
+                stream_id,
+                index,
+                total,
+                data,
+            } => ClientRequest::StreamChunk {
+                stream_id,
+                index,
+                total,
+                data,
+            },
         }
     }
 
@@ -355,7 +374,20 @@ impl ClientRequest<'_> {
                             token: token.to_owned(),
                         }
                     }
-                    _ => unreachable!(),
+                    ClientRequestType::StreamChunk => {
+                        let chunk = client_request.client_request_as_stream_chunk().unwrap();
+                        ClientRequest::StreamChunk {
+                            stream_id: chunk.stream_id(),
+                            index: chunk.index(),
+                            total: chunk.total(),
+                            data: chunk.data().bytes().to_vec(),
+                        }
+                    }
+                    _ => {
+                        return Err(WsApiError::deserialization(
+                            "unknown client request type".to_string(),
+                        ))
+                    }
                 },
                 Err(e) => {
                     let cause = format!("{e}");
@@ -641,6 +673,12 @@ impl Display for ClientRequest<'_> {
             ClientRequest::Authenticate { .. } => write!(f, "authenticate"),
             ClientRequest::NodeQueries(query) => write!(f, "node queries: {:?}", query),
             ClientRequest::Close => write!(f, "close"),
+            ClientRequest::StreamChunk {
+                stream_id,
+                index,
+                total,
+                ..
+            } => write!(f, "stream chunk {index}/{total} (stream {stream_id})"),
         }
     }
 }
@@ -704,6 +742,33 @@ pub enum HostResponse<T = WrappedState> {
     QueryResponse(QueryResponse),
     /// A requested action which doesn't require an answer was performed successfully.
     Ok,
+    /// A chunk of a larger streamed response.
+    StreamChunk {
+        stream_id: u32,
+        index: u32,
+        total: u32,
+        data: Vec<u8>,
+    },
+    /// Header message announcing the start of a streamed response.
+    /// Sent before the corresponding [`StreamChunk`] messages so the client
+    /// can set up incremental consumption via [`WsStreamHandle`].
+    StreamHeader {
+        stream_id: u32,
+        total_bytes: u64,
+        content: StreamContent,
+    },
+}
+
+/// Describes what kind of response is being streamed.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum StreamContent {
+    /// A streamed GetResponse — the large state is delivered via StreamChunks.
+    GetResponse {
+        key: ContractKey,
+        includes_contract: bool,
+    },
+    /// Raw binary stream (future use).
+    Raw,
 }
 
 type Peer = String;
@@ -1513,6 +1578,40 @@ impl HostResponse {
                 Ok(builder.finished_data().to_vec())
             }
             HostResponse::QueryResponse(_) => unimplemented!(),
+            HostResponse::StreamChunk {
+                stream_id,
+                index,
+                total,
+                data,
+            } => {
+                let data_offset = builder.create_vector(&data);
+                let chunk_offset = FbsHostStreamChunk::create(
+                    &mut builder,
+                    &FbsHostStreamChunkArgs {
+                        stream_id,
+                        index,
+                        total,
+                        data: Some(data_offset),
+                    },
+                );
+                let host_response_offset = FbsHostResponse::create(
+                    &mut builder,
+                    &HostResponseArgs {
+                        response_type: HostResponseType::StreamChunk,
+                        response: Some(chunk_offset.as_union_value()),
+                    },
+                );
+                finish_host_response_buffer(&mut builder, host_response_offset);
+                Ok(builder.finished_data().to_vec())
+            }
+            HostResponse::StreamHeader { .. } => {
+                // StreamHeader is only sent over bincode (Native encoding) to
+                // streaming-capable clients. Flatbuffers clients use transparent
+                // reassembly via StreamChunk only.
+                Err(Box::new(ClientError::from(ErrorKind::Unhandled {
+                    cause: "StreamHeader is not supported over flatbuffers encoding".into(),
+                })))
+            }
         }
     }
 }
@@ -1543,6 +1642,17 @@ impl Display for HostResponse {
             HostResponse::DelegateResponse { .. } => write!(f, "delegate responses"),
             HostResponse::Ok => write!(f, "ok response"),
             HostResponse::QueryResponse(_) => write!(f, "query response"),
+            HostResponse::StreamChunk {
+                stream_id,
+                index,
+                total,
+                ..
+            } => write!(f, "stream chunk {index}/{total} (stream {stream_id})"),
+            HostResponse::StreamHeader {
+                stream_id,
+                total_bytes,
+                ..
+            } => write!(f, "stream header (stream {stream_id}, {total_bytes} bytes)"),
         }
     }
 }

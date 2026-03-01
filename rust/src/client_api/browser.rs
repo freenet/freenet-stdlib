@@ -32,9 +32,7 @@ impl WebApi {
     {
         let eh = Rc::new(RefCell::new(error_handler.clone()));
         let result_handler = Rc::new(RefCell::new(result_handler));
-        let reassembly = Rc::new(RefCell::new(
-            super::ws_streaming::ChunkReassemblyBuffer::new(),
-        ));
+        let reassembly = Rc::new(RefCell::new(super::streaming::ReassemblyBuffer::new()));
 
         let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
             // Extract the Blob from the MessageEvent
@@ -58,18 +56,51 @@ impl WebApi {
                     .unwrap();
                 let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
 
-                use super::ws_streaming::{self, StreamMessage};
-                let payload = match ws_streaming::parse_message(&bytes) {
-                    Ok(StreamMessage::Complete(data)) => data.to_vec(),
-                    Ok(StreamMessage::Chunk {
-                        total_chunks,
-                        payload: data,
+                use super::client_events::HostResponse;
+
+                let response: HostResult = match bincode::deserialize(&bytes) {
+                    Ok(val) => val,
+                    Err(err) => {
+                        eh_clone.borrow_mut()(Error::ConnectionError(serde_json::json!({
+                            "error": format!("{err}"),
+                            "source": "host response deserialization"
+                        })));
+                        return;
+                    }
+                };
+
+                match response {
+                    Ok(HostResponse::StreamHeader { .. }) => {
+                        // StreamHeader is metadata only — the following StreamChunks
+                        // will be reassembled transparently by the ReassemblyBuffer.
+                        // Browser incremental streaming is not yet supported.
+                        return;
+                    }
+                    Ok(HostResponse::StreamChunk {
+                        stream_id,
+                        index,
+                        total,
+                        data,
                     }) => {
                         match reassembly_clone
                             .borrow_mut()
-                            .receive_chunk(total_chunks, data)
+                            .receive_chunk(stream_id, index, total, &data)
                         {
-                            Ok(Some(complete)) => complete,
+                            Ok(Some(complete)) => {
+                                let inner: HostResult = match bincode::deserialize(&complete) {
+                                    Ok(val) => val,
+                                    Err(err) => {
+                                        eh_clone.borrow_mut()(Error::ConnectionError(
+                                            serde_json::json!({
+                                                "error": format!("{err}"),
+                                                "source": "stream reassembly deserialization"
+                                            }),
+                                        ));
+                                        return;
+                                    }
+                                };
+                                result_handler_clone.borrow_mut()(inner);
+                            }
                             Ok(None) => return, // more chunks needed
                             Err(e) => {
                                 eh_clone.borrow_mut()(Error::ConnectionError(serde_json::json!({
@@ -80,26 +111,10 @@ impl WebApi {
                             }
                         }
                     }
-                    Err(e) => {
-                        eh_clone.borrow_mut()(Error::ConnectionError(serde_json::json!({
-                            "error": format!("{e}"),
-                            "source": "streaming parse"
-                        })));
-                        return;
+                    other => {
+                        result_handler_clone.borrow_mut()(other);
                     }
-                };
-
-                let response: HostResult = match bincode::deserialize(&payload) {
-                    Ok(val) => val,
-                    Err(err) => {
-                        eh_clone.borrow_mut()(Error::ConnectionError(serde_json::json!({
-                            "error": format!("{err}"),
-                            "source": "host response deserialization"
-                        })));
-                        return;
-                    }
-                };
-                result_handler_clone.borrow_mut()(response);
+                }
             });
 
             // Set the FileReader handlers
@@ -152,7 +167,7 @@ impl WebApi {
     }
 
     pub async fn send(&mut self, request: ClientRequest<'static>) -> Result<(), Error> {
-        use super::ws_streaming::{self, CHUNK_THRESHOLD};
+        use super::streaming::{chunk_request, CHUNK_THRESHOLD};
 
         // Check WebSocket ready state before sending.
         // Per WebSocket spec, send() silently discards data when socket is CLOSING/CLOSED.
@@ -177,16 +192,18 @@ impl WebApi {
         let send = bincode::serialize(&request)?;
 
         if send.len() > CHUNK_THRESHOLD {
-            let chunks = ws_streaming::chunk_payload(&send);
+            let stream_id = 0; // browser client uses single stream
+            let chunks = chunk_request(send, stream_id);
             for chunk in &chunks {
+                let chunk_bytes =
+                    bincode::serialize(chunk).map_err(|e| Error::OtherError(e.into()))?;
                 self.conn
-                    .send_with_u8_array(chunk)
+                    .send_with_u8_array(&chunk_bytes)
                     .map_err(|err| Self::map_send_error(err, &request, &mut self.error_handler))?;
             }
         } else {
-            let wrapped = ws_streaming::wrap_complete(send);
             self.conn
-                .send_with_u8_array(&wrapped)
+                .send_with_u8_array(&send)
                 .map_err(|err| Self::map_send_error(err, &request, &mut self.error_handler))?;
         }
         Ok(())

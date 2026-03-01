@@ -23,7 +23,7 @@ mod browser;
 pub use browser::*;
 
 #[cfg(feature = "net")]
-pub(crate) mod ws_streaming;
+pub mod streaming;
 
 pub use client_events::*;
 
