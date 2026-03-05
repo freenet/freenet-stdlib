@@ -24,9 +24,6 @@ pub const MAX_TOTAL_CHUNKS: u32 = 256;
 /// Maximum concurrent streams in a single `ReassemblyBuffer`.
 pub const MAX_CONCURRENT_STREAMS: usize = 8;
 
-/// Chunks to send before yielding to the tokio runtime.
-pub const MAX_CHUNKS_PER_BATCH: usize = 32;
-
 /// Zero-copy chunking: split `data` into (index, total, slice) tuples using `Bytes::slice()`.
 fn chunk_bytes(data: &Bytes) -> Vec<(u32, u32, Bytes)> {
     let total = data.len().div_ceil(CHUNK_SIZE).max(1) as u32;
@@ -102,12 +99,20 @@ pub enum StreamError {
     ChannelClosed,
     #[error("stream truncated: received {received} of {expected} bytes")]
     Truncated { received: u64, expected: u64 },
+    #[error("stream overflow: received {received} bytes, expected at most {expected} bytes")]
+    Overflow { received: u64, expected: u64 },
 }
+
+/// Timeout for incomplete streams in the reassembly buffer.
+#[cfg(not(target_family = "wasm"))]
+const STREAM_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
 struct StreamState {
     chunks: Vec<Option<Bytes>>,
     total: u32,
     received: u32,
+    #[cfg(not(target_family = "wasm"))]
+    created_at: std::time::Instant,
 }
 
 /// Reassembly buffer keyed by stream ID. Supports concurrent streams.
@@ -148,6 +153,10 @@ impl ReassemblyBuffer {
             });
         }
 
+        // Evict stale entries before checking the concurrent limit.
+        #[cfg(not(target_family = "wasm"))]
+        self.evict_stale();
+
         // Reject new streams when the concurrent stream limit is reached.
         if !self.streams.contains_key(&stream_id) && self.streams.len() >= MAX_CONCURRENT_STREAMS {
             return Err(StreamError::TooManyConcurrentStreams {
@@ -163,6 +172,8 @@ impl ReassemblyBuffer {
                 chunks: vec![None; total as usize],
                 total,
                 received: 0,
+                #[cfg(not(target_family = "wasm"))]
+                created_at: std::time::Instant::now(),
             });
 
         if state.total != total {
@@ -192,6 +203,18 @@ impl ReassemblyBuffer {
         } else {
             Ok(None)
         }
+    }
+
+    /// Remove a stream by ID, returning `true` if it existed.
+    pub fn remove_stream(&mut self, stream_id: u32) -> bool {
+        self.streams.remove(&stream_id).is_some()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn evict_stale(&mut self) {
+        let now = std::time::Instant::now();
+        self.streams
+            .retain(|_id, state| now.duration_since(state.created_at) < STREAM_TTL);
     }
 }
 
@@ -250,12 +273,21 @@ mod app_stream {
         /// Wait for all chunks and return the fully reassembled payload.
         ///
         /// Returns [`StreamError::Truncated`] if the sender closes before all
-        /// expected bytes have been delivered.
+        /// expected bytes have been delivered, or [`StreamError::Overflow`] if
+        /// more data is received than the header promised.
         pub async fn assemble(mut self) -> Result<Vec<u8>, StreamError> {
             // Cap pre-allocation to avoid OOM from a malicious total_bytes header.
             const MAX_PREALLOC: usize = 50 * 1024 * 1024;
+            // Allow up to one extra chunk of slack beyond total_bytes.
+            let max_bytes = (self.total_bytes as usize).saturating_add(super::CHUNK_SIZE);
             let mut buf = Vec::with_capacity((self.total_bytes as usize).min(MAX_PREALLOC));
             while let Some(chunk) = self.chunk_rx.recv().await {
+                if buf.len().saturating_add(chunk.len()) > max_bytes {
+                    return Err(StreamError::Overflow {
+                        received: buf.len() as u64 + chunk.len() as u64,
+                        expected: self.total_bytes,
+                    });
+                }
                 buf.extend_from_slice(&chunk);
             }
             if (buf.len() as u64) < self.total_bytes {
@@ -522,6 +554,66 @@ mod tests {
         assert!(matches!(err, StreamError::TooManyConcurrentStreams { .. }));
     }
 
+    #[test]
+    fn reassembly_out_of_order() {
+        let data: Vec<u8> = (0..CHUNK_SIZE * 3).map(|i| (i % 256) as u8).collect();
+        let chunks = chunk_request(data.clone(), 10);
+        assert_eq!(chunks.len(), 3);
+
+        let mut buf = ReassemblyBuffer::new();
+        // Feed in reverse order: 2, 0, 1
+        let indices = [2, 0, 1];
+        let mut result = None;
+        for &i in &indices {
+            if let ClientRequest::StreamChunk {
+                stream_id,
+                index,
+                total,
+                data: chunk_data,
+            } = &chunks[i]
+            {
+                if let Some(r) = buf
+                    .receive_chunk(*stream_id, *index, *total, chunk_data.clone())
+                    .unwrap()
+                {
+                    result = Some(r);
+                }
+            }
+        }
+        assert_eq!(result.unwrap(), data);
+    }
+
+    #[test]
+    fn chunk_exact_boundary() {
+        // Exactly one chunk
+        let data = vec![0xEE; CHUNK_SIZE];
+        let chunks = chunk_request(data, 5);
+        assert_eq!(chunks.len(), 1);
+
+        // Exactly two chunks
+        let data2 = vec![0xEE; CHUNK_SIZE * 2];
+        let chunks2 = chunk_request(data2, 6);
+        assert_eq!(chunks2.len(), 2);
+
+        // One byte over two chunks
+        let data3 = vec![0xEE; CHUNK_SIZE * 2 + 1];
+        let chunks3 = chunk_request(data3, 7);
+        assert_eq!(chunks3.len(), 3);
+    }
+
+    #[test]
+    fn remove_stream_cleans_up() {
+        let mut buf = ReassemblyBuffer::new();
+        buf.receive_chunk(1, 0, 3, Bytes::from_static(&[1, 2, 3]))
+            .unwrap();
+        assert!(buf.remove_stream(1));
+        assert!(!buf.remove_stream(1)); // already removed
+
+        // Can start a new stream with the same id
+        buf.receive_chunk(1, 0, 2, Bytes::from_static(&[4, 5]))
+            .unwrap();
+    }
+
     #[cfg(all(feature = "net", not(target_family = "wasm")))]
     mod stream_handle_tests {
         use super::super::*;
@@ -574,6 +666,39 @@ mod tests {
             }
             assert_eq!(collected.len(), CHUNK_SIZE * 2);
             assert!(collected.iter().all(|&b| b == 0xCD));
+        }
+
+        #[tokio::test]
+        async fn ws_stream_assemble_truncated() {
+            let content = StreamContent::Raw;
+            let (handle, sender) = ws_stream_pair(content, 1000);
+            // Send less than promised, then drop sender
+            sender.send_chunk(Bytes::from(vec![0; 100])).unwrap();
+            drop(sender);
+            let err = handle.assemble().await.unwrap_err();
+            assert!(matches!(
+                err,
+                StreamError::Truncated {
+                    received: 100,
+                    expected: 1000
+                }
+            ));
+        }
+
+        #[tokio::test]
+        async fn ws_stream_assemble_overflow() {
+            let content = StreamContent::Raw;
+            // Claim only 10 bytes
+            let (handle, sender) = ws_stream_pair(content, 10);
+            // Send way more than promised (over total_bytes + CHUNK_SIZE)
+            let overflow_size = 10 + CHUNK_SIZE + 1;
+            tokio::spawn(async move {
+                sender
+                    .send_chunk(Bytes::from(vec![0xFF; overflow_size]))
+                    .unwrap();
+            });
+            let err = handle.assemble().await.unwrap_err();
+            assert!(matches!(err, StreamError::Overflow { .. }));
         }
     }
 }

@@ -11,6 +11,7 @@ type Connection = web_sys::WebSocket;
 pub struct WebApi {
     conn: Connection,
     error_handler: Box<dyn FnMut(Error) + 'static>,
+    next_stream_id: u32,
 }
 
 impl Drop for WebApi {
@@ -163,6 +164,7 @@ impl WebApi {
         WebApi {
             conn,
             error_handler: Box::new(error_handler),
+            next_stream_id: 0,
         }
     }
 
@@ -192,7 +194,8 @@ impl WebApi {
         let send = bincode::serialize(&request)?;
 
         if send.len() > CHUNK_THRESHOLD {
-            let stream_id = 0; // browser client uses single stream
+            let stream_id = self.next_stream_id;
+            self.next_stream_id = self.next_stream_id.wrapping_add(1);
             let chunks = chunk_request(send, stream_id);
             for chunk in &chunks {
                 let chunk_bytes =

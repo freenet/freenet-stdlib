@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, task::Poll};
+use std::{borrow::Cow, collections::HashMap, collections::VecDeque, future::Future, task::Poll};
 
 use super::{
     client_events::{ClientError, ClientRequest, ErrorKind, HostResponse},
@@ -25,6 +25,7 @@ pub struct WebApi {
     response_rx: Receiver<HostResult>,
     stream_rx: Receiver<WsStreamHandle>,
     queue: Vec<ClientRequest<'static>>,
+    pending_streams: VecDeque<std::pin::Pin<Box<dyn Future<Output = HostResult> + Send>>>,
 }
 
 impl Drop for WebApi {
@@ -43,7 +44,40 @@ impl Stream for WebApi {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.response_rx.poll_recv(cx)
+        // First, try to complete any pending stream assemblies.
+        if let Some(fut) = self.pending_streams.front_mut() {
+            if let Poll::Ready(result) = fut.as_mut().poll(cx) {
+                self.pending_streams.pop_front();
+                return Poll::Ready(Some(result));
+            }
+        }
+
+        // Poll regular responses.
+        match self.response_rx.poll_recv(cx) {
+            Poll::Ready(Some(result)) => return Poll::Ready(Some(result)),
+            Poll::Ready(None) => return Poll::Ready(None),
+            Poll::Pending => {}
+        }
+
+        // Poll stream handles and spawn assembly as a pending future.
+        match self.stream_rx.poll_recv(cx) {
+            Poll::Ready(Some(handle)) => {
+                let fut = Box::pin(async move {
+                    let complete = handle
+                        .assemble()
+                        .await
+                        .map_err(|e| ClientError::from(format!("{e}")))?;
+                    let inner: HostResult = bincode::deserialize(&complete)
+                        .map_err(|e| ClientError::from(format!("{e}")))?;
+                    inner
+                });
+                self.pending_streams.push_back(fut);
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            Poll::Ready(None) if self.pending_streams.is_empty() => Poll::Ready(None),
+            _ => Poll::Pending,
+        }
     }
 }
 
@@ -108,7 +142,7 @@ impl WebApi {
     pub fn start(connection: Connection) -> Self {
         let (request_tx, request_rx) = mpsc::channel(1);
         let (response_tx, response_rx) = mpsc::channel(1);
-        let (stream_tx, stream_rx) = mpsc::channel(4);
+        let (stream_tx, stream_rx) = mpsc::channel(super::streaming::MAX_CONCURRENT_STREAMS);
         tokio::spawn(request_handler(
             request_rx,
             response_tx,
@@ -120,6 +154,7 @@ impl WebApi {
             response_rx,
             stream_rx,
             queue: vec![],
+            pending_streams: VecDeque::new(),
         }
     }
 
@@ -140,6 +175,13 @@ impl WebApi {
     /// complete [`HostResponse`] — the caller does not need to handle streaming.
     ///
     /// For incremental consumption, use [`recv_stream()`](Self::recv_stream) instead.
+    ///
+    /// # Important
+    ///
+    /// `recv()` and [`recv_stream()`](Self::recv_stream) both consume from the
+    /// internal stream channel. Calling both concurrently or alternating between
+    /// them may cause responses to be delivered to the wrong consumer. Choose
+    /// one consumption pattern per `WebApi` instance.
     pub async fn recv(&mut self) -> HostResult {
         tokio::select! {
             res = self.response_rx.recv() => {
@@ -166,6 +208,11 @@ impl WebApi {
     ///
     /// Only returns when the server sends a `StreamHeader`; non-streamed
     /// responses are delivered through [`recv()`](Self::recv).
+    ///
+    /// # Important
+    ///
+    /// `recv_stream()` and [`recv()`](Self::recv) both consume from the internal
+    /// stream channel. See [`recv()`](Self::recv) for details.
     pub async fn recv_stream(&mut self) -> Result<WsStreamHandle, Error> {
         self.stream_rx.recv().await.ok_or(Error::ChannelClosed)
     }
@@ -316,15 +363,24 @@ async fn handle_response_payload(
                 tracing::warn!("too many open stream senders, evicting one");
                 if let Some(&id) = stream_senders.keys().next() {
                     stream_senders.remove(&id);
+                    reassembly.remove_stream(id);
                 }
             }
             let (handle, sender) = super::streaming::ws_stream_pair(content, total_bytes);
             stream_senders.insert(stream_id, sender);
-            stream_tx
-                .send(handle)
-                .await
-                .map_err(|_| Error::ChannelClosed)?;
-            Ok(())
+            match stream_tx.try_send(handle) {
+                Ok(()) => Ok(()),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!(
+                        stream_id,
+                        "stream_tx full, falling back to transparent reassembly"
+                    );
+                    // Remove sender so subsequent chunks go through ReassemblyBuffer
+                    stream_senders.remove(&stream_id);
+                    Ok(())
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => Err(Error::ChannelClosed),
+            }
         }
         Ok(HostResponse::StreamChunk {
             stream_id,
@@ -378,10 +434,17 @@ mod test {
     use crate::client_api::HostResponse;
 
     use super::*;
-    use std::{net::Ipv4Addr, sync::atomic::AtomicU16, time::Duration};
+    use std::{net::Ipv4Addr, time::Duration};
     use tokio::net::TcpListener;
 
-    static PORT: AtomicU16 = AtomicU16::new(65495);
+    /// Bind to an OS-assigned port and return the listener + port.
+    async fn bind_free_port() -> (TcpListener, u16) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0u16))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        (listener, port)
+    }
 
     struct Server {
         recv: bool,
@@ -389,10 +452,7 @@ mod test {
     }
 
     impl Server {
-        async fn new(port: u16, recv: bool) -> Self {
-            let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-                .await
-                .unwrap();
+        async fn new(listener: TcpListener, recv: bool) -> Self {
             Server { recv, listener }
         }
 
@@ -401,7 +461,7 @@ mod test {
             tx: tokio::sync::oneshot::Sender<()>,
         ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let (stream, _) =
-                tokio::time::timeout(Duration::from_millis(10), self.listener.accept()).await??;
+                tokio::time::timeout(Duration::from_secs(5), self.listener.accept()).await??;
             let mut stream = tokio_tungstenite::accept_async(stream).await?;
 
             if !self.recv {
@@ -453,7 +513,7 @@ mod test {
         use crate::client_api::streaming;
 
         let (tcp_stream, _) =
-            tokio::time::timeout(Duration::from_millis(100), listener.accept()).await??;
+            tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
         let mut stream = tokio_tungstenite::accept_async(tcp_stream).await?;
 
         let (serialized, key) = build_test_payload(payload_size, fill);
@@ -481,7 +541,7 @@ mod test {
             stream.send(Message::Binary(chunk_bytes.into())).await?;
         }
 
-        let msg = tokio::time::timeout(Duration::from_millis(100), stream.next()).await;
+        let msg = tokio::time::timeout(Duration::from_secs(5), stream.next()).await;
         drop(msg);
         tx.send(()).map_err(|_| "signal failed".to_owned())?;
         Ok(())
@@ -491,11 +551,8 @@ mod test {
     async fn test_recv_chunked() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use crate::client_api::ContractResponse;
 
-        let port = PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let payload_size = 600 * 1024;
-        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-            .await
-            .unwrap();
+        let (listener, port) = bind_free_port().await;
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let server_result = tokio::task::spawn(serve_chunked_response(
             listener,
@@ -520,8 +577,8 @@ mod test {
         client
             .send(ClientRequest::Disconnect { cause: None })
             .await?;
-        tokio::time::timeout(Duration::from_millis(100), rx).await??;
-        tokio::time::timeout(Duration::from_millis(100), server_result).await???;
+        tokio::time::timeout(Duration::from_secs(5), rx).await??;
+        tokio::time::timeout(Duration::from_secs(5), server_result).await???;
         Ok(())
     }
 
@@ -529,11 +586,8 @@ mod test {
     async fn test_recv_stream_header() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use crate::client_api::ContractResponse;
 
-        let port = PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let payload_size = 600 * 1024;
-        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-            .await
-            .unwrap();
+        let (listener, port) = bind_free_port().await;
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let server_result = tokio::task::spawn(serve_chunked_response(
             listener,
@@ -564,8 +618,8 @@ mod test {
         client
             .send(ClientRequest::Disconnect { cause: None })
             .await?;
-        tokio::time::timeout(Duration::from_millis(100), rx).await??;
-        tokio::time::timeout(Duration::from_millis(100), server_result).await???;
+        tokio::time::timeout(Duration::from_secs(5), rx).await??;
+        tokio::time::timeout(Duration::from_secs(5), server_result).await???;
         Ok(())
     }
 
@@ -575,11 +629,8 @@ mod test {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use crate::client_api::ContractResponse;
 
-        let port = PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let payload_size = 600 * 1024;
-        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-            .await
-            .unwrap();
+        let (listener, port) = bind_free_port().await;
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let server_result = tokio::task::spawn(serve_chunked_response(
             listener,
@@ -605,15 +656,15 @@ mod test {
         client
             .send(ClientRequest::Disconnect { cause: None })
             .await?;
-        tokio::time::timeout(Duration::from_millis(100), rx).await??;
-        tokio::time::timeout(Duration::from_millis(100), server_result).await???;
+        tokio::time::timeout(Duration::from_secs(5), rx).await??;
+        tokio::time::timeout(Duration::from_secs(5), server_result).await???;
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_send() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let port = PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let server = Server::new(port, true).await;
+        let (listener, port) = bind_free_port().await;
+        let server = Server::new(listener, true).await;
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let server_result = tokio::task::spawn(server.listen(tx));
         let (ws_conn, _) =
@@ -623,15 +674,15 @@ mod test {
         client
             .send(ClientRequest::Disconnect { cause: None })
             .await?;
-        tokio::time::timeout(Duration::from_millis(10), rx).await??;
-        tokio::time::timeout(Duration::from_millis(10), server_result).await???;
+        tokio::time::timeout(Duration::from_secs(5), rx).await??;
+        tokio::time::timeout(Duration::from_secs(5), server_result).await???;
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_recv() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let port = PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let server = Server::new(port, false).await;
+        let (listener, port) = bind_free_port().await;
+        let server = Server::new(listener, false).await;
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let server_result = tokio::task::spawn(server.listen(tx));
         let (ws_conn, _) =
@@ -642,8 +693,8 @@ mod test {
         client
             .send(ClientRequest::Disconnect { cause: None })
             .await?;
-        tokio::time::timeout(Duration::from_millis(10), rx).await??;
-        tokio::time::timeout(Duration::from_millis(10), server_result).await???;
+        tokio::time::timeout(Duration::from_secs(5), rx).await??;
+        tokio::time::timeout(Duration::from_secs(5), server_result).await???;
         Ok(())
     }
 }

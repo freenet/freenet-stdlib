@@ -104,9 +104,9 @@ union HostResponseType {
   ContractResponse,
   DelegateResponse,
   GenerateRandData,
-  StreamChunk
   Ok,
   Error,
+  StreamChunk,
 }
 
 table HostResponse {
