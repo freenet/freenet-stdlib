@@ -276,6 +276,14 @@ mod app_stream {
         /// expected bytes have been delivered, or [`StreamError::Overflow`] if
         /// more data is received than the header promised.
         pub async fn assemble(mut self) -> Result<Vec<u8>, StreamError> {
+            // Reject total_bytes exceeding the protocol maximum before allocating.
+            let protocol_max = super::MAX_TOTAL_CHUNKS as u64 * super::CHUNK_SIZE as u64;
+            if self.total_bytes > protocol_max {
+                return Err(StreamError::Overflow {
+                    received: 0,
+                    expected: protocol_max,
+                });
+            }
             // Cap pre-allocation to avoid OOM from a malicious total_bytes header.
             const MAX_PREALLOC: usize = 50 * 1024 * 1024;
             // Allow up to one extra chunk of slack beyond total_bytes.

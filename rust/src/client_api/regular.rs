@@ -1,11 +1,13 @@
-use std::{borrow::Cow, collections::HashMap, collections::VecDeque, future::Future, task::Poll};
+use std::{
+    borrow::Cow, collections::HashMap, collections::VecDeque, future::Future, pin::Pin, task::Poll,
+};
 
 use super::{
     client_events::{ClientError, ClientRequest, ErrorKind, HostResponse},
     streaming::WsStreamHandle,
     Error, HostResult,
 };
-use futures::{pin_mut, FutureExt, Sink, SinkExt, Stream, StreamExt};
+use futures::{stream::FuturesUnordered, Sink, SinkExt, Stream, StreamExt};
 use tokio::{
     net::TcpStream,
     sync::mpsc::{self, Receiver, Sender},
@@ -24,8 +26,8 @@ pub struct WebApi {
     request_tx: Sender<ClientRequest<'static>>,
     response_rx: Receiver<HostResult>,
     stream_rx: Receiver<WsStreamHandle>,
-    queue: Vec<ClientRequest<'static>>,
-    pending_streams: VecDeque<std::pin::Pin<Box<dyn Future<Output = HostResult> + Send>>>,
+    queue: VecDeque<ClientRequest<'static>>,
+    pending_streams: FuturesUnordered<Pin<Box<dyn Future<Output = HostResult> + Send>>>,
 }
 
 impl Drop for WebApi {
@@ -44,12 +46,10 @@ impl Stream for WebApi {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        // First, try to complete any pending stream assemblies.
-        if let Some(fut) = self.pending_streams.front_mut() {
-            if let Poll::Ready(result) = fut.as_mut().poll(cx) {
-                self.pending_streams.pop_front();
-                return Poll::Ready(Some(result));
-            }
+        // Poll all pending stream assemblies concurrently.
+        match self.pending_streams.poll_next_unpin(cx) {
+            Poll::Ready(Some(result)) => return Poll::Ready(Some(result)),
+            Poll::Ready(None) | Poll::Pending => {}
         }
 
         // Poll regular responses.
@@ -71,7 +71,7 @@ impl Stream for WebApi {
                         .map_err(|e| ClientError::from(format!("{e}")))?;
                     inner
                 });
-                self.pending_streams.push_back(fut);
+                self.pending_streams.push(fut);
                 cx.waker().wake_by_ref();
                 Poll::Pending
             }
@@ -99,7 +99,7 @@ impl Sink<ClientRequest<'static>> for WebApi {
         mut self: std::pin::Pin<&mut Self>,
         item: ClientRequest<'static>,
     ) -> Result<(), Self::Error> {
-        self.queue.push(item);
+        self.queue.push_back(item);
         Ok(())
     }
 
@@ -107,27 +107,20 @@ impl Sink<ClientRequest<'static>> for WebApi {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        let mut queue = vec![];
-        std::mem::swap(&mut queue, &mut self.queue);
-        let mut error = false;
-        while let Some(item) = queue.pop() {
-            let f = self.request_tx.send(item);
-            pin_mut!(f);
-            match f.poll_unpin(cx) {
-                Poll::Ready(Ok(_)) => continue,
-                Poll::Ready(Err(_err)) => {
-                    error = true;
-                    break;
+        while let Some(item) = self.queue.pop_front() {
+            match self.request_tx.try_send(item) {
+                Ok(()) => continue,
+                Err(mpsc::error::TrySendError::Full(item)) => {
+                    self.queue.push_front(item);
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
                 }
-                Poll::Pending => {}
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    return Poll::Ready(Err(ErrorKind::ChannelClosed.into()));
+                }
             }
         }
-        if error {
-            self.queue.append(&mut queue);
-            Poll::Ready(Err(ErrorKind::ChannelClosed.into()))
-        } else {
-            Poll::Ready(Ok(()))
-        }
+        Poll::Ready(Ok(()))
     }
 
     fn poll_close(
@@ -153,8 +146,8 @@ impl WebApi {
             request_tx,
             response_rx,
             stream_rx,
-            queue: vec![],
-            pending_streams: VecDeque::new(),
+            queue: VecDeque::new(),
+            pending_streams: FuturesUnordered::new(),
         }
     }
 

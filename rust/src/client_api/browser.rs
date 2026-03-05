@@ -104,6 +104,7 @@ impl WebApi {
                             }
                             Ok(None) => return, // more chunks needed
                             Err(e) => {
+                                reassembly_clone.borrow_mut().remove_stream(stream_id);
                                 eh_clone.borrow_mut()(Error::ConnectionError(serde_json::json!({
                                     "error": format!("{e}"),
                                     "source": "streaming reassembly"
