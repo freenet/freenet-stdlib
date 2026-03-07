@@ -28,6 +28,8 @@ pub struct RelatedContractsContainer {
 
 impl RelatedContractsContainer {
     /// Maximum number of RequestRelated rounds before erroring.
+    /// Since `increment_depth` runs before each validation attempt, the effective
+    /// retry budget is `MAX_REQUEST_DEPTH - 1 - initial_depth` rounds.
     pub const MAX_REQUEST_DEPTH: u32 = 10;
 }
 
