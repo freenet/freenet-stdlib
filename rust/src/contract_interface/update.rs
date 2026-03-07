@@ -4,6 +4,7 @@
 //! and validation results.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -130,6 +131,46 @@ impl<'a> RelatedContracts<'a> {
             self.map.entry(key).or_default();
         }
     }
+
+    /// Returns the number of entries (both resolved and pending).
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Returns true if there are no entries.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    /// Check if a contract is tracked.
+    pub fn contains(&self, id: &ContractInstanceId) -> bool {
+        self.map.contains_key(id)
+    }
+
+    /// Get a specific contract's state (Some(state) if resolved, None if pending).
+    pub fn get(&self, id: &ContractInstanceId) -> Option<&Option<State<'a>>> {
+        self.map.get(id)
+    }
+
+    /// Add or update an entry.
+    pub fn insert(&mut self, id: ContractInstanceId, state: Option<State<'a>>) {
+        self.map.insert(id, state);
+    }
+
+    /// Number of entries with a resolved state.
+    pub fn resolved_count(&self) -> usize {
+        self.map.values().filter(|v| v.is_some()).count()
+    }
+
+    /// Number of entries still pending (state is None).
+    pub fn pending_count(&self) -> usize {
+        self.map.values().filter(|v| v.is_none()).count()
+    }
+
+    /// True if all entries have resolved states (no None values).
+    pub fn all_resolved(&self) -> bool {
+        !self.map.is_empty() && self.map.values().all(|v| v.is_some())
+    }
 }
 
 impl<'a> TryFromFbs<&FbsRelatedContracts<'a>> for RelatedContracts<'a> {
@@ -158,7 +199,36 @@ impl<'a> From<HashMap<ContractInstanceId, Option<State<'a>>>> for RelatedContrac
 pub struct RelatedContract {
     pub contract_instance_id: ContractInstanceId,
     pub mode: RelatedMode,
-    // todo: add a timeout so we stop listening/subscribing eventually
+    /// Max time to wait for the related contract's state to be fetched.
+    #[serde(default)]
+    pub timeout: Option<Duration>,
+    /// How long a cached state for this related contract remains valid.
+    #[serde(default)]
+    pub ttl: Option<Duration>,
+}
+
+impl RelatedContract {
+    /// Create a new related contract with the given id and mode.
+    pub fn new(id: ContractInstanceId, mode: RelatedMode) -> Self {
+        Self {
+            contract_instance_id: id,
+            mode,
+            timeout: None,
+            ttl: None,
+        }
+    }
+
+    /// Set the maximum time to wait for fetching this contract's state.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Set how long a cached state is considered valid.
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
 }
 
 /// Specification of the notifications of interest from a related contract.
@@ -341,5 +411,60 @@ impl<'a> TryFromFbs<&FbsUpdateData<'a>> for UpdateData<'a> {
             }
             _ => unreachable!(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_id(byte: u8) -> ContractInstanceId {
+        let bytes = [byte; CONTRACT_KEY_SIZE];
+        let encoded = bs58::encode(bytes).with_alphabet(bs58::Alphabet::BITCOIN).into_string();
+        ContractInstanceId::from_bytes(encoded.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn related_contracts_query_methods() {
+        let mut rc = RelatedContracts::new();
+        assert!(rc.is_empty());
+        assert_eq!(rc.len(), 0);
+
+        let id1 = make_id(1);
+        let id2 = make_id(2);
+        rc.insert(id1, Some(State::from(vec![1, 2, 3])));
+        rc.insert(id2, None);
+
+        assert_eq!(rc.len(), 2);
+        assert!(!rc.is_empty());
+        assert!(rc.contains(&id1));
+        assert!(!rc.contains(&make_id(99)));
+        assert_eq!(rc.resolved_count(), 1);
+        assert_eq!(rc.pending_count(), 1);
+        assert!(!rc.all_resolved());
+
+        // resolve the pending one
+        rc.insert(id2, Some(State::from(vec![4, 5])));
+        assert!(rc.all_resolved());
+    }
+
+    #[test]
+    fn related_contract_builder() {
+        let id = make_id(1);
+        let rc = RelatedContract::new(id, RelatedMode::StateThenSubscribe)
+            .with_timeout(Duration::from_secs(30))
+            .with_ttl(Duration::from_secs(300));
+
+        assert_eq!(rc.timeout, Some(Duration::from_secs(30)));
+        assert_eq!(rc.ttl, Some(Duration::from_secs(300)));
+        assert!(matches!(rc.mode, RelatedMode::StateThenSubscribe));
+    }
+
+    #[test]
+    fn related_contract_defaults_no_timeout_ttl() {
+        let id = make_id(1);
+        let rc = RelatedContract::new(id, RelatedMode::StateOnce);
+        assert!(rc.timeout.is_none());
+        assert!(rc.ttl.is_none());
     }
 }

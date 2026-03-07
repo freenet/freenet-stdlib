@@ -20,6 +20,15 @@ pub struct RelatedContractsContainer {
     contracts: HashMap<ContractInstanceId, State<'static>>,
     pending: HashSet<ContractInstanceId>,
     not_found: HashSet<ContractInstanceId>,
+    /// Tracks how many rounds of RequestRelated have occurred.
+    request_depth: u32,
+    /// All contract IDs ever requested, for cycle detection.
+    seen: HashSet<ContractInstanceId>,
+}
+
+impl RelatedContractsContainer {
+    /// Maximum number of RequestRelated rounds before erroring.
+    pub const MAX_REQUEST_DEPTH: u32 = 10;
 }
 
 impl From<RelatedContracts<'static>> for RelatedContractsContainer {
@@ -40,6 +49,8 @@ impl From<RelatedContracts<'static>> for RelatedContractsContainer {
             contracts,
             pending: HashSet::new(),
             not_found,
+            request_depth: 0,
+            seen: HashSet::new(),
         }
     }
 }
@@ -49,10 +60,7 @@ impl From<RelatedContractsContainer> for Vec<crate::contract_interface::RelatedC
         related
             .pending
             .into_iter()
-            .map(|id| RelatedContract {
-                contract_instance_id: id,
-                mode: RelatedMode::StateOnce,
-            })
+            .map(|id| RelatedContract::new(id, RelatedMode::StateOnce))
             .collect()
     }
 }
@@ -107,10 +115,81 @@ impl RelatedContractsContainer {
             contracts,
             pending,
             not_found,
+            seen,
+            request_depth: _,
         } = other;
         self.pending.extend(pending);
         self.not_found.extend(not_found);
         self.contracts.extend(contracts);
+        self.seen.extend(seen);
+    }
+
+    /// Returns true if there are any pending requests.
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Iterate over pending contract IDs.
+    pub fn pending_ids(&self) -> impl Iterator<Item = &ContractInstanceId> {
+        self.pending.iter()
+    }
+
+    /// Iterate over not-found contract IDs.
+    pub fn not_found_ids(&self) -> impl Iterator<Item = &ContractInstanceId> {
+        self.not_found.iter()
+    }
+
+    /// Number of resolved contracts.
+    pub fn resolved_count(&self) -> usize {
+        self.contracts.len()
+    }
+
+    /// Number of pending contracts.
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Number of not-found contracts.
+    pub fn not_found_count(&self) -> usize {
+        self.not_found.len()
+    }
+
+    /// Current request depth (number of RequestRelated rounds).
+    pub fn request_depth(&self) -> u32 {
+        self.request_depth
+    }
+
+    /// Request a related contract with cycle detection and depth limiting.
+    /// Returns an error if the contract was already requested (cycle) or
+    /// the maximum request depth has been exceeded.
+    pub fn request_with_tracking(
+        &mut self,
+        id: ContractInstanceId,
+    ) -> Result<(), ContractError> {
+        if self.request_depth >= Self::MAX_REQUEST_DEPTH {
+            return Err(ContractError::InvalidState);
+        }
+        if !self.seen.insert(id) {
+            return Err(ContractError::InvalidUpdateWithInfo {
+                reason: format!("cycle detected: contract {id} was already requested"),
+            });
+        }
+        self.pending.insert(id);
+        Ok(())
+    }
+
+    /// Increment the request depth. Returns an error if the max depth is exceeded.
+    pub fn increment_depth(&mut self) -> Result<(), ContractError> {
+        self.request_depth += 1;
+        if self.request_depth > Self::MAX_REQUEST_DEPTH {
+            return Err(ContractError::InvalidUpdateWithInfo {
+                reason: format!(
+                    "max request depth ({}) exceeded",
+                    Self::MAX_REQUEST_DEPTH
+                ),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -376,4 +455,72 @@ where
     let summary = typed_state.delta(typed_params, typed_summary)?;
     let encoded = <<T as EncodingAdapter>::DeltaEncoder>::serialize(&summary)?;
     Ok(encoded.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract_interface::CONTRACT_KEY_SIZE;
+
+    fn make_id(byte: u8) -> ContractInstanceId {
+        let bytes = [byte; CONTRACT_KEY_SIZE];
+        let encoded = bs58::encode(bytes)
+            .with_alphabet(bs58::Alphabet::BITCOIN)
+            .into_string();
+        ContractInstanceId::from_bytes(encoded.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn container_query_methods() {
+        let mut c = RelatedContractsContainer::default();
+        assert!(!c.has_pending());
+        assert_eq!(c.resolved_count(), 0);
+        assert_eq!(c.pending_count(), 0);
+        assert_eq!(c.not_found_count(), 0);
+
+        c.pending.insert(make_id(1));
+        c.pending.insert(make_id(2));
+        c.not_found.insert(make_id(3));
+        c.contracts
+            .insert(make_id(4), State::from(vec![1, 2, 3]));
+
+        assert!(c.has_pending());
+        assert_eq!(c.pending_count(), 2);
+        assert_eq!(c.not_found_count(), 1);
+        assert_eq!(c.resolved_count(), 1);
+    }
+
+    #[test]
+    fn cycle_detection() {
+        let mut c = RelatedContractsContainer::default();
+        let id = make_id(1);
+
+        // First request should succeed
+        assert!(c.request_with_tracking(id).is_ok());
+
+        // Same ID again should fail (cycle)
+        let err = c.request_with_tracking(id);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn depth_limiting() {
+        let mut c = RelatedContractsContainer::default();
+
+        for _ in 0..RelatedContractsContainer::MAX_REQUEST_DEPTH {
+            assert!(c.increment_depth().is_ok());
+        }
+
+        // One more should fail
+        assert!(c.increment_depth().is_err());
+    }
+
+    #[test]
+    fn request_with_tracking_respects_depth() {
+        let mut c = RelatedContractsContainer::default();
+        c.request_depth = RelatedContractsContainer::MAX_REQUEST_DEPTH;
+
+        let err = c.request_with_tracking(make_id(1));
+        assert!(err.is_err());
+    }
 }

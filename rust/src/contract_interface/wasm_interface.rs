@@ -10,6 +10,7 @@ enum ResultKind {
     UpdateState = 2,
     SummarizeState = 3,
     StateDelta = 4,
+    RelatedContracts = 5,
 }
 
 impl From<i32> for ResultKind {
@@ -20,6 +21,7 @@ impl From<i32> for ResultKind {
             2 => ResultKind::UpdateState,
             3 => ResultKind::SummarizeState,
             4 => ResultKind::StateDelta,
+            5 => ResultKind::RelatedContracts,
             _ => panic!(),
         }
     }
@@ -149,6 +151,33 @@ impl ContractInterfaceResult {
         }
     }
 
+    /// Deserialize a related contracts result from WASM memory.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `mem` is a valid WASM linear memory containing
+    /// the serialized result at the offset specified by `self.ptr`, with at least
+    /// `self.size` bytes available.
+    pub unsafe fn unwrap_related_contracts(
+        self,
+        mem: WasmLinearMem,
+    ) -> Result<Vec<RelatedContract>, ContractError> {
+        let kind = ResultKind::from(self.kind);
+        match kind {
+            ResultKind::RelatedContracts => {
+                let ptr = crate::memory::buf::compute_ptr(self.ptr as *mut u8, &mem);
+                let serialized = std::slice::from_raw_parts(ptr as *const u8, self.size as _);
+                let value: Result<Vec<RelatedContract>, ContractError> =
+                    bincode::deserialize(serialized)
+                        .map_err(|e| ContractError::Other(format!("{e}")))?;
+                #[cfg(feature = "trace")]
+                self.log_input(serialized, &value, ptr);
+                value
+            }
+            _ => unreachable!(),
+        }
+    }
+
     #[cfg(feature = "contract")]
     pub fn into_raw(self) -> i64 {
         #[cfg(feature = "trace")]
@@ -233,3 +262,5 @@ conversion!(Result<UpdateModification<'static>, ContractError>: ResultKind::Upda
 conversion!(Result<StateSummary<'static>, ContractError>: ResultKind::SummarizeState);
 #[cfg(feature = "contract")]
 conversion!(Result<StateDelta<'static>, ContractError>: ResultKind::StateDelta);
+#[cfg(feature = "contract")]
+conversion!(Result<Vec<RelatedContract>, ContractError>: ResultKind::RelatedContracts);

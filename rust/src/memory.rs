@@ -168,4 +168,13 @@ pub mod wasm_interface {
         let new_delta = <T as ContractInterface>::get_state_delta(parameters, state, summary);
         ContractInterfaceResult::from(new_delta).into_raw()
     }
+
+    pub fn inner_related_contracts<T: ContractInterface>() -> i64 {
+        if let Err(e) = set_logger().map_err(|e| e.into_raw()) {
+            return e;
+        }
+        let result: Result<Vec<crate::prelude::RelatedContract>, crate::prelude::ContractError> =
+            Ok(<T as ContractInterface>::related_contracts());
+        ContractInterfaceResult::from(result).into_raw()
+    }
 }

@@ -489,11 +489,13 @@ impl ImplTrait {
         let update_fn = self.gen_update_state_fn();
         let summarize_fn = self.gen_summarize_state_fn();
         let get_delta_fn = self.gen_get_state_delta();
+        let related_contracts_fn = self.gen_related_contracts_fn();
         quote! {
             #validate_state_fn
             #update_fn
             #summarize_fn
             #get_delta_fn
+            #related_contracts_fn
         }
     }
 
@@ -541,6 +543,18 @@ impl ImplTrait {
             #[cfg(feature = "freenet-main-contract")]
             pub extern "C" fn get_state_delta(parameters: i64, state: i64, summary: i64) -> #ret {
                 ::freenet_stdlib::memory::wasm_interface::inner_get_state_delta::<#type_name>(parameters, state, summary)
+            }
+        }
+    }
+
+    fn gen_related_contracts_fn(&self) -> TokenStream {
+        let type_name = &self.type_name;
+        let ret = self.ffi_ret_type();
+        quote! {
+            #[no_mangle]
+            #[cfg(feature = "freenet-main-contract")]
+            pub extern "C" fn related_contracts() -> #ret {
+                ::freenet_stdlib::memory::wasm_interface::inner_related_contracts::<#type_name>()
             }
         }
     }

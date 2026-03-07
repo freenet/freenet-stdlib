@@ -5,7 +5,7 @@
 use crate::parameters::Parameters;
 
 use super::{
-    ContractError, RelatedContracts, State, StateDelta, StateSummary, UpdateData,
+    ContractError, RelatedContract, RelatedContracts, State, StateDelta, StateSummary, UpdateData,
     UpdateModification, ValidateResult,
 };
 
@@ -96,5 +96,11 @@ pub trait ContractInterface {
         state: State<'static>,
         summary: StateSummary<'static>,
     ) -> Result<StateDelta<'static>, ContractError>;
+
+    /// Declare all related contract dependencies upfront so the runtime can
+    /// pre-fetch them before calling `validate_state`.
+    fn related_contracts() -> Vec<RelatedContract> {
+        vec![]
+    }
 }
 // ANCHOR_END: contractifce

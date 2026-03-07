@@ -1,6 +1,7 @@
 use crate::{
     contract_interface::{
-        ContractError, ContractInstanceId, RelatedContracts, State, UpdateData, ValidateResult,
+        ContractError, ContractInstanceId, RelatedContract, RelatedContracts, State, UpdateData,
+        ValidateResult,
     },
     typed_contract::{MergeResult, RelatedContractsContainer},
 };
@@ -59,6 +60,12 @@ pub trait ContractComponent: std::any::Any + Sized {
         parameters: &Self::Parameters,
         summary: &Self::Summary,
     ) -> Result<Self::Delta, ContractError>;
+
+    /// Declare all related contract dependencies upfront so the runtime can
+    /// pre-fetch them before calling `verify`.
+    fn related_contracts() -> Vec<RelatedContract> {
+        vec![]
+    }
 }
 
 pub enum TypedUpdateData<T: ContractComponent> {
