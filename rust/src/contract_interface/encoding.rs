@@ -159,6 +159,13 @@ impl RelatedContractsContainer {
         self.request_depth
     }
 
+    /// Set the initial request depth. Use this when a container is created
+    /// inside an already-nested dependency resolution to share the global
+    /// depth budget and prevent unbounded recursion.
+    pub fn set_initial_depth(&mut self, depth: u32) {
+        self.request_depth = depth;
+    }
+
     /// Request a related contract with cycle detection and depth limiting.
     /// Returns an error if the contract was already requested (cycle) or
     /// the maximum request depth has been exceeded.

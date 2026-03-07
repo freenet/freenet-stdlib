@@ -232,7 +232,7 @@ impl RelatedContract {
 }
 
 /// Specification of the notifications of interest from a related contract.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum RelatedMode {
     /// Retrieve the state once, don't be concerned with subsequent changes.
     StateOnce,
