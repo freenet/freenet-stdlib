@@ -11,3 +11,4 @@ Cargo.lock
 .env
 
 .idea
+proptest-regressions
