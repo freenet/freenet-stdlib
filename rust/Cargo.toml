@@ -60,6 +60,7 @@ bincode = "1"
 wasmer = { version = "5.0.4", features = [ "sys-default"] }
 rand = { version = "0.9", features = ["small_rng"] }
 arbitrary = { version = "1", features = ["derive"] }
+proptest = "1"
 
 [features]
 default = []

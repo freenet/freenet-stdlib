@@ -168,7 +168,7 @@ impl RelatedContractsContainer {
     /// inside an already-nested dependency resolution to share the global
     /// depth budget and prevent unbounded recursion.
     pub fn set_initial_depth(&mut self, depth: u32) {
-        self.request_depth = depth;
+        self.request_depth = depth.min(Self::MAX_REQUEST_DEPTH);
     }
 
     /// Request a related contract with cycle detection and depth limiting.
@@ -190,10 +190,10 @@ impl RelatedContractsContainer {
         Ok(())
     }
 
-    /// Increment the request depth. Returns an error if the max depth is exceeded.
+    /// Increment the request depth. Returns an error if the max depth would be
+    /// reached, leaving the depth unchanged.
     pub fn increment_depth(&mut self) -> Result<(), ContractError> {
-        self.request_depth += 1;
-        if self.request_depth >= Self::MAX_REQUEST_DEPTH {
+        if self.request_depth + 1 >= Self::MAX_REQUEST_DEPTH {
             return Err(ContractError::InvalidUpdateWithInfo {
                 reason: format!(
                     "max request depth ({}) exceeded",
@@ -201,6 +201,7 @@ impl RelatedContractsContainer {
                 ),
             });
         }
+        self.request_depth += 1;
         Ok(())
     }
 }
@@ -535,5 +536,148 @@ mod tests {
 
         let err = c.request_with_tracking(make_id(1));
         assert!(err.is_err());
+    }
+
+    mod proptest_container {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_id() -> impl Strategy<Value = ContractInstanceId> {
+            prop::array::uniform32(any::<u8>()).prop_map(|bytes| {
+                let encoded = bs58::encode(bytes)
+                    .with_alphabet(bs58::Alphabet::BITCOIN)
+                    .into_string();
+                ContractInstanceId::from_bytes(encoded.as_bytes()).unwrap()
+            })
+        }
+
+        fn arb_state() -> impl Strategy<Value = State<'static>> {
+            prop::collection::vec(any::<u8>(), 0..128).prop_map(State::from)
+        }
+
+        #[derive(Debug, Clone)]
+        enum Op {
+            IncrementDepth,
+            SetInitialDepth(u32),
+            RequestWithTracking(ContractInstanceId),
+        }
+
+        fn arb_op() -> impl Strategy<Value = Op> {
+            prop_oneof![
+                Just(Op::IncrementDepth),
+                (0u32..15).prop_map(Op::SetInitialDepth),
+                arb_id().prop_map(Op::RequestWithTracking),
+            ]
+        }
+
+        proptest! {
+            #[test]
+            fn depth_never_exceeds_max(ops in prop::collection::vec(arb_op(), 0..50)) {
+                let mut c = RelatedContractsContainer::default();
+                for op in ops {
+                    match op {
+                        Op::IncrementDepth => { let _ = c.increment_depth(); }
+                        Op::SetInitialDepth(d) => c.set_initial_depth(d),
+                        Op::RequestWithTracking(id) => { let _ = c.request_with_tracking(id); }
+                    }
+                }
+                // After any sequence of ops, depth should be bounded
+                assert!(c.request_depth() <= RelatedContractsContainer::MAX_REQUEST_DEPTH);
+            }
+
+            #[test]
+            fn duplicate_request_always_fails(
+                id in arb_id(),
+                pre_ops in prop::collection::vec(arb_id(), 0..10)
+            ) {
+                let mut c = RelatedContractsContainer::default();
+                // Request some other IDs first
+                for pre_id in pre_ops {
+                    let _ = c.request_with_tracking(pre_id);
+                }
+                // First request of target ID
+                if c.request_with_tracking(id).is_ok() {
+                    // Second request must fail (cycle)
+                    assert!(c.request_with_tracking(id).is_err());
+                }
+            }
+
+            #[test]
+            fn merge_depth_is_max(a_depth in 0u32..15, b_depth in 0u32..15) {
+                let max = RelatedContractsContainer::MAX_REQUEST_DEPTH;
+                let mut a = RelatedContractsContainer::default();
+                a.set_initial_depth(a_depth);
+                let mut b = RelatedContractsContainer::default();
+                b.set_initial_depth(b_depth);
+                a.merge(b);
+                assert_eq!(a.request_depth(), a_depth.min(max).max(b_depth.min(max)));
+            }
+
+            #[test]
+            fn merge_seen_is_union(
+                a_ids in prop::collection::vec(arb_id(), 0..8),
+                b_ids in prop::collection::vec(arb_id(), 0..8),
+            ) {
+                let mut a = RelatedContractsContainer::default();
+                for id in &a_ids {
+                    let _ = a.request_with_tracking(*id);
+                }
+                let mut b = RelatedContractsContainer::default();
+                for id in &b_ids {
+                    let _ = b.request_with_tracking(*id);
+                }
+                a.merge(b);
+                // All IDs from both should be detected as cycles
+                for id in a_ids.iter().chain(b_ids.iter()) {
+                    assert!(a.request_with_tracking(*id).is_err());
+                }
+            }
+
+            #[test]
+            fn from_related_contracts_splits_correctly(
+                entries in prop::collection::vec(
+                    (arb_id(), prop::option::of(arb_state())),
+                    0..16
+                )
+            ) {
+                let mut rc = RelatedContracts::from(std::collections::HashMap::new());
+                for (id, state) in &entries {
+                    rc.insert(*id, state.clone());
+                }
+                let rc = rc.into_owned();
+                let expected_resolved = rc.resolved_count();
+                let expected_not_found = rc.pending_count();
+                let container = RelatedContractsContainer::from(rc);
+                assert_eq!(container.resolved_count(), expected_resolved);
+                assert_eq!(container.not_found_count(), expected_not_found);
+            }
+
+            #[test]
+            fn from_update_data_extracts_related_only(
+                updates in prop::collection::vec(
+                    prop_oneof![
+                        arb_state().prop_map(|s| UpdateData::State(s)),
+                        prop::collection::vec(any::<u8>(), 0..64)
+                            .prop_map(|b| UpdateData::Delta(StateDelta::from(b))),
+                        (arb_id(), arb_state()).prop_map(|(id, s)|
+                            UpdateData::RelatedState { related_to: id, state: s }),
+                        (arb_id(), arb_state(), prop::collection::vec(any::<u8>(), 0..64))
+                            .prop_map(|(id, s, d)|
+                                UpdateData::RelatedStateAndDelta {
+                                    related_to: id, state: s, delta: StateDelta::from(d)
+                                }),
+                    ],
+                    0..20
+                )
+            ) {
+                let related_count = updates.iter().filter(|u| matches!(u,
+                    UpdateData::RelatedState { .. } | UpdateData::RelatedStateAndDelta { .. }
+                )).count();
+                let container = RelatedContractsContainer::from(updates);
+                // Container should have at most related_count entries
+                // (could be fewer due to duplicate IDs)
+                assert!(container.resolved_count() <= related_count);
+            }
+        }
     }
 }

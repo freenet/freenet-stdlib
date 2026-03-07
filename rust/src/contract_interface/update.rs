@@ -245,7 +245,7 @@ pub enum RelatedMode {
 }
 
 /// The result of calling the [`ContractInterface::validate_state`] function.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ValidateResult {
     Valid,
     Invalid,
@@ -470,5 +470,150 @@ mod tests {
         let rc = RelatedContract::new(id, RelatedMode::StateOnce);
         assert!(rc.timeout.is_none());
         assert!(rc.ttl.is_none());
+    }
+
+    mod proptest_roundtrips {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_contract_instance_id() -> impl Strategy<Value = ContractInstanceId> {
+            prop::array::uniform32(any::<u8>()).prop_map(|bytes| {
+                let encoded = bs58::encode(bytes)
+                    .with_alphabet(bs58::Alphabet::BITCOIN)
+                    .into_string();
+                ContractInstanceId::from_bytes(encoded.as_bytes()).unwrap()
+            })
+        }
+
+        fn arb_state() -> impl Strategy<Value = State<'static>> {
+            prop::collection::vec(any::<u8>(), 0..256).prop_map(State::from)
+        }
+
+        fn arb_delta() -> impl Strategy<Value = StateDelta<'static>> {
+            prop::collection::vec(any::<u8>(), 0..256).prop_map(StateDelta::from)
+        }
+
+        fn arb_update_data() -> impl Strategy<Value = UpdateData<'static>> {
+            prop_oneof![
+                arb_state().prop_map(UpdateData::State),
+                arb_delta().prop_map(UpdateData::Delta),
+                (arb_state(), arb_delta())
+                    .prop_map(|(s, d)| UpdateData::StateAndDelta { state: s, delta: d }),
+                (arb_contract_instance_id(), arb_state())
+                    .prop_map(|(id, s)| UpdateData::RelatedState {
+                        related_to: id,
+                        state: s
+                    }),
+                (arb_contract_instance_id(), arb_delta())
+                    .prop_map(|(id, d)| UpdateData::RelatedDelta {
+                        related_to: id,
+                        delta: d
+                    }),
+                (arb_contract_instance_id(), arb_state(), arb_delta()).prop_map(
+                    |(id, s, d)| UpdateData::RelatedStateAndDelta {
+                        related_to: id,
+                        state: s,
+                        delta: d,
+                    }
+                ),
+            ]
+        }
+
+        fn arb_validate_result() -> impl Strategy<Value = ValidateResult> {
+            prop_oneof![
+                Just(ValidateResult::Valid),
+                Just(ValidateResult::Invalid),
+                prop::collection::vec(arb_contract_instance_id(), 0..8)
+                    .prop_map(ValidateResult::RequestRelated),
+            ]
+        }
+
+        fn arb_related_mode() -> impl Strategy<Value = RelatedMode> {
+            prop_oneof![Just(RelatedMode::StateOnce), Just(RelatedMode::StateThenSubscribe),]
+        }
+
+        proptest! {
+            #[test]
+            fn update_data_serde_roundtrip(data in arb_update_data()) {
+                let bytes = bincode::serialize(&data).unwrap();
+                let decoded: UpdateData = bincode::deserialize(&bytes).unwrap();
+                assert_eq!(data, decoded);
+            }
+
+            #[test]
+            fn update_data_into_owned_preserves(data in arb_update_data()) {
+                let bytes_before = bincode::serialize(&data).unwrap();
+                let owned = data.into_owned();
+                let bytes_after = bincode::serialize(&owned).unwrap();
+                assert_eq!(bytes_before, bytes_after);
+            }
+
+            #[test]
+            fn validate_result_serde_roundtrip(result in arb_validate_result()) {
+                let bytes = bincode::serialize(&result).unwrap();
+                let decoded: ValidateResult = bincode::deserialize(&bytes).unwrap();
+                assert_eq!(result, decoded);
+            }
+
+            #[test]
+            fn related_contracts_serde_roundtrip(
+                entries in prop::collection::vec(
+                    (arb_contract_instance_id(), prop::option::of(arb_state())),
+                    0..16
+                )
+            ) {
+                let mut rc = RelatedContracts::new();
+                for (id, state) in &entries {
+                    rc.insert(*id, state.clone());
+                }
+                let bytes = bincode::serialize(&rc).unwrap();
+                let decoded: RelatedContracts = bincode::deserialize(&bytes).unwrap();
+                assert_eq!(rc.len(), decoded.len());
+                // Verify into_owned preserves
+                let owned = decoded.into_owned();
+                let bytes2 = bincode::serialize(&owned).unwrap();
+                let decoded2: RelatedContracts = bincode::deserialize(&bytes2).unwrap();
+                assert_eq!(rc.len(), decoded2.len());
+            }
+
+            #[test]
+            fn related_contract_serde_roundtrip(
+                id in arb_contract_instance_id(),
+                mode in arb_related_mode(),
+                timeout_secs in prop::option::of(0u64..3600),
+                ttl_secs in prop::option::of(0u64..86400),
+            ) {
+                let mut rc = RelatedContract::new(id, mode);
+                if let Some(t) = timeout_secs {
+                    rc = rc.with_timeout(Duration::from_secs(t));
+                }
+                if let Some(t) = ttl_secs {
+                    rc = rc.with_ttl(Duration::from_secs(t));
+                }
+                let bytes = bincode::serialize(&rc).unwrap();
+                let decoded: RelatedContract = bincode::deserialize(&bytes).unwrap();
+                assert_eq!(rc.contract_instance_id, decoded.contract_instance_id);
+                assert_eq!(rc.timeout, decoded.timeout);
+                assert_eq!(rc.ttl, decoded.ttl);
+            }
+
+            #[test]
+            fn related_contracts_query_invariants(
+                entries in prop::collection::vec(
+                    (arb_contract_instance_id(), prop::option::of(arb_state())),
+                    0..32
+                )
+            ) {
+                let mut rc = RelatedContracts::new();
+                for (id, state) in &entries {
+                    rc.insert(*id, state.clone());
+                }
+                // Deduplicated by HashMap
+                assert_eq!(rc.resolved_count() + rc.pending_count(), rc.len());
+                if !rc.is_empty() && rc.pending_count() == 0 {
+                    assert!(rc.all_resolved());
+                }
+            }
+        }
     }
 }
