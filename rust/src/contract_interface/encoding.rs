@@ -116,12 +116,15 @@ impl RelatedContractsContainer {
             pending,
             not_found,
             seen,
-            request_depth: _,
+            request_depth,
         } = other;
         self.pending.extend(pending);
         self.not_found.extend(not_found);
         self.contracts.extend(contracts);
         self.seen.extend(seen);
+        // Preserve the higher depth so the merged container respects the
+        // tighter budget from whichever resolution path is deeper.
+        self.request_depth = self.request_depth.max(request_depth);
     }
 
     /// Returns true if there are any pending requests.
@@ -188,7 +191,7 @@ impl RelatedContractsContainer {
     /// Increment the request depth. Returns an error if the max depth is exceeded.
     pub fn increment_depth(&mut self) -> Result<(), ContractError> {
         self.request_depth += 1;
-        if self.request_depth > Self::MAX_REQUEST_DEPTH {
+        if self.request_depth >= Self::MAX_REQUEST_DEPTH {
             return Err(ContractError::InvalidUpdateWithInfo {
                 reason: format!(
                     "max request depth ({}) exceeded",
@@ -514,11 +517,12 @@ mod tests {
     fn depth_limiting() {
         let mut c = RelatedContractsContainer::default();
 
-        for _ in 0..RelatedContractsContainer::MAX_REQUEST_DEPTH {
+        // Can increment up to MAX_REQUEST_DEPTH - 1 (depth goes from 1 to MAX-1)
+        for _ in 0..RelatedContractsContainer::MAX_REQUEST_DEPTH - 1 {
             assert!(c.increment_depth().is_ok());
         }
 
-        // One more should fail
+        // Next increment reaches MAX_REQUEST_DEPTH, which fails
         assert!(c.increment_depth().is_err());
     }
 

@@ -200,9 +200,13 @@ pub struct RelatedContract {
     pub contract_instance_id: ContractInstanceId,
     pub mode: RelatedMode,
     /// Max time to wait for the related contract's state to be fetched.
+    ///
+    /// **Reserved for future use** — not yet enforced by the runtime.
     #[serde(default)]
     pub timeout: Option<Duration>,
     /// How long a cached state for this related contract remains valid.
+    ///
+    /// **Reserved for future use** — not yet enforced by the runtime.
     #[serde(default)]
     pub ttl: Option<Duration>,
 }
