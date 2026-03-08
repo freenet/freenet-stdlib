@@ -85,6 +85,13 @@ table GenerateRandData {
   wrapped_state: [ubyte](required);
 }
 
+table StreamChunk {
+    stream_id:uint32;
+    index:uint32;
+    total:uint32;
+    data:[ubyte](required);
+}
+
 table Ok {
   msg:string(required);
 }
@@ -98,7 +105,8 @@ union HostResponseType {
   DelegateResponse,
   GenerateRandData,
   Ok,
-  Error
+  Error,
+  StreamChunk,
 }
 
 table HostResponse {
