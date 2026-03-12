@@ -1443,19 +1443,11 @@ impl HostResponse {
                 let mut messages: Vec<WIPOffset<FbsOutboundDelegateMsg>> = Vec::new();
                 values.iter().for_each(|msg| match msg {
                     OutboundDelegateMsg::ApplicationMessage(app) => {
-                        let instance_data = builder.create_vector(key.bytes());
-                        let instance_offset = FbsContractInstanceId::create(
-                            &mut builder,
-                            &ContractInstanceIdArgs {
-                                data: Some(instance_data),
-                            },
-                        );
                         let payload_data = builder.create_vector(&app.payload);
                         let delegate_context_data = builder.create_vector(app.context.as_ref());
                         let app_offset = FbsApplicationMessage::create(
                             &mut builder,
                             &ApplicationMessageArgs {
-                                app: Some(instance_offset),
                                 payload: Some(payload_data),
                                 context: Some(delegate_context_data),
                                 processed: app.processed,

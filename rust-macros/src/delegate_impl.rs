@@ -28,7 +28,7 @@ impl ImplStruct {
         quote! {
             #[no_mangle]
             #[cfg(feature = "freenet-main-delegate")]
-            pub extern "C" fn process(parameters: i64, attested: i64, inbound: i64) -> #ret {
+            pub extern "C" fn process(parameters: i64, origin: i64, inbound: i64) -> #ret {
                 #set_logger
                 let parameters = unsafe {
                     let param_buf = &*(parameters as *const ::freenet_stdlib::memory::buf::BufferBuilder);
@@ -38,16 +38,19 @@ impl ImplStruct {
                     );
                     Parameters::from(bytes)
                 };
-                let attested = unsafe {
-                    let attested_buf = &*(attested as *const ::freenet_stdlib::memory::buf::BufferBuilder);
+                let origin: Option<::freenet_stdlib::prelude::MessageOrigin> = unsafe {
+                    let origin_buf = &*(origin as *const ::freenet_stdlib::memory::buf::BufferBuilder);
                     let bytes = &*std::ptr::slice_from_raw_parts(
-                        attested_buf.start(),
-                        attested_buf.bytes_written(),
+                        origin_buf.start(),
+                        origin_buf.bytes_written(),
                     );
                     if bytes.is_empty() {
                         None
                     } else {
-                        Some(bytes)
+                        match ::freenet_stdlib::prelude::bincode::deserialize(bytes) {
+                            Ok(v) => Some(v),
+                            Err(_) => None,
+                        }
                     }
                 };
                 let inbound = unsafe {
@@ -70,7 +73,7 @@ impl ImplStruct {
                 let result = <#type_name as ::freenet_stdlib::prelude::DelegateInterface>::process(
                     &mut ctx,
                     parameters,
-                    attested,
+                    origin,
                     inbound
                 );
                 ::freenet_stdlib::prelude::DelegateInterfaceResult::from(result).into_raw()
