@@ -20,7 +20,7 @@ use crate::common_generated::common::SecretsId as FbsSecretsId;
 
 use crate::client_api::{TryFromFbs, WsApiError};
 use crate::contract_interface::{RelatedContracts, UpdateData};
-use crate::prelude::{ContractInstanceId, WrappedState, CONTRACT_KEY_SIZE};
+use crate::prelude::{ContractInstanceId, WrappedState};
 use crate::versioning::ContractContainer;
 use crate::{code_hash::CodeHash, prelude::Parameters};
 
@@ -363,6 +363,18 @@ impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
     }
 }
 
+/// Identifies where an inbound application message originated from.
+///
+/// When a web app sends a message to a delegate through the WebSocket API with
+/// an authentication token, the runtime resolves the token to the originating
+/// contract and wraps it in `MessageOrigin::WebApp`. Delegates receive this as
+/// the `origin` parameter of [`DelegateInterface::process`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MessageOrigin {
+    /// The message was sent by a web application backed by the given contract.
+    WebApp(ContractInstanceId),
+}
+
 /// A Delegate is a webassembly code designed to act as an agent for the user on
 /// Freenet. Delegates can:
 ///
@@ -391,7 +403,7 @@ impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
 ///     fn process(
 ///         ctx: &mut DelegateCtx,
 ///         _params: Parameters<'static>,
-///         _attested: Option<&'static [u8]>,
+///         _origin: Option<MessageOrigin>,
 ///         message: InboundDelegateMsg,
 ///     ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
 ///         // Access secrets synchronously - no round-trip needed!
@@ -415,13 +427,13 @@ pub trait DelegateInterface {
     ///   - **Context** (temporary): `read()`, `write()`, `len()`, `clear()` - state within a batch
     ///   - **Secrets** (persistent): `get_secret()`, `set_secret()`, `has_secret()`, `remove_secret()`
     /// - `parameters`: The delegate's initialization parameters.
-    /// - `attested`: An optional identifier for the client of this function. Usually
-    ///   will be a [`ContractInstanceId`].
+    /// - `origin`: An optional [`MessageOrigin`] identifying where the message came from.
+    ///   For messages sent by web applications, this is `MessageOrigin::WebApp(contract_id)`.
     /// - `message`: The inbound message to process.
     fn process(
         ctx: &mut crate::delegate_host::DelegateCtx,
         parameters: Parameters<'static>,
-        attested: Option<&'static [u8]>,
+        origin: Option<MessageOrigin>,
         message: InboundDelegateMsg,
     ) -> Result<Vec<OutboundDelegateMsg>, DelegateError>;
 }
@@ -555,11 +567,7 @@ impl<'a> TryFromFbs<&FbsInboundDelegateMsg<'a>> for InboundDelegateMsg<'a> {
         match msg.inbound_type() {
             InboundDelegateMsgType::common_ApplicationMessage => {
                 let app_msg = msg.inbound_as_common_application_message().unwrap();
-                let mut instance_key_bytes = [0; CONTRACT_KEY_SIZE];
-                instance_key_bytes
-                    .copy_from_slice(app_msg.app().data().bytes().to_vec().as_slice());
                 let app_msg = ApplicationMessage {
-                    app: ContractInstanceId::new(instance_key_bytes),
                     payload: app_msg.payload().bytes().to_vec(),
                     context: DelegateContext::new(app_msg.context().bytes().to_vec()),
                     processed: app_msg.processed(),
@@ -585,16 +593,14 @@ impl<'a> TryFromFbs<&FbsInboundDelegateMsg<'a>> for InboundDelegateMsg<'a> {
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ApplicationMessage {
-    pub app: ContractInstanceId,
     pub payload: Vec<u8>,
     pub context: DelegateContext,
     pub processed: bool,
 }
 
 impl ApplicationMessage {
-    pub fn new(app: ContractInstanceId, payload: Vec<u8>) -> Self {
+    pub fn new(payload: Vec<u8>) -> Self {
         Self {
-            app,
             payload,
             context: DelegateContext::default(),
             processed: false,
