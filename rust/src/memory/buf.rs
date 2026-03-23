@@ -361,6 +361,94 @@ fn __frnt__initiate_buffer(capacity: u32) -> i64 {
     buffer as i64
 }
 
+#[cfg(test)]
+mod test_io_write {
+    use super::*;
+    use std::io::Write;
+
+    /// Create a BufferMut backed by host memory (no WASM runtime needed).
+    /// Uses `__frnt__initiate_buffer` which allocates in host memory during tests,
+    /// and a null-base WasmLinearMem so compute_ptr is a no-op.
+    unsafe fn host_buffer_mut(capacity: u32) -> BufferMut<'static> {
+        let builder_ptr = __frnt__initiate_buffer(capacity) as *mut BufferBuilder;
+        let linear_mem = WasmLinearMem {
+            start_ptr: std::ptr::null(),
+            size: 0,
+        };
+        BufferMut::from_ptr(builder_ptr, linear_mem)
+    }
+
+    /// Call std::io::Write::write (not BufferMut::write which has different signature)
+    fn io_write(buf: &mut BufferMut<'_>, data: &[u8]) -> std::io::Result<usize> {
+        Write::write(buf, data)
+    }
+
+    #[test]
+    fn write_trait_basic() {
+        let mut buf = unsafe { host_buffer_mut(32) };
+        let n = io_write(&mut buf, b"hello").unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(buf.read_bytes(5), b"hello");
+    }
+
+    #[test]
+    fn write_trait_fills_exactly() {
+        let mut buf = unsafe { host_buffer_mut(4) };
+        let n = io_write(&mut buf, b"abcd").unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(buf.read_bytes(4), b"abcd");
+    }
+
+    #[test]
+    fn write_trait_partial_when_near_full() {
+        let mut buf = unsafe { host_buffer_mut(4) };
+        io_write(&mut buf, b"ab").unwrap();
+        // Only 2 bytes free, writing 3 should write 2
+        let n = io_write(&mut buf, b"xyz").unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(buf.read_bytes(4), b"abxy");
+    }
+
+    #[test]
+    fn write_trait_error_when_full() {
+        let mut buf = unsafe { host_buffer_mut(2) };
+        io_write(&mut buf, b"ab").unwrap();
+        let err = io_write(&mut buf, b"c").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::WriteZero);
+    }
+
+    #[test]
+    fn write_trait_empty_slice_ok() {
+        let mut buf = unsafe { host_buffer_mut(4) };
+        let n = io_write(&mut buf, b"").unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn write_all_trait() {
+        let mut buf = unsafe { host_buffer_mut(16) };
+        buf.write_all(b"hello world").unwrap();
+        assert_eq!(buf.read_bytes(11), b"hello world");
+    }
+
+    #[test]
+    fn write_all_insufficient_space() {
+        let mut buf = unsafe { host_buffer_mut(4) };
+        let err = buf.write_all(b"hello").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::WriteZero);
+    }
+
+    #[test]
+    fn bincode_serialize_into() {
+        let data: Vec<u32> = vec![1, 2, 3, 4, 5];
+        let size = bincode::serialized_size(&data).unwrap() as usize;
+        let mut buf = unsafe { host_buffer_mut(size as u32) };
+        bincode::serialize_into(&mut buf, &data).unwrap();
+        let result: Vec<u32> = bincode::deserialize(buf.read_bytes(size)).unwrap();
+        assert_eq!(result, data);
+    }
+}
+
 #[cfg(all(test, any(unix, windows), feature = "wasmer-tests"))]
 mod test {
     use super::*;
