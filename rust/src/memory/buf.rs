@@ -221,13 +221,15 @@ fn from_raw_builder<'a>(builder_ptr: *mut BufferBuilder, mem: WasmLinearMem) -> 
     unsafe {
         #[cfg(feature = "trace")]
         {
-            let contract_mem = std::slice::from_raw_parts(mem.start_ptr, mem.size as usize);
-            tracing::trace!(
-                "*mut BufferBuilder <- offset: {}; in mem: {:?}",
-                builder_ptr as usize,
-                &contract_mem[builder_ptr as usize
-                    ..builder_ptr as usize + std::mem::size_of::<BufferBuilder>()]
-            );
+            if !mem.start_ptr.is_null() && mem.size > 0 {
+                let contract_mem = std::slice::from_raw_parts(mem.start_ptr, mem.size as usize);
+                tracing::trace!(
+                    "*mut BufferBuilder <- offset: {}; in mem: {:?}",
+                    builder_ptr as usize,
+                    &contract_mem[builder_ptr as usize
+                        ..builder_ptr as usize + std::mem::size_of::<BufferBuilder>()]
+                );
+            }
             // use std::{fs::File, io::Write};
             // let mut f = File::create(std::env::temp_dir().join("dump.mem")).unwrap();
             // f.write_all(contract_mem).unwrap();
@@ -368,7 +370,7 @@ mod test_io_write {
 
     /// Create a BufferMut backed by host memory (no WASM runtime needed).
     /// Uses `__frnt__initiate_buffer` which allocates in host memory during tests,
-    /// and a null-base WasmLinearMem so compute_ptr is a no-op.
+    /// and a null-base WasmLinearMem so compute_ptr is a no-op on absolute pointers.
     unsafe fn host_buffer_mut(capacity: u32) -> BufferMut<'static> {
         let builder_ptr = __frnt__initiate_buffer(capacity) as *mut BufferBuilder;
         let linear_mem = WasmLinearMem {
