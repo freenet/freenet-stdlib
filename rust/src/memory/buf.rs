@@ -184,6 +184,27 @@ impl<'instance> BufferMut<'instance> {
     }
 }
 
+impl std::io::Write for BufferMut<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let last_write = (*self.write_ptr) as usize;
+        let free = self.buffer.len() - last_write;
+        let n = buf.len().min(free);
+        if n == 0 && !buf.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "buffer full",
+            ));
+        }
+        self.buffer[last_write..last_write + n].copy_from_slice(&buf[..n]);
+        *self.write_ptr = (last_write + n) as u32;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[inline(always)]
 pub(crate) fn compute_ptr<T>(ptr: *mut T, linear_mem_space: &WasmLinearMem) -> *mut T {
     let mem_start_ptr = linear_mem_space.start_ptr;
