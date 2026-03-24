@@ -355,15 +355,18 @@ impl<'instance> Buffer<'instance> {
 // Host import for refilling a buffer. Called by the contract when it has
 // exhausted the current buffer contents and needs more data from the host.
 // Returns the number of bytes the host wrote into the buffer, or 0 for EOF.
-#[cfg(all(feature = "contract", not(test)))]
+//
+// Only linked as a WASM import on wasm32 targets. On native targets (tests,
+// host-side builds with "contract" feature), a stub returning 0 (EOF) is used.
+#[cfg(all(feature = "contract", target_family = "wasm"))]
 #[link(wasm_import_module = "freenet_contract_io")]
 extern "C" {
     fn __frnt__fill_buffer(id: i64, buf_ptr: i64) -> u32;
 }
 
-// Test stub: returns 0 (EOF) since tests don't have a WASM host.
-// This means tests can only exercise the non-refill path.
-#[cfg(all(feature = "contract", test))]
+// Stub for non-WASM builds (native tests, host-side compilation).
+// Returns 0 (EOF) since there is no WASM host to refill from.
+#[cfg(all(feature = "contract", not(target_family = "wasm")))]
 unsafe extern "C" fn __frnt__fill_buffer(_id: i64, _buf_ptr: i64) -> u32 {
     0
 }
