@@ -779,7 +779,7 @@ pub enum QueryResponse {
     ConnectedPeers { peers: Vec<(Peer, SocketAddr)> },
     NetworkDebug(NetworkDebugInfo),
     NodeDiagnostics(NodeDiagnosticsResponse),
-    ProximityCache(ProximityCacheInfo),
+    NeighborHosting(NeighborHostingInfo),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -838,7 +838,7 @@ pub struct ContractState {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SystemMetrics {
     pub active_connections: u32,
-    pub seeding_contracts: u32,
+    pub hosting_contracts: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -862,36 +862,36 @@ pub enum NodeQuery {
         /// Diagnostic configuration specifying what information to collect
         config: NodeDiagnosticsConfig,
     },
-    /// Phase 3: Query proximity cache information for update propagation
-    ProximityCacheInfo,
+    /// Query neighbor hosting information for update propagation
+    NeighborHostingInfo,
 }
 
-/// Phase 3: Proximity cache information for update propagation
+/// Neighbor hosting information for update propagation
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ProximityCacheInfo {
-    /// Contracts this node is currently caching
-    pub my_cache: Vec<ContractCacheEntry>,
-    /// What we know about neighbor caches
-    pub neighbor_caches: Vec<NeighborCacheInfo>,
-    /// Proximity propagation statistics
-    pub stats: ProximityStats,
+pub struct NeighborHostingInfo {
+    /// Contracts this node is currently hosting
+    pub my_hosted: Vec<ContractHostingEntry>,
+    /// What we know about neighbor hosting
+    pub neighbor_hosting: Vec<NeighborHostingDetail>,
+    /// Hosting propagation statistics
+    pub stats: HostingStats,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ContractCacheEntry {
+pub struct ContractHostingEntry {
     /// Full contract key as string
     pub contract_key: String,
     /// 32-bit hash for proximity matching
-    pub cache_hash: u32,
-    /// When this contract was cached (Unix timestamp)
-    pub cached_since: u64,
+    pub hosting_hash: u32,
+    /// When this contract was first hosted (Unix timestamp)
+    pub hosted_since: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct NeighborCacheInfo {
+pub struct NeighborHostingDetail {
     /// Peer identifier
     pub peer_id: String,
-    /// Contract hashes this neighbor is known to cache
+    /// Contract hashes this neighbor is known to host
     pub known_contracts: Vec<u32>,
     /// Last update received from this neighbor (Unix timestamp)
     pub last_update: u64,
@@ -900,11 +900,11 @@ pub struct NeighborCacheInfo {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ProximityStats {
-    /// Number of cache announcements sent
-    pub cache_announces_sent: u64,
-    /// Number of cache announcements received
-    pub cache_announces_received: u64,
+pub struct HostingStats {
+    /// Number of hosting announcements sent
+    pub hosting_announces_sent: u64,
+    /// Number of hosting announcements received
+    pub hosting_announces_received: u64,
     /// Updates forwarded via proximity (not subscription)
     pub updates_via_proximity: u64,
     /// Updates forwarded via subscription
@@ -912,7 +912,7 @@ pub struct ProximityStats {
     /// False positives due to hash collisions
     pub false_positive_forwards: u64,
     /// Average number of contracts per neighbor
-    pub avg_neighbor_cache_size: f32,
+    pub avg_neighbor_hosting_size: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
