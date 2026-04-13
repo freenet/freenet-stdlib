@@ -652,7 +652,7 @@ mod test_streaming_read {
         let mut reader = unsafe { host_streaming_buffer(data) };
         assert_eq!(reader.total_remaining(), 10);
         let mut buf = [0u8; 4];
-        reader.read(&mut buf).unwrap();
+        reader.read_exact(&mut buf).unwrap();
         assert_eq!(reader.total_remaining(), 6);
     }
 

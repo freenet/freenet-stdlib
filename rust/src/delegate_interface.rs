@@ -367,12 +367,25 @@ impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
 ///
 /// When a web app sends a message to a delegate through the WebSocket API with
 /// an authentication token, the runtime resolves the token to the originating
-/// contract and wraps it in `MessageOrigin::WebApp`. Delegates receive this as
-/// the `origin` parameter of [`DelegateInterface::process`].
+/// contract and wraps it in `MessageOrigin::WebApp`. When one delegate sends a
+/// message to another via [`OutboundDelegateMsg::SendDelegateMessage`], the
+/// runtime attests the caller's identity in `MessageOrigin::Delegate`.
+/// Delegates receive this as the `origin` parameter of
+/// [`DelegateInterface::process`].
+///
+/// This enum is `#[non_exhaustive]`: downstream code matching on it must
+/// include a wildcard arm so future variants can be added without a
+/// source-level breaking change.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MessageOrigin {
     /// The message was sent by a web application backed by the given contract.
     WebApp(ContractInstanceId),
+    /// The message was sent by another delegate via
+    /// [`OutboundDelegateMsg::SendDelegateMessage`]. The carried key is the
+    /// runtime-attested identity of the calling delegate; the receiver can
+    /// trust it to make authorization decisions.
+    Delegate(DelegateKey),
 }
 
 /// A Delegate is a webassembly code designed to act as an agent for the user on
@@ -1113,6 +1126,46 @@ pub(crate) mod wasm_interface {
                 ptr: ptr as i64,
                 size,
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod message_origin_tests {
+    use super::*;
+
+    /// Wire-format pin: bincode encoding of `MessageOrigin::WebApp(..)` must
+    /// stay byte-identical across stdlib releases. Deployed delegate WASM
+    /// compiled against an older stdlib will receive these bytes from a
+    /// host running the new stdlib and must continue to deserialize them.
+    /// If this test ever fails, it is a wire-format break and is NOT
+    /// publishable as a non-major bump.
+    #[test]
+    fn webapp_origin_wire_format_is_stable() {
+        let id = ContractInstanceId::new([0xABu8; 32]);
+        let origin = MessageOrigin::WebApp(id);
+        let encoded = bincode::serialize(&origin).unwrap();
+
+        // Variant tag 0 (4-byte LE u32 in default bincode config) followed by
+        // the 32 raw bytes of the ContractInstanceId.
+        let mut expected = vec![0u8, 0, 0, 0];
+        expected.extend_from_slice(&[0xABu8; 32]);
+        assert_eq!(encoded, expected);
+    }
+
+    /// Round-trip the new variant, asserting it is distinct from `WebApp` on
+    /// the wire (so the runtime can't accidentally conflate the two).
+    #[test]
+    fn delegate_origin_round_trips_and_is_distinct() {
+        let key = DelegateKey::new([0x11u8; 32], crate::code_hash::CodeHash::new([0x22u8; 32]));
+        let origin = MessageOrigin::Delegate(key.clone());
+        let encoded = bincode::serialize(&origin).unwrap();
+        assert_eq!(encoded[..4], [1, 0, 0, 0], "Delegate variant tag must be 1");
+
+        let decoded: MessageOrigin = bincode::deserialize(&encoded).unwrap();
+        match decoded {
+            MessageOrigin::Delegate(k) => assert_eq!(k, key),
+            other => panic!("expected Delegate variant, got {other:?}"),
         }
     }
 }
