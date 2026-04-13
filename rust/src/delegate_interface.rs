@@ -385,6 +385,13 @@ pub enum MessageOrigin {
     /// [`OutboundDelegateMsg::SendDelegateMessage`]. The carried key is the
     /// runtime-attested identity of the calling delegate; the receiver can
     /// trust it to make authorization decisions.
+    ///
+    /// Note: an inter-delegate message **replaces** rather than composes with
+    /// any inherited `WebApp` origin the calling delegate may itself hold.
+    /// The receiver sees only `Delegate(caller_key)` for the duration of the
+    /// call, and does not gain contract access on behalf of any web app the
+    /// caller was acting for. Authorization should be made on the calling
+    /// delegate's identity alone.
     Delegate(DelegateKey),
 }
 
@@ -1153,19 +1160,29 @@ mod message_origin_tests {
         assert_eq!(encoded, expected);
     }
 
-    /// Round-trip the new variant, asserting it is distinct from `WebApp` on
-    /// the wire (so the runtime can't accidentally conflate the two).
+    /// Wire-format pin for the `Delegate` variant. Locks the full byte
+    /// layout (variant tag + serde repr of `DelegateKey`) so that any future
+    /// change to either `DelegateKey`'s serde or the workspace bincode
+    /// config is caught loudly. If `DelegateKey`'s on-the-wire encoding
+    /// changes, deployed delegates compiled against a previous stdlib will
+    /// silently fail to deserialize inter-delegate origins — which is
+    /// exactly the failure mode this test exists to prevent.
     #[test]
-    fn delegate_origin_round_trips_and_is_distinct() {
+    fn delegate_origin_wire_format_is_stable() {
         let key = DelegateKey::new([0x11u8; 32], crate::code_hash::CodeHash::new([0x22u8; 32]));
-        let origin = MessageOrigin::Delegate(key.clone());
+        let origin = MessageOrigin::Delegate(key);
         let encoded = bincode::serialize(&origin).unwrap();
-        assert_eq!(encoded[..4], [1, 0, 0, 0], "Delegate variant tag must be 1");
 
+        // Variant tag 1 (4-byte LE u32 in default bincode config), followed
+        // by the 32-byte `key` field, followed by the 32-byte `code_hash`
+        // field of `DelegateKey`.
+        let mut expected = vec![1u8, 0, 0, 0];
+        expected.extend_from_slice(&[0x11u8; 32]);
+        expected.extend_from_slice(&[0x22u8; 32]);
+        assert_eq!(encoded, expected);
+
+        // And it must still round-trip.
         let decoded: MessageOrigin = bincode::deserialize(&encoded).unwrap();
-        match decoded {
-            MessageOrigin::Delegate(k) => assert_eq!(k, key),
-            other => panic!("expected Delegate variant, got {other:?}"),
-        }
+        assert!(matches!(decoded, MessageOrigin::Delegate(_)));
     }
 }
