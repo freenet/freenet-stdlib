@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.6.0] - 2026-04-13
+
+### Changed (source-level breaking, wire-compatible)
+- Added `#[non_exhaustive]` to five wire-boundary enums so future variants
+  can be added without a source-level break for downstream consumers that
+  match exhaustively:
+  - `delegate_interface::InboundDelegateMsg` (companion to the already-
+    `non_exhaustive` `OutboundDelegateMsg`)
+  - `contract_interface::update::UpdateData`
+  - `delegate_interface::DelegateError`
+  - `contract_interface::error::ContractError`
+  - `versioning::APIVersion`
+  Downstream `match` sites must now include a wildcard arm.
+
+### Added
+- Wire-format pin tests for `InboundDelegateMsg::ApplicationMessage` and
+  `UpdateData::{State, Delta}`. These lock the bincode variant tags so that
+  a refactor which reorders variants fails loudly at test time rather than
+  silently corrupting in-flight messages to deployed contracts/delegates.
+
+### Compatibility
+- `#[non_exhaustive]` is a source-level change only. It does not affect
+  bincode discriminants, serde `Serialize`/`Deserialize` impls, byte layout,
+  or the wire format. Deployed contracts and delegates compiled against any
+  previous 0.x stdlib continue to deserialize identically. This bump is
+  minor-breaking (0.5.0 → 0.6.0) only because downstream Rust code that
+  pattern-matches these enums exhaustively must add a wildcard arm to
+  compile against 0.6.
+
 ## [0.5.0] - 2026-04-13
 
 ### Added
