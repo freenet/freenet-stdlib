@@ -367,12 +367,32 @@ impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
 ///
 /// When a web app sends a message to a delegate through the WebSocket API with
 /// an authentication token, the runtime resolves the token to the originating
-/// contract and wraps it in `MessageOrigin::WebApp`. Delegates receive this as
-/// the `origin` parameter of [`DelegateInterface::process`].
+/// contract and wraps it in `MessageOrigin::WebApp`. When one delegate sends a
+/// message to another via [`OutboundDelegateMsg::SendDelegateMessage`], the
+/// runtime attests the caller's identity in `MessageOrigin::Delegate`.
+/// Delegates receive this as the `origin` parameter of
+/// [`DelegateInterface::process`].
+///
+/// This enum is `#[non_exhaustive]`: downstream code matching on it must
+/// include a wildcard arm so future variants can be added without a
+/// source-level breaking change.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MessageOrigin {
     /// The message was sent by a web application backed by the given contract.
     WebApp(ContractInstanceId),
+    /// The message was sent by another delegate via
+    /// [`OutboundDelegateMsg::SendDelegateMessage`]. The carried key is the
+    /// runtime-attested identity of the calling delegate; the receiver can
+    /// trust it to make authorization decisions.
+    ///
+    /// Note: an inter-delegate message **replaces** rather than composes with
+    /// any inherited `WebApp` origin the calling delegate may itself hold.
+    /// The receiver sees only `Delegate(caller_key)` for the duration of the
+    /// call, and does not gain contract access on behalf of any web app the
+    /// caller was acting for. Authorization should be made on the calling
+    /// delegate's identity alone.
+    Delegate(DelegateKey),
 }
 
 /// A Delegate is a webassembly code designed to act as an agent for the user on
@@ -1114,5 +1134,55 @@ pub(crate) mod wasm_interface {
                 size,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod message_origin_tests {
+    use super::*;
+
+    /// Wire-format pin: bincode encoding of `MessageOrigin::WebApp(..)` must
+    /// stay byte-identical across stdlib releases. Deployed delegate WASM
+    /// compiled against an older stdlib will receive these bytes from a
+    /// host running the new stdlib and must continue to deserialize them.
+    /// If this test ever fails, it is a wire-format break and is NOT
+    /// publishable as a non-major bump.
+    #[test]
+    fn webapp_origin_wire_format_is_stable() {
+        let id = ContractInstanceId::new([0xABu8; 32]);
+        let origin = MessageOrigin::WebApp(id);
+        let encoded = bincode::serialize(&origin).unwrap();
+
+        // Variant tag 0 (4-byte LE u32 in default bincode config) followed by
+        // the 32 raw bytes of the ContractInstanceId.
+        let mut expected = vec![0u8, 0, 0, 0];
+        expected.extend_from_slice(&[0xABu8; 32]);
+        assert_eq!(encoded, expected);
+    }
+
+    /// Wire-format pin for the `Delegate` variant. Locks the full byte
+    /// layout (variant tag + serde repr of `DelegateKey`) so that any future
+    /// change to either `DelegateKey`'s serde or the workspace bincode
+    /// config is caught loudly. If `DelegateKey`'s on-the-wire encoding
+    /// changes, deployed delegates compiled against a previous stdlib will
+    /// silently fail to deserialize inter-delegate origins — which is
+    /// exactly the failure mode this test exists to prevent.
+    #[test]
+    fn delegate_origin_wire_format_is_stable() {
+        let key = DelegateKey::new([0x11u8; 32], crate::code_hash::CodeHash::new([0x22u8; 32]));
+        let origin = MessageOrigin::Delegate(key);
+        let encoded = bincode::serialize(&origin).unwrap();
+
+        // Variant tag 1 (4-byte LE u32 in default bincode config), followed
+        // by the 32-byte `key` field, followed by the 32-byte `code_hash`
+        // field of `DelegateKey`.
+        let mut expected = vec![1u8, 0, 0, 0];
+        expected.extend_from_slice(&[0x11u8; 32]);
+        expected.extend_from_slice(&[0x22u8; 32]);
+        assert_eq!(encoded, expected);
+
+        // And it must still round-trip.
+        let decoded: MessageOrigin = bincode::deserialize(&encoded).unwrap();
+        assert!(matches!(decoded, MessageOrigin::Delegate(_)));
     }
 }

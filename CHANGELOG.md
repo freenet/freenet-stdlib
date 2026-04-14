@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0] - 2026-04-13
+
+### Added
+- `MessageOrigin::Delegate(DelegateKey)` variant so the runtime can attest the
+  caller's identity for delegate-to-delegate `SendDelegateMessage` calls.
+  Previously the receiver got `origin = None` and could not learn which
+  delegate invoked it. (freenet/freenet-core#3860)
+
+### Changed
+- `MessageOrigin` is now `#[non_exhaustive]`. Source code matching on it must
+  add a wildcard arm; this is a one-time source break, not a wire-format
+  break — bincode discriminants for existing variants are unchanged, so
+  deployed delegate WASM continues to deserialize `WebApp(..)` and `None`
+  origins identically.
+
+### Compatibility
+- Wire format for `MessageOrigin::WebApp(..)` is byte-identical to 0.4.x.
+- Deployed delegates only break if they start receiving inter-delegate calls
+  carrying the new `Delegate(..)` variant, which no production delegate
+  exercises today. Rebuild against 0.5.x is only required for delegates that
+  will participate in delegate-to-delegate messaging.
+
 ## [0.1.14] - 2025-09-04
 
 ### Changed
