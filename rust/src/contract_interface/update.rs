@@ -181,6 +181,12 @@ pub enum ValidateResult {
 }
 
 /// Update notifications for a contract or a related contract.
+///
+/// This sits on the contract-update wire boundary. Marked `#[non_exhaustive]`
+/// so future variants (for example, new `Related*` shapes) can be added
+/// without a source-level break; downstream `match` sites must include a
+/// wildcard arm. Wire format is pinned by `update_data_wire_format_is_stable`.
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum UpdateData<'a> {
     State(#[serde(borrow)] State<'a>),
@@ -341,5 +347,43 @@ impl<'a> TryFromFbs<&FbsUpdateData<'a>> for UpdateData<'a> {
             }
             _ => unreachable!(),
         }
+    }
+}
+
+#[cfg(test)]
+mod update_data_wire_format_tests {
+    use super::*;
+
+    /// Wire-format pin for [`UpdateData`]. Variant ordering is a wire
+    /// contract: deployed contracts compiled against an older stdlib
+    /// deserialize `UpdateData` by positional tag, so reordering the
+    /// existing variants would silently route incoming state updates
+    /// into the wrong arm. This test locks the tag for `State(..)` at 0
+    /// and `Delta(..)` at 1. Adding a new variant at the end is
+    /// compatible; inserting or reordering existing variants is a
+    /// wire-format break and must trip this test.
+    #[test]
+    fn update_data_wire_format_is_stable() {
+        let state = UpdateData::State(State::from(vec![0xAA, 0xBB]));
+        let state_bytes = bincode::serialize(&state).unwrap();
+        assert_eq!(
+            state_bytes[..4],
+            [0, 0, 0, 0],
+            "UpdateData::State must stay at variant tag 0"
+        );
+
+        let delta = UpdateData::Delta(StateDelta::from(vec![0xCC, 0xDD]));
+        let delta_bytes = bincode::serialize(&delta).unwrap();
+        assert_eq!(
+            delta_bytes[..4],
+            [1, 0, 0, 0],
+            "UpdateData::Delta must stay at variant tag 1"
+        );
+
+        // Round-trip both.
+        let decoded_state: UpdateData<'_> = bincode::deserialize(&state_bytes).unwrap();
+        assert!(matches!(decoded_state, UpdateData::State(_)));
+        let decoded_delta: UpdateData<'_> = bincode::deserialize(&delta_bytes).unwrap();
+        assert!(matches!(decoded_delta, UpdateData::Delta(_)));
     }
 }

@@ -352,6 +352,12 @@ pub enum VersionError {
     IoError(#[from] std::io::Error),
 }
 
+/// Marked `#[non_exhaustive]` so future protocol versions can be added
+/// without a source-level break. Downstream `match` sites must include a
+/// wildcard arm. Historical note: an earlier release had `APIVersion::from_u64`
+/// panic on unknown versions; both the panic fix (0.1.8) and this attribute
+/// reduce the blast radius of version evolution.
+#[non_exhaustive]
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum APIVersion {
     Version0_0_1,

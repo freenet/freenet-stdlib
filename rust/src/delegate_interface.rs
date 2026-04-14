@@ -288,6 +288,10 @@ impl<'a> TryFromFbs<&FbsDelegateKey<'a>> for DelegateKey {
 }
 
 /// Type of errors during interaction with a delegate.
+///
+/// Marked `#[non_exhaustive]` so future error variants can be added without a
+/// source-level break. Downstream `match` sites must include a wildcard arm.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error, Serialize, Deserialize)]
 pub enum DelegateError {
     #[error("de/serialization error: {0}")]
@@ -487,6 +491,18 @@ impl AsRef<[u8]> for DelegateContext {
     }
 }
 
+/// Messages delivered **into** a delegate's `process()` function.
+///
+/// This is the inbound counterpart of [`OutboundDelegateMsg`] and sits on the
+/// host↔delegate wire boundary. Marked `#[non_exhaustive]` so future variants
+/// can be added without a source-level break; downstream `match` sites must
+/// include a wildcard arm. This matches the pre-existing `#[non_exhaustive]`
+/// on `OutboundDelegateMsg`.
+///
+/// Wire format: bincode with variant index 0..=N in declaration order. The
+/// `inbound_delegate_msg_wire_format_is_stable` test pins the bytes for
+/// `ApplicationMessage(..)` so that refactors cannot silently shift the tag.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum InboundDelegateMsg<'a> {
     ApplicationMessage(ApplicationMessage),
@@ -1184,5 +1200,27 @@ mod message_origin_tests {
         // And it must still round-trip.
         let decoded: MessageOrigin = bincode::deserialize(&encoded).unwrap();
         assert!(matches!(decoded, MessageOrigin::Delegate(_)));
+    }
+
+    /// Wire-format pin for the first variant of [`InboundDelegateMsg`]. Pins
+    /// the tag so that reordering the enum cannot silently shift existing
+    /// deployed delegate WASM off the correct variant. Only tag+payload
+    /// prefix is asserted (not the full ApplicationMessage byte layout),
+    /// since ApplicationMessage's internal fields have their own stability
+    /// expectations handled at a different layer. What matters here is that
+    /// variant 0 stays `ApplicationMessage` on the wire.
+    #[test]
+    fn inbound_delegate_msg_wire_format_is_stable() {
+        let msg = InboundDelegateMsg::ApplicationMessage(ApplicationMessage::new(vec![0xCC]));
+        let encoded = bincode::serialize(&msg).unwrap();
+        assert_eq!(
+            encoded[..4],
+            [0, 0, 0, 0],
+            "ApplicationMessage must stay at variant tag 0 on the wire; \
+             reordering InboundDelegateMsg variants is a wire-format break"
+        );
+        // And it must still round-trip into the same variant.
+        let decoded: InboundDelegateMsg<'_> = bincode::deserialize(&encoded).unwrap();
+        assert!(matches!(decoded, InboundDelegateMsg::ApplicationMessage(_)));
     }
 }
