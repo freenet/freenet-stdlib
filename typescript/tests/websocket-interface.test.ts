@@ -604,6 +604,38 @@ describe("Promise-based API", () => {
     expect(response.key.encode()).toEqual(TEST_ENCODED_KEY);
     expect(response.summary).toEqual(summary);
   });
+
+  test("callback and promise both fire for the same response", async () => {
+    const state = [7, 8, 9];
+    const responseData = buildContractResponse(
+      ContractResponseType.GetResponse,
+      new GetResponseT(makeKeyT(), null, state)
+    );
+
+    server.on("connection", (socket) => {
+      socket.on("message", () => {
+        socket.send(responseData);
+      });
+    });
+
+    let callbackFired = false;
+    const handler = makeHandler({
+      onContractGet: (resp) => {
+        callbackFired = true;
+        expect(resp.key.encode()).toEqual(TEST_ENCODED_KEY);
+      },
+    });
+
+    const api = new FreenetWsApi(new URL(PROMISE_WS_URL), handler);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const response = await api.get(
+      new GetRequest(ContractKey.fromInstanceId(TEST_ENCODED_KEY), false)
+    );
+
+    expect(callbackFired).toBe(true);
+    expect(response.state).toEqual(state);
+  });
 });
 
 describe("Response handling — NotFound, SubscribeResponse, Error", () => {
