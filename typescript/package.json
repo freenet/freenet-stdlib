@@ -10,20 +10,21 @@
     "dist/**/*.js.map"
   ],
   "dependencies": {
-    "flatbuffers": "^25.2.10",
-    "bs58": "^6.0.0"
+    "bs58": "^6.0.0",
+    "flatbuffers": "^25.9.23"
   },
   "optionalDependencies": {
-    "ws": "^8.18.0"
+    "ws": "^8.20.0"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.14",
-    "jest": "^29.7.0",
-    "ts-jest": "^29.2.6",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.6.0",
+    "jest": "^30.3.0",
+    "mock-socket": "^9.3.1",
+    "ts-jest": "^29.4.9",
     "ts-node": "^10.9.2",
-    "typescript": "^5.7.3",
-    "typedoc": "^0.28.4",
-    "mock-socket": "^9.3.1"
+    "typedoc": "^0.28.19",
+    "typescript": "^5.9.3"
   },
   "scripts": {
     "test": "jest",
