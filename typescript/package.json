@@ -1,6 +1,6 @@
 {
   "name": "@freenetorg/freenet-stdlib",
-  "version": "0.0.10",
+  "version": "0.1.0",
   "description": "Freenet standard library and utils",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

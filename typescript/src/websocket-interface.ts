@@ -41,6 +41,8 @@ import { GetSecretRequestTypeT } from "./client-request/get-secret-request-type"
 import { StreamChunkT as ClientStreamChunkT } from "./client-request/stream-chunk";
 import { UpdateDataT } from "./common/update-data";
 import { UpdateDataType } from "./common/update-data-type";
+export { UpdateDataType } from "./common/update-data-type";
+export { ContractType } from "./common/contract-type";
 import { ContractKeyT } from "./common/contract-key";
 import { PutResponseT } from "./host-response/put-response";
 import { GetResponseT } from "./host-response/get-response";
@@ -712,36 +714,30 @@ export class FreenetWsApi {
    * @constructor
    * @param url - The websocket URL to establish the connection.
    * @param handler - The ResponseHandler implementation
+   * @param authToken - Optional auth token (falls back to browser cookie)
    */
   constructor(url: URL, handler: ResponseHandler, authToken?: string) {
-    const AUTH_TOKEN_PARAM = "authToken";
-    if (authToken) {
-      url.searchParams.append(AUTH_TOKEN_PARAM, authToken);
-    } else {
-      // try to get the auth token from cookies
-      const cookie = getAuthTokenFromCookie();
-      if (cookie) {
-        url.searchParams.append(AUTH_TOKEN_PARAM, cookie);
-      }
+    this.responseHandler = handler;
+    const token = authToken ?? getAuthTokenFromCookie();
+    if (token) {
+      url.searchParams.append("authToken", token);
     }
     url.searchParams.append("encodingProtocol", ENCODING_PROTOC);
     const WS = resolveWebSocket();
     this.ws = new WS(url.toString());
     this.ws.binaryType = "arraybuffer";
-    this.responseHandler = handler;
-    this.ws.onmessage = (ev) => {
-      this.handleResponse(ev);
-    };
-    this.ws.addEventListener("open", (_) => {
+    this.ws.onmessage = (ev) => this.handleResponse(ev);
+    this.ws.addEventListener("open", () => {
       if (authToken) {
         this.sendRequest(new ClientRequestT(
           ClientRequestType.Authenticate,
-          new AuthenticateT(authToken!)
+          new AuthenticateT(authToken)
         ));
       }
       handler.onOpen();
     });
     this.ws.addEventListener("close", (ev: CloseEvent) => {
+      this.rejectAllPending(new Error(`Connection closed: ${ev.reason || ev.code}`));
       handler.onClose?.(ev.code, ev.reason);
     });
   }
@@ -1006,7 +1002,7 @@ export class FreenetWsApi {
   }
 
   /**
-   * Sends a disconnect notification to the host through websocket
+   * Sends a disconnect notification to the host through websocket.
    * @param disconnect - The `DisconnectRequest` object
    */
   async disconnect(disconnect: DisconnectRequest): Promise<void> {
