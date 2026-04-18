@@ -25,12 +25,18 @@ table NotFound {
   instance_id: common.ContractInstanceId(required);
 }
 
+table SubscribeResponse {
+  key: common.ContractKey(required);
+  subscribed: bool;
+}
+
 union ContractResponseType {
   GetResponse,
   PutResponse,
   UpdateNotification,
   UpdateResponse,
-  NotFound
+  NotFound,
+  SubscribeResponse
 }
 
 table ContractResponse {

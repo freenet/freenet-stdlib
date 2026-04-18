@@ -1,3 +1,4 @@
+import * as flatbuffers from "flatbuffers";
 import { Server } from "mock-socket";
 import { ContractResponseType } from "../src/host-response";
 import {
@@ -22,6 +23,9 @@ import { ContractType } from "../src/common/contract-type";
 import { ContractCodeT } from "../src/common/contract-code";
 import { RelatedContractsT } from "../src/client-request/related-contracts";
 import { UpdateDataType } from "../src/common/update-data-type";
+import { ClientRequest } from "../src/client-request/client-request";
+import { ClientRequestType } from "../src/client-request/client-request-type";
+import { StreamChunkT as ClientStreamChunkT } from "../src/client-request/stream-chunk";
 
 const TEST_ENCODED_KEY = "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9";
 const AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
@@ -371,5 +375,76 @@ describe("Freenet Websocket API - Result Deserialization", () => {
 
     // Verify that the expected UPDATE request was received
     expect(receivedExpectedUpdateReq).toEqual(true);
+  });
+
+  test("should chunk large put requests into StreamChunk messages", async () => {
+    // 600 KiB wrappedState → serialized payload exceeds CHUNK_THRESHOLD (512 KiB)
+    const largeState = Array.from(new Uint8Array(600 * 1024).fill(0xab));
+
+    const data = Array.from(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
+    const codeHash = Array.from(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
+    const contractCode = new ContractCodeT(data, codeHash);
+    const params = Array.from(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
+    const key = ContractKey.fromInstanceId(TEST_ENCODED_KEY);
+    const contract = new WasmContractV1(contractCode, params, key);
+    const container = new ContractContainer(
+      ContractType.WasmContractV1,
+      contract
+    );
+    const relatedContracts = new RelatedContractsT([]);
+    const putRequest = new PutRequest(container, largeState, relatedContracts);
+
+    const testHandler: ResponseHandler = {
+      onContractPut: (_response: PutResponse): void => {},
+      onContractGet: (_response: GetResponse): void => {},
+      onContractUpdate: (_response: UpdateResponse): void => {},
+      onContractUpdateNotification: (_response: UpdateNotification): void => {},
+      onContractNotFound: (_id: Uint8Array): void => {},
+      onDelegateResponse: (_response: DelegateResponse) => {},
+      onErr: (_err: HostError): void => {},
+      onOpen: () => {},
+    };
+
+    const receivedChunks: { streamId: number; index: number; total: number }[] =
+      [];
+
+    server.on("connection", (socket) => {
+      socket.on("message", (rawData) => {
+        try {
+          const bytes =
+            rawData instanceof Uint8Array
+              ? rawData
+              : new Uint8Array(rawData as ArrayBuffer);
+          const bb = new flatbuffers.ByteBuffer(bytes);
+          const req = ClientRequest.getRootAsClientRequest(bb).unpack();
+          if (req.clientRequestType === ClientRequestType.StreamChunk) {
+            const chunk = req.clientRequest as ClientStreamChunkT;
+            receivedChunks.push({
+              streamId: chunk.streamId,
+              index: chunk.index,
+              total: chunk.total,
+            });
+          }
+        } catch (_) {}
+      });
+    });
+
+    const api = new FreenetWsApi(new URL(WS_URL), testHandler, AUTH_TOKEN);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await api.put(putRequest);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Should have received multiple chunks
+    expect(receivedChunks.length).toBeGreaterThan(1);
+
+    // All chunks must share same streamId and total
+    const { streamId, total } = receivedChunks[0];
+    expect(receivedChunks.every((c) => c.streamId === streamId)).toBe(true);
+    expect(receivedChunks.every((c) => c.total === total)).toBe(true);
+
+    // Indices must be sequential 0..total-1
+    expect(receivedChunks.length).toBe(total);
+    const indices = receivedChunks.map((c) => c.index).sort((a, b) => a - b);
+    expect(indices).toEqual(Array.from({ length: total }, (_, i) => i));
   });
 });

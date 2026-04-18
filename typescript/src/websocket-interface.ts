@@ -1,7 +1,7 @@
 import * as flatbuffers from "flatbuffers";
 import base58 from "bs58";
 
-import { ReassemblyBuffer } from "./streaming";
+import { CHUNK_SIZE, CHUNK_THRESHOLD, ReassemblyBuffer } from "./streaming";
 import { ContractContainerT } from "./common/contract-container";
 import { ContractInstanceIdT } from "./common/contract-instance-id";
 import { DeltaUpdateT } from "./common/delta-update";
@@ -38,6 +38,7 @@ import {
   WasmDelegateV1T,
 } from "./client-request";
 import { GetSecretRequestTypeT } from "./client-request/get-secret-request-type";
+import { StreamChunkT as ClientStreamChunkT } from "./client-request/stream-chunk";
 import { UpdateDataT } from "./common/update-data";
 import { UpdateDataType } from "./common/update-data-type";
 import { ContractKeyT } from "./common/contract-key";
@@ -56,6 +57,7 @@ import {
   OutboundDelegateMsgType,
   RequestUserInputT,
   StreamChunkT,
+  SubscribeResponseT,
 } from "./host-response";
 import { SetSecretRequestT } from "./host-response/set-secret-request";
 import {
@@ -623,6 +625,10 @@ export interface ResponseHandler {
    */
   onContractNotFound: (instanceId: ContractInstanceId) => void;
   /**
+   * Contract `Subscribe` confirmation handler
+   */
+  onSubscribeResponse?: (key: ContractKey, subscribed: boolean) => void;
+  /**
    * `Delegate` response handler
    * @param response
    */
@@ -641,11 +647,10 @@ export interface ResponseHandler {
   onClose?: (code: number, reason: string) => void;
 }
 
-const AUTHORIZATION_HEADER: string = "Authorization";
-const ENCODING_PROTOC_HEADER: string = `Encoding-Protocol`;
 const ENCODING_PROTOC: string = "flatbuffers";
 
 function getAuthTokenFromCookie(): string | null {
+  if (typeof document === "undefined") return null;
   const cookies = document.cookie.split(";");
   for (let cookie of cookies) {
     const [cookieName, cookieValue] = cookie.trim().split("=");
@@ -658,6 +663,22 @@ function getAuthTokenFromCookie(): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Resolves a WebSocket constructor for the current environment.
+ * Uses the global `WebSocket` in browsers, falls back to the `ws` package in Node.js.
+ */
+function resolveWebSocket(): typeof WebSocket {
+  if (typeof WebSocket !== "undefined") return WebSocket;
+  try {
+    // Node.js — require ws at runtime so it's not bundled in browsers
+    return require("ws") as typeof WebSocket;
+  } catch {
+    throw new Error(
+      "No WebSocket implementation found. Install the 'ws' package for Node.js support."
+    );
+  }
 }
 
 /**
@@ -681,6 +702,7 @@ export class FreenetWsApi {
    */
   private responseHandler: ResponseHandler;
   private reassembly: ReassemblyBuffer = new ReassemblyBuffer();
+  private nextStreamId = 0;
 
   /**
    * @constructor
@@ -699,7 +721,8 @@ export class FreenetWsApi {
       }
     }
     url.searchParams.append("encodingProtocol", ENCODING_PROTOC);
-    this.ws = new WebSocket(url);
+    const WS = resolveWebSocket();
+    this.ws = new WS(url.toString());
     this.ws.binaryType = "arraybuffer";
     this.responseHandler = handler;
     this.ws.onmessage = (ev) => {
@@ -707,13 +730,10 @@ export class FreenetWsApi {
     };
     this.ws.addEventListener("open", (_) => {
       if (authToken) {
-        const request = new ClientRequestT(
+        this.sendRequest(new ClientRequestT(
           ClientRequestType.Authenticate,
           new AuthenticateT(authToken!)
-        );
-        const fbb = new flatbuffers.Builder();
-        ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-        this.ws.send(fbb.asUint8Array());
+        ));
       }
       handler.onOpen();
     });
@@ -769,6 +789,15 @@ export class FreenetWsApi {
             const not_found = host_resp.contractResponse as NotFoundT;
             const not_found_id = new Uint8Array(not_found.instanceId?.data ?? []);
             this.responseHandler.onContractNotFound(not_found_id);
+            break;
+          case ContractResponseType.SubscribeResponse:
+            const sub_resp = host_resp.contractResponse as SubscribeResponseT;
+            const sub_instance = new Uint8Array(sub_resp.key?.instance?.data ?? []);
+            const sub_code = sub_resp.key?.code && sub_resp.key.code.length > 0
+              ? new Uint8Array(sub_resp.key.code)
+              : undefined;
+            const sub_key = new ContractKey(sub_instance, sub_code);
+            this.responseHandler.onSubscribeResponse?.(sub_key, sub_resp.subscribed);
             break;
           default:
             const cause = "Contract response type not implemented";
@@ -834,21 +863,51 @@ export class FreenetWsApi {
   }
 
   /**
+   * Serializes a ClientRequest and sends it over the WebSocket.
+   * Automatically chunks payloads exceeding CHUNK_THRESHOLD.
+   */
+  private sendRequest(request: ClientRequestT): void {
+    const fbb = new flatbuffers.Builder(1024);
+    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
+    const bytes = fbb.asUint8Array();
+    if (bytes.byteLength > CHUNK_THRESHOLD) {
+      this.sendChunked(bytes);
+    } else {
+      this.ws.send(bytes);
+    }
+  }
+
+  /**
+   * Splits a serialized payload into StreamChunk messages and sends each.
+   */
+  private sendChunked(payload: Uint8Array): void {
+    const streamId = this.nextStreamId++;
+    const total = Math.ceil(payload.byteLength / CHUNK_SIZE);
+    for (let i = 0; i < total; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, payload.byteLength);
+      const chunk = new ClientStreamChunkT(
+        streamId,
+        i,
+        total,
+        Array.from(payload.subarray(start, end))
+      );
+      const request = new ClientRequestT(ClientRequestType.StreamChunk, chunk);
+      const fbb = new flatbuffers.Builder(end - start + 128);
+      ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
+      this.ws.send(fbb.asUint8Array());
+    }
+  }
+
+  /**
    * Sends a put request to the host through websocket
    * @param put - The `PutRequest` object
    */
   async put(put: PutRequest): Promise<void> {
-    let put_request = new ContractRequestT(
-      ContractRequestType.Put,
-      put
-    );
-    let request = new ClientRequestT(
+    this.sendRequest(new ClientRequestT(
       ClientRequestType.ContractRequest,
-      put_request
-    );
-    let fbb = new flatbuffers.Builder(1024);
-    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-    this.ws.send(fbb.asUint8Array());
+      new ContractRequestT(ContractRequestType.Put, put)
+    ));
   }
 
   /**
@@ -856,17 +915,10 @@ export class FreenetWsApi {
    * @param update - The `UpdateRequest` object
    */
   async update(update: UpdateRequest): Promise<void> {
-    let update_request = new ContractRequestT(
-      ContractRequestType.Update,
-      update
-    );
-    let request = new ClientRequestT(
+    this.sendRequest(new ClientRequestT(
       ClientRequestType.ContractRequest,
-      update_request
-    );
-    let fbb = new flatbuffers.Builder(1024);
-    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-    this.ws.send(fbb.asUint8Array());
+      new ContractRequestT(ContractRequestType.Update, update)
+    ));
   }
 
   /**
@@ -874,17 +926,10 @@ export class FreenetWsApi {
    * @param get - The `GetRequest` object
    */
   async get(get: GetRequest): Promise<void> {
-    let get_request = new ContractRequestT(
-      ContractRequestType.Get,
-      get
-    );
-    let request = new ClientRequestT(
+    this.sendRequest(new ClientRequestT(
       ClientRequestType.ContractRequest,
-      get_request
-    );
-    let fbb = new flatbuffers.Builder(1024);
-    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-    this.ws.send(fbb.asUint8Array());
+      new ContractRequestT(ContractRequestType.Get, get)
+    ));
   }
 
   /**
@@ -892,17 +937,10 @@ export class FreenetWsApi {
    * @param subscribe - The `SubscribeRequest` object
    */
   async subscribe(subscribe: SubscribeRequest): Promise<void> {
-    let subscribe_request = new ContractRequestT(
-      ContractRequestType.Subscribe,
-      subscribe
-    );
-    let request = new ClientRequestT(
+    this.sendRequest(new ClientRequestT(
       ClientRequestType.ContractRequest,
-      subscribe_request
-    );
-    let fbb = new flatbuffers.Builder(1024);
-    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-    this.ws.send(fbb.asUint8Array());
+      new ContractRequestT(ContractRequestType.Subscribe, subscribe)
+    ));
   }
 
   /**
@@ -910,9 +948,6 @@ export class FreenetWsApi {
    * @param disconnect - The `DisconnectRequest` object
    */
   async disconnect(disconnect: DisconnectRequest): Promise<void> {
-    let request = new ClientRequestT(ClientRequestType.Disconnect, disconnect);
-    let fbb = new flatbuffers.Builder(1024);
-    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-    this.ws.send(fbb.asUint8Array());
+    this.sendRequest(new ClientRequestT(ClientRequestType.Disconnect, disconnect));
   }
 }

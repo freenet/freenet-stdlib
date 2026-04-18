@@ -20,6 +20,7 @@ export { OutboundDelegateMsgType } from './host-response/outbound-delegate-msg-t
 export { PutResponse, PutResponseT } from './host-response/put-response.js';
 export { RequestUserInput, RequestUserInputT } from './host-response/request-user-input.js';
 export { StreamChunk, StreamChunkT } from './host-response/stream-chunk.js';
+export { SubscribeResponse, SubscribeResponseT } from './host-response/subscribe-response.js';
 export { UpdateNotification, UpdateNotificationT } from './host-response/update-notification.js';
 export { UpdateResponse, UpdateResponseT } from './host-response/update-response.js';
 export { UserInputRequest, UserInputRequestT } from './host-response/user-input-request.js';
