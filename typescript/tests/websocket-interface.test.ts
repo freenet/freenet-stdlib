@@ -259,7 +259,8 @@ describe("Freenet Websocket API - Result Deserialization", () => {
     // Instantiate API and perform operations
     const api = new FreenetWsApi(new URL(WS_URL), testHandler, AUTH_TOKEN);
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    await api.put(putRequest);
+    // Don't await — test verifies outbound bytes, not the response
+    api.put(putRequest).catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Verify that the expected PUT request was received
@@ -311,7 +312,7 @@ describe("Freenet Websocket API - Result Deserialization", () => {
     // Instantiate API and perform operations
     const api = new FreenetWsApi(new URL(WS_URL), testHandler, AUTH_TOKEN);
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    await api.get(getRequest);
+    api.get(getRequest).catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Verify that the expected GET request was received
@@ -370,7 +371,7 @@ describe("Freenet Websocket API - Result Deserialization", () => {
     // Instantiate API and perform operations
     const api = new FreenetWsApi(new URL(WS_URL), testHandler, AUTH_TOKEN);
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    await api.update(updateRequest);
+    api.update(updateRequest).catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Verify that the expected UPDATE request was received
@@ -431,7 +432,7 @@ describe("Freenet Websocket API - Result Deserialization", () => {
 
     const api = new FreenetWsApi(new URL(WS_URL), testHandler, AUTH_TOKEN);
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    await api.put(putRequest);
+    api.put(putRequest).catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Should have received multiple chunks

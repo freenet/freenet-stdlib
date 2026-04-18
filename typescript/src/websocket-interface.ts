@@ -690,19 +690,23 @@ function resolveWebSocket(): typeof WebSocket {
  * const freenetApi = new FreenetWsApi(API_URL, handler);
  * ```
  */
+interface PendingRequest<T> {
+  resolve: (value: T) => void;
+  reject: (reason: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** Default timeout for awaiting a response (30 seconds). */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 export class FreenetWsApi {
-  /**
-   * Websocket object for creating and managing a WebSocket connection to a server,
-   * as well as for sending and receiving data on the connection.
-   * @private
-   */
   private ws: WebSocket;
-  /**
-   * @private
-   */
   private responseHandler: ResponseHandler;
   private reassembly: ReassemblyBuffer = new ReassemblyBuffer();
   private nextStreamId = 0;
+  private pendingGets: PendingRequest<GetResponse>[] = [];
+  private pendingPuts: PendingRequest<PutResponse>[] = [];
+  private pendingUpdates: PendingRequest<UpdateResponse>[] = [];
 
   /**
    * @constructor
@@ -763,18 +767,21 @@ export class FreenetWsApi {
               host_resp.contractResponse as PutResponseT
             );
             this.responseHandler.onContractPut(put_response);
+            this.resolveNext(this.pendingPuts, put_response);
             break;
           case ContractResponseType.GetResponse:
             const get_response = GetResponse.fromGetResponseT(
               host_resp.contractResponse as GetResponseT
             );
             this.responseHandler.onContractGet(get_response);
+            this.resolveNext(this.pendingGets, get_response);
             break;
           case ContractResponseType.UpdateResponse:
             const update_response = UpdateResponse.fromUpdateResponseT(
               host_resp.contractResponse as UpdateResponseT
             );
             this.responseHandler.onContractUpdate(update_response);
+            this.resolveNext(this.pendingUpdates, update_response);
             break;
           case ContractResponseType.UpdateNotification:
             const update_notification =
@@ -789,6 +796,7 @@ export class FreenetWsApi {
             const not_found = host_resp.contractResponse as NotFoundT;
             const not_found_id = new Uint8Array(not_found.instanceId?.data ?? []);
             this.responseHandler.onContractNotFound(not_found_id);
+            this.rejectNext(this.pendingGets, new Error("Contract not found"));
             break;
           case ContractResponseType.SubscribeResponse:
             const sub_resp = host_resp.contractResponse as SubscribeResponseT;
@@ -825,6 +833,7 @@ export class FreenetWsApi {
             : "unknown error";
         const host_error: HostError = { cause: error_cause };
         this.responseHandler.onErr(host_error);
+        this.rejectAllPending(new Error(error_cause));
         break;
       case HostResponseType.StreamChunk: {
         const streamChunk = response.response as StreamChunkT;
@@ -900,36 +909,89 @@ export class FreenetWsApi {
   }
 
   /**
-   * Sends a put request to the host through websocket
+   * Enqueues a pending response and returns a promise that resolves
+   * when the matching response arrives, or rejects on timeout.
+   */
+  private awaitResponse<T>(queue: PendingRequest<T>[]): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = queue.findIndex((p) => p.timer === timer);
+        if (idx !== -1) queue.splice(idx, 1);
+        reject(new Error("Request timeout"));
+      }, REQUEST_TIMEOUT_MS);
+      queue.push({ resolve, reject, timer });
+    });
+  }
+
+  /**
+   * Resolves the oldest pending request in a queue.
+   */
+  private resolveNext<T>(queue: PendingRequest<T>[], value: T): void {
+    const pending = queue.shift();
+    if (pending) {
+      clearTimeout(pending.timer);
+      pending.resolve(value);
+    }
+  }
+
+  /**
+   * Rejects the oldest pending request in a queue.
+   */
+  private rejectNext<T>(queue: PendingRequest<T>[], error: Error): void {
+    const pending = queue.shift();
+    if (pending) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+  }
+
+  /**
+   * Rejects all pending requests across all queues.
+   */
+  private rejectAllPending(error: Error): void {
+    for (const queue of [this.pendingGets, this.pendingPuts, this.pendingUpdates]) {
+      while (queue.length > 0) {
+        const pending = queue.shift()!;
+        clearTimeout(pending.timer);
+        pending.reject(error);
+      }
+    }
+  }
+
+  /**
+   * Sends a put request and returns the response.
    * @param put - The `PutRequest` object
    */
-  async put(put: PutRequest): Promise<void> {
+  async put(put: PutRequest): Promise<PutResponse> {
     this.sendRequest(new ClientRequestT(
       ClientRequestType.ContractRequest,
       new ContractRequestT(ContractRequestType.Put, put)
     ));
+    return this.awaitResponse(this.pendingPuts);
   }
 
   /**
-   * Sends an update request to the host through websocket
+   * Sends an update request and returns the response.
    * @param update - The `UpdateRequest` object
    */
-  async update(update: UpdateRequest): Promise<void> {
+  async update(update: UpdateRequest): Promise<UpdateResponse> {
     this.sendRequest(new ClientRequestT(
       ClientRequestType.ContractRequest,
       new ContractRequestT(ContractRequestType.Update, update)
     ));
+    return this.awaitResponse(this.pendingUpdates);
   }
 
   /**
-   * Sends a get request to the host through websocket
+   * Sends a get request and returns the response.
    * @param get - The `GetRequest` object
    */
-  async get(get: GetRequest): Promise<void> {
+  async get(get: GetRequest): Promise<GetResponse> {
     this.sendRequest(new ClientRequestT(
       ClientRequestType.ContractRequest,
       new ContractRequestT(ContractRequestType.Get, get)
     ));
+    return this.awaitResponse(this.pendingGets);
   }
 
   /**
@@ -944,7 +1006,7 @@ export class FreenetWsApi {
   }
 
   /**
-   * Sends an disconnect notification to the host through websocket
+   * Sends a disconnect notification to the host through websocket
    * @param disconnect - The `DisconnectRequest` object
    */
   async disconnect(disconnect: DisconnectRequest): Promise<void> {
