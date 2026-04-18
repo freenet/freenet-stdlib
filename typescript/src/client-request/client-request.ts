@@ -9,6 +9,7 @@ import { ClientRequestType, unionToClientRequestType, unionListToClientRequestTy
 import { ContractRequest, ContractRequestT } from '../client-request/contract-request.js';
 import { DelegateRequest, DelegateRequestT } from '../client-request/delegate-request.js';
 import { Disconnect, DisconnectT } from '../client-request/disconnect.js';
+import { StreamChunk, StreamChunkT } from '../client-request/stream-chunk.js';
 
 
 export class ClientRequest implements flatbuffers.IUnpackableObject<ClientRequestT> {
@@ -97,7 +98,7 @@ unpackTo(_o: ClientRequestT): void {
 export class ClientRequestT implements flatbuffers.IGeneratedObject {
 constructor(
   public clientRequestType: ClientRequestType = ClientRequestType.NONE,
-  public clientRequest: AuthenticateT|ContractRequestT|DelegateRequestT|DisconnectT|null = null
+  public clientRequest: AuthenticateT|ContractRequestT|DelegateRequestT|DisconnectT|StreamChunkT|null = null
 ){}
 
 

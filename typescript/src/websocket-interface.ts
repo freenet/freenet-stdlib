@@ -1,6 +1,7 @@
 import * as flatbuffers from "flatbuffers";
 import base58 from "bs58";
 
+import { ReassemblyBuffer } from "./streaming";
 import { ContractContainerT } from "./common/contract-container";
 import { ContractInstanceIdT } from "./common/contract-instance-id";
 import { DeltaUpdateT } from "./common/delta-update";
@@ -24,7 +25,6 @@ import {
   DelegateRequestType,
   DelegateType,
   DisconnectT,
-  GetSecretRequestTypeT,
   GetT,
   InboundDelegateMsgT,
   InboundDelegateMsgType,
@@ -37,6 +37,7 @@ import {
   UserInputResponseT,
   WasmDelegateV1T,
 } from "./client-request";
+import { GetSecretRequestTypeT } from "./client-request/get-secret-request-type";
 import { UpdateDataT } from "./common/update-data";
 import { UpdateDataType } from "./common/update-data-type";
 import { ContractKeyT } from "./common/contract-key";
@@ -54,17 +55,19 @@ import {
   OutboundDelegateMsgT,
   OutboundDelegateMsgType,
   RequestUserInputT,
-  SetSecretRequestT,
+  StreamChunkT,
 } from "./host-response";
+import { SetSecretRequestT } from "./host-response/set-secret-request";
 import {
   ApplicationMessageT,
   ContractCodeT,
   ContractType,
-  GetSecretRequestT,
-  GetSecretResponseT,
   WasmContractV1T,
 } from "./common";
+import { GetSecretRequestT } from "./common/get-secret-request";
+import { GetSecretResponseT } from "./common/get-secret-response";
 import { ErrorT } from "./host-response/error";
+import { NotFoundT } from "./host-response/not-found";
 
 // Common types
 /**
@@ -321,9 +324,10 @@ export class PutRequest extends PutT {
     container: ContractContainerT | null = null,
     wrappedState: number[] = [],
     relatedContracts: RelatedContractsT | null = null,
-    subscribe: boolean = false
+    subscribe: boolean = false,
+    blockingSubscribe: boolean = false
   ) {
-    super(container, wrappedState, relatedContracts, subscribe);
+    super(container, wrappedState, relatedContracts, subscribe, blockingSubscribe);
   }
 }
 
@@ -346,9 +350,9 @@ export class UpdateRequest extends UpdateT {
  * @public
  */
 export class GetRequest extends GetT {
-  constructor(key: ContractKey, fetchContract: boolean = false, subscribe: boolean = false) {
+  constructor(key: ContractKey, fetchContract: boolean = false, subscribe: boolean = false, blockingSubscribe: boolean = false) {
     const contract_key = key.get_contract_key();
-    super(contract_key, fetchContract, subscribe);
+    super(contract_key, fetchContract, subscribe, blockingSubscribe);
   }
 }
 
@@ -382,9 +386,7 @@ export type UserInputResponse = UserInputResponseT;
 
 export type InboundMessage =
   | ApplicationMessage
-  | GetSecretResponse
-  | UserInputResponse
-  | GetSecretRequest;
+  | UserInputResponse;
 
 /**
  * Representation of DelegateRequest Inbound message
@@ -516,7 +518,7 @@ export class UpdateNotification extends UpdateNotificationT {
       obj.key?.code && obj.key.code.length > 0
         ? new Uint8Array(obj.key.code!)
         : undefined;
-    let key: ContractKey = new ContractKey(instance);
+    let key: ContractKey = new ContractKey(instance, code);
 
     return new UpdateNotification(key, obj.update!);
   }
@@ -546,10 +548,7 @@ export type SetSecretRequest = SetSecretRequestT;
 export type OutboundMessage =
   | ApplicationMessage
   | RequestUserInput
-  | ContextUpdated
-  | GetSecretRequest
-  | SetSecretRequest
-  | GetSecretResponse;
+  | ContextUpdated;
 
 export class OutboundDelegateMsg extends OutboundDelegateMsgT {
   constructor(
@@ -620,6 +619,10 @@ export interface ResponseHandler {
    */
   onContractUpdateNotification: (response: UpdateNotification) => void;
   /**
+   * Contract `NotFound` handler
+   */
+  onContractNotFound: (instanceId: ContractInstanceId) => void;
+  /**
    * `Delegate` response handler
    * @param response
    */
@@ -632,6 +635,10 @@ export interface ResponseHandler {
    * Callback executed after successfully establishing connection with websocket
    */
   onOpen: () => void;
+  /**
+   * Called when WebSocket connection closes
+   */
+  onClose?: (code: number, reason: string) => void;
 }
 
 const AUTHORIZATION_HEADER: string = "Authorization";
@@ -654,12 +661,12 @@ function getAuthTokenFromCookie(): string | null {
 }
 
 /**
- * The `LocutusWsApi` provides the API to manage the connection to the host, handle responses, and send requests.
+ * The `FreenetWsApi` provides the API to manage the connection to the host, handle responses, and send requests.
  * @example
  * Here's a simple example:
  * ```
  * const API_URL = new URL(`ws://${location.host}/contract/command/`);
- * const locutusApi = new LocutusWsApi(API_URL, handler);
+ * const freenetApi = new FreenetWsApi(API_URL, handler);
  * ```
  */
 export class FreenetWsApi {
@@ -673,6 +680,7 @@ export class FreenetWsApi {
    * @private
    */
   private responseHandler: ResponseHandler;
+  private reassembly: ReassemblyBuffer = new ReassemblyBuffer();
 
   /**
    * @constructor
@@ -708,6 +716,9 @@ export class FreenetWsApi {
         this.ws.send(fbb.asUint8Array());
       }
       handler.onOpen();
+    });
+    this.ws.addEventListener("close", (ev: CloseEvent) => {
+      handler.onClose?.(ev.code, ev.reason);
     });
   }
 
@@ -754,6 +765,11 @@ export class FreenetWsApi {
               update_notification
             );
             break;
+          case ContractResponseType.NotFound:
+            const not_found = host_resp.contractResponse as NotFoundT;
+            const not_found_id = new Uint8Array(not_found.instanceId?.data ?? []);
+            this.responseHandler.onContractNotFound(not_found_id);
+            break;
           default:
             const cause = "Contract response type not implemented";
             console.log(cause);
@@ -770,6 +786,42 @@ export class FreenetWsApi {
         break;
       case HostResponseType.Ok:
         break;
+      case HostResponseType.Error:
+        const error_resp = response.response as ErrorT;
+        const error_msg = error_resp.msg;
+        const error_cause = typeof error_msg === "string"
+          ? error_msg
+          : error_msg instanceof Uint8Array
+            ? new TextDecoder().decode(error_msg)
+            : "unknown error";
+        const host_error: HostError = { cause: error_cause };
+        this.responseHandler.onErr(host_error);
+        break;
+      case HostResponseType.StreamChunk: {
+        const streamChunk = response.response as StreamChunkT;
+        try {
+          const assembled = this.reassembly.receiveChunk(
+            streamChunk.streamId,
+            streamChunk.index,
+            streamChunk.total,
+            new Uint8Array(streamChunk.data)
+          );
+          if (assembled !== null) {
+            // Reassembly complete — re-dispatch the inner response
+            const syntheticEvent = { data: assembled.buffer } as MessageEvent;
+            this.handleResponse(syntheticEvent);
+          }
+        } catch (err) {
+          const streamErr: HostError = {
+            cause: `Stream reassembly error: ${err}`,
+          };
+          this.responseHandler.onErr(streamErr);
+          if (streamChunk.streamId !== undefined) {
+            this.reassembly.removeStream(streamChunk.streamId);
+          }
+        }
+        break;
+      }
       default:
         const cause = `Received wrong HostResponse type`;
         console.log(cause);
@@ -787,7 +839,7 @@ export class FreenetWsApi {
    */
   async put(put: PutRequest): Promise<void> {
     let put_request = new ContractRequestT(
-      put.subscribe ? ContractRequestType.Subscribe : ContractRequestType.Put, 
+      ContractRequestType.Put,
       put
     );
     let request = new ClientRequestT(
@@ -823,7 +875,7 @@ export class FreenetWsApi {
    */
   async get(get: GetRequest): Promise<void> {
     let get_request = new ContractRequestT(
-      get.subscribe ? ContractRequestType.Subscribe : ContractRequestType.Get, 
+      ContractRequestType.Get,
       get
     );
     let request = new ClientRequestT(

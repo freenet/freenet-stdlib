@@ -6,7 +6,6 @@ import * as flatbuffers from 'flatbuffers';
 
 import { ApplicationMessages, ApplicationMessagesT } from '../client-request/application-messages.js';
 import { DelegateRequestType, unionToDelegateRequestType, unionListToDelegateRequestType } from '../client-request/delegate-request-type.js';
-import { GetSecretRequestType, GetSecretRequestTypeT } from '../client-request/get-secret-request-type.js';
 import { RegisterDelegate, RegisterDelegateT } from '../client-request/register-delegate.js';
 import { UnregisterDelegate, UnregisterDelegateT } from '../client-request/unregister-delegate.js';
 
@@ -89,7 +88,7 @@ unpackTo(_o: DelegateRequestT): void {
 export class DelegateRequestT implements flatbuffers.IGeneratedObject {
 constructor(
   public delegateRequestType: DelegateRequestType = DelegateRequestType.NONE,
-  public delegateRequest: ApplicationMessagesT|GetSecretRequestTypeT|RegisterDelegateT|UnregisterDelegateT|null = null
+  public delegateRequest: ApplicationMessagesT|RegisterDelegateT|UnregisterDelegateT|null = null
 ){}
 
 

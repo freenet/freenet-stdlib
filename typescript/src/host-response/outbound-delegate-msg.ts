@@ -5,12 +5,9 @@
 import * as flatbuffers from 'flatbuffers';
 
 import { ApplicationMessage, ApplicationMessageT } from '../common/application-message.js';
-import { GetSecretRequest, GetSecretRequestT } from '../common/get-secret-request.js';
-import { GetSecretResponse, GetSecretResponseT } from '../common/get-secret-response.js';
 import { ContextUpdated, ContextUpdatedT } from '../host-response/context-updated.js';
 import { OutboundDelegateMsgType, unionToOutboundDelegateMsgType, unionListToOutboundDelegateMsgType } from '../host-response/outbound-delegate-msg-type.js';
 import { RequestUserInput, RequestUserInputT } from '../host-response/request-user-input.js';
-import { SetSecretRequest, SetSecretRequestT } from '../host-response/set-secret-request.js';
 
 
 export class OutboundDelegateMsg implements flatbuffers.IUnpackableObject<OutboundDelegateMsgT> {
@@ -91,7 +88,7 @@ unpackTo(_o: OutboundDelegateMsgT): void {
 export class OutboundDelegateMsgT implements flatbuffers.IGeneratedObject {
 constructor(
   public inboundType: OutboundDelegateMsgType = OutboundDelegateMsgType.NONE,
-  public inbound: ApplicationMessageT|ContextUpdatedT|GetSecretRequestT|GetSecretResponseT|RequestUserInputT|SetSecretRequestT|null = null
+  public inbound: ApplicationMessageT|ContextUpdatedT|RequestUserInputT|null = null
 ){}
 
 

@@ -6,6 +6,7 @@ import * as flatbuffers from 'flatbuffers';
 
 import { ContractResponseType, unionToContractResponseType, unionListToContractResponseType } from '../host-response/contract-response-type.js';
 import { GetResponse, GetResponseT } from '../host-response/get-response.js';
+import { NotFound, NotFoundT } from '../host-response/not-found.js';
 import { PutResponse, PutResponseT } from '../host-response/put-response.js';
 import { UpdateNotification, UpdateNotificationT } from '../host-response/update-notification.js';
 import { UpdateResponse, UpdateResponseT } from '../host-response/update-response.js';
@@ -89,7 +90,7 @@ unpackTo(_o: ContractResponseT): void {
 export class ContractResponseT implements flatbuffers.IGeneratedObject {
 constructor(
   public contractResponseType: ContractResponseType = ContractResponseType.NONE,
-  public contractResponse: GetResponseT|PutResponseT|UpdateNotificationT|UpdateResponseT|null = null
+  public contractResponse: GetResponseT|NotFoundT|PutResponseT|UpdateNotificationT|UpdateResponseT|null = null
 ){}
 
 

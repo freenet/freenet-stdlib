@@ -10,6 +10,7 @@ import { Error, ErrorT } from '../host-response/error.js';
 import { GenerateRandData, GenerateRandDataT } from '../host-response/generate-rand-data.js';
 import { HostResponseType, unionToHostResponseType, unionListToHostResponseType } from '../host-response/host-response-type.js';
 import { Ok, OkT } from '../host-response/ok.js';
+import { StreamChunk, StreamChunkT } from '../host-response/stream-chunk.js';
 
 
 export class HostResponse implements flatbuffers.IUnpackableObject<HostResponseT> {
@@ -98,7 +99,7 @@ unpackTo(_o: HostResponseT): void {
 export class HostResponseT implements flatbuffers.IGeneratedObject {
 constructor(
   public responseType: HostResponseType = HostResponseType.NONE,
-  public response: ContractResponseT|DelegateResponseT|ErrorT|GenerateRandDataT|OkT|null = null
+  public response: ContractResponseT|DelegateResponseT|ErrorT|GenerateRandDataT|OkT|StreamChunkT|null = null
 ){}
 
 

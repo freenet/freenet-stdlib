@@ -7,6 +7,7 @@ import { DelegateResponse, DelegateResponseT } from '../host-response/delegate-r
 import { Error, ErrorT } from '../host-response/error.js';
 import { GenerateRandData, GenerateRandDataT } from '../host-response/generate-rand-data.js';
 import { Ok, OkT } from '../host-response/ok.js';
+import { StreamChunk, StreamChunkT } from '../host-response/stream-chunk.js';
 
 
 export enum HostResponseType {
@@ -15,13 +16,14 @@ export enum HostResponseType {
   DelegateResponse = 2,
   GenerateRandData = 3,
   Ok = 4,
-  Error = 5
+  Error = 5,
+  StreamChunk = 6
 }
 
 export function unionToHostResponseType(
   type: HostResponseType,
-  accessor: (obj:ContractResponse|DelegateResponse|Error|GenerateRandData|Ok) => ContractResponse|DelegateResponse|Error|GenerateRandData|Ok|null
-): ContractResponse|DelegateResponse|Error|GenerateRandData|Ok|null {
+  accessor: (obj:ContractResponse|DelegateResponse|Error|GenerateRandData|Ok|StreamChunk) => ContractResponse|DelegateResponse|Error|GenerateRandData|Ok|StreamChunk|null
+): ContractResponse|DelegateResponse|Error|GenerateRandData|Ok|StreamChunk|null {
   switch(HostResponseType[type]) {
     case 'NONE': return null; 
     case 'ContractResponse': return accessor(new ContractResponse())! as ContractResponse;
@@ -29,15 +31,16 @@ export function unionToHostResponseType(
     case 'GenerateRandData': return accessor(new GenerateRandData())! as GenerateRandData;
     case 'Ok': return accessor(new Ok())! as Ok;
     case 'Error': return accessor(new Error())! as Error;
+    case 'StreamChunk': return accessor(new StreamChunk())! as StreamChunk;
     default: return null;
   }
 }
 
 export function unionListToHostResponseType(
   type: HostResponseType, 
-  accessor: (index: number, obj:ContractResponse|DelegateResponse|Error|GenerateRandData|Ok) => ContractResponse|DelegateResponse|Error|GenerateRandData|Ok|null, 
+  accessor: (index: number, obj:ContractResponse|DelegateResponse|Error|GenerateRandData|Ok|StreamChunk) => ContractResponse|DelegateResponse|Error|GenerateRandData|Ok|StreamChunk|null, 
   index: number
-): ContractResponse|DelegateResponse|Error|GenerateRandData|Ok|null {
+): ContractResponse|DelegateResponse|Error|GenerateRandData|Ok|StreamChunk|null {
   switch(HostResponseType[type]) {
     case 'NONE': return null; 
     case 'ContractResponse': return accessor(index, new ContractResponse())! as ContractResponse;
@@ -45,6 +48,7 @@ export function unionListToHostResponseType(
     case 'GenerateRandData': return accessor(index, new GenerateRandData())! as GenerateRandData;
     case 'Ok': return accessor(index, new Ok())! as Ok;
     case 'Error': return accessor(index, new Error())! as Error;
+    case 'StreamChunk': return accessor(index, new StreamChunk())! as StreamChunk;
     default: return null;
   }
 }

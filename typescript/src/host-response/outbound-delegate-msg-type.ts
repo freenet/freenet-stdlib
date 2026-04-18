@@ -3,52 +3,40 @@
 /* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
 
 import { ApplicationMessage, ApplicationMessageT } from '../common/application-message.js';
-import { GetSecretRequest, GetSecretRequestT } from '../common/get-secret-request.js';
-import { GetSecretResponse, GetSecretResponseT } from '../common/get-secret-response.js';
 import { ContextUpdated, ContextUpdatedT } from '../host-response/context-updated.js';
 import { RequestUserInput, RequestUserInputT } from '../host-response/request-user-input.js';
-import { SetSecretRequest, SetSecretRequestT } from '../host-response/set-secret-request.js';
 
 
 export enum OutboundDelegateMsgType {
   NONE = 0,
   common_ApplicationMessage = 1,
   RequestUserInput = 2,
-  ContextUpdated = 3,
-  common_GetSecretRequest = 4,
-  SetSecretRequest = 5,
-  common_GetSecretResponse = 6
+  ContextUpdated = 3
 }
 
 export function unionToOutboundDelegateMsgType(
   type: OutboundDelegateMsgType,
-  accessor: (obj:ApplicationMessage|ContextUpdated|GetSecretRequest|GetSecretResponse|RequestUserInput|SetSecretRequest) => ApplicationMessage|ContextUpdated|GetSecretRequest|GetSecretResponse|RequestUserInput|SetSecretRequest|null
-): ApplicationMessage|ContextUpdated|GetSecretRequest|GetSecretResponse|RequestUserInput|SetSecretRequest|null {
+  accessor: (obj:ApplicationMessage|ContextUpdated|RequestUserInput) => ApplicationMessage|ContextUpdated|RequestUserInput|null
+): ApplicationMessage|ContextUpdated|RequestUserInput|null {
   switch(OutboundDelegateMsgType[type]) {
     case 'NONE': return null; 
     case 'common_ApplicationMessage': return accessor(new ApplicationMessage())! as ApplicationMessage;
     case 'RequestUserInput': return accessor(new RequestUserInput())! as RequestUserInput;
     case 'ContextUpdated': return accessor(new ContextUpdated())! as ContextUpdated;
-    case 'common_GetSecretRequest': return accessor(new GetSecretRequest())! as GetSecretRequest;
-    case 'SetSecretRequest': return accessor(new SetSecretRequest())! as SetSecretRequest;
-    case 'common_GetSecretResponse': return accessor(new GetSecretResponse())! as GetSecretResponse;
     default: return null;
   }
 }
 
 export function unionListToOutboundDelegateMsgType(
   type: OutboundDelegateMsgType, 
-  accessor: (index: number, obj:ApplicationMessage|ContextUpdated|GetSecretRequest|GetSecretResponse|RequestUserInput|SetSecretRequest) => ApplicationMessage|ContextUpdated|GetSecretRequest|GetSecretResponse|RequestUserInput|SetSecretRequest|null, 
+  accessor: (index: number, obj:ApplicationMessage|ContextUpdated|RequestUserInput) => ApplicationMessage|ContextUpdated|RequestUserInput|null, 
   index: number
-): ApplicationMessage|ContextUpdated|GetSecretRequest|GetSecretResponse|RequestUserInput|SetSecretRequest|null {
+): ApplicationMessage|ContextUpdated|RequestUserInput|null {
   switch(OutboundDelegateMsgType[type]) {
     case 'NONE': return null; 
     case 'common_ApplicationMessage': return accessor(index, new ApplicationMessage())! as ApplicationMessage;
     case 'RequestUserInput': return accessor(index, new RequestUserInput())! as RequestUserInput;
     case 'ContextUpdated': return accessor(index, new ContextUpdated())! as ContextUpdated;
-    case 'common_GetSecretRequest': return accessor(index, new GetSecretRequest())! as GetSecretRequest;
-    case 'SetSecretRequest': return accessor(index, new SetSecretRequest())! as SetSecretRequest;
-    case 'common_GetSecretResponse': return accessor(index, new GetSecretResponse())! as GetSecretResponse;
     default: return null;
   }
 }

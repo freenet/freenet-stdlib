@@ -27,7 +27,7 @@ const TEST_ENCODED_KEY = "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9";
 const AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
 const WS_URL = "ws://localhost:1234/contract/command/";
 
-describe("Locutus Websocket API - Result Deserialization", () => {
+describe("Freenet Websocket API - Result Deserialization", () => {
   let server: Server;
 
   beforeAll(() => {
@@ -61,6 +61,7 @@ describe("Locutus Websocket API - Result Deserialization", () => {
       onContractGet: (_response: GetResponse): void => {},
       onContractUpdate: (_response: UpdateResponse): void => {},
       onContractUpdateNotification: (_response: UpdateNotification): void => {},
+      onContractNotFound: (_id: Uint8Array): void => {},
       onDelegateResponse: (_response: DelegateResponse) => {},
       onErr: (_err: HostError): void => {},
       onOpen: () => {},
@@ -111,6 +112,7 @@ describe("Locutus Websocket API - Result Deserialization", () => {
       },
       onContractUpdate: (_response: UpdateResponse): void => {},
       onContractUpdateNotification: (_response: UpdateNotification): void => {},
+      onContractNotFound: (_id: Uint8Array): void => {},
       onDelegateResponse: (_response: DelegateResponse) => {},
       onErr: (_err: HostError): void => {},
       onOpen: () => {},
@@ -145,6 +147,7 @@ describe("Locutus Websocket API - Result Deserialization", () => {
         expect(response.key.encode()).toEqual(TEST_ENCODED_KEY);
         handledResponse = ContractResponseType.UpdateNotification;
       },
+      onContractNotFound: (_id: Uint8Array): void => {},
       onDelegateResponse: (_response: DelegateResponse) => {},
       onErr: (_err: HostError): void => {},
       onOpen: () => {},
@@ -176,6 +179,7 @@ describe("Locutus Websocket API - Result Deserialization", () => {
         handledResponse = ContractResponseType.UpdateResponse;
       },
       onContractUpdateNotification: (_response: UpdateNotification): void => {},
+      onContractNotFound: (_id: Uint8Array): void => {},
       onDelegateResponse: (_response: DelegateResponse) => {},
       onErr: (_err: HostError): void => {},
       onOpen: () => {},
@@ -227,6 +231,7 @@ describe("Locutus Websocket API - Result Deserialization", () => {
       onContractGet: (_response: GetResponse): void => {},
       onContractUpdate: (response: UpdateResponse): void => {},
       onContractUpdateNotification: (_response: UpdateNotification): void => {},
+      onContractNotFound: (_id: Uint8Array): void => {},
       onDelegateResponse: (_response: DelegateResponse) => {},
       onErr: (_err: HostError): void => {},
       onOpen: () => {},
@@ -278,6 +283,7 @@ describe("Locutus Websocket API - Result Deserialization", () => {
       onContractGet: (_response: GetResponse): void => {},
       onContractUpdate: (response: UpdateResponse): void => {},
       onContractUpdateNotification: (_response: UpdateNotification): void => {},
+      onContractNotFound: (_id: Uint8Array): void => {},
       onDelegateResponse: (_response: DelegateResponse) => {},
       onErr: (_err: HostError): void => {},
       onOpen: () => {},
@@ -336,6 +342,7 @@ describe("Locutus Websocket API - Result Deserialization", () => {
       onContractGet: (_response: GetResponse): void => {},
       onContractUpdate: (response: UpdateResponse): void => {},
       onContractUpdateNotification: (_response: UpdateNotification): void => {},
+      onContractNotFound: (_id: Uint8Array): void => {},
       onDelegateResponse: (_response: DelegateResponse) => {},
       onErr: (_err: HostError): void => {},
       onOpen: () => {},

@@ -6,6 +6,7 @@ import { Authenticate, AuthenticateT } from '../client-request/authenticate.js';
 import { ContractRequest, ContractRequestT } from '../client-request/contract-request.js';
 import { DelegateRequest, DelegateRequestT } from '../client-request/delegate-request.js';
 import { Disconnect, DisconnectT } from '../client-request/disconnect.js';
+import { StreamChunk, StreamChunkT } from '../client-request/stream-chunk.js';
 
 
 export enum ClientRequestType {
@@ -13,34 +14,37 @@ export enum ClientRequestType {
   ContractRequest = 1,
   DelegateRequest = 2,
   Disconnect = 3,
-  Authenticate = 4
+  Authenticate = 4,
+  StreamChunk = 5
 }
 
 export function unionToClientRequestType(
   type: ClientRequestType,
-  accessor: (obj:Authenticate|ContractRequest|DelegateRequest|Disconnect) => Authenticate|ContractRequest|DelegateRequest|Disconnect|null
-): Authenticate|ContractRequest|DelegateRequest|Disconnect|null {
+  accessor: (obj:Authenticate|ContractRequest|DelegateRequest|Disconnect|StreamChunk) => Authenticate|ContractRequest|DelegateRequest|Disconnect|StreamChunk|null
+): Authenticate|ContractRequest|DelegateRequest|Disconnect|StreamChunk|null {
   switch(ClientRequestType[type]) {
     case 'NONE': return null; 
     case 'ContractRequest': return accessor(new ContractRequest())! as ContractRequest;
     case 'DelegateRequest': return accessor(new DelegateRequest())! as DelegateRequest;
     case 'Disconnect': return accessor(new Disconnect())! as Disconnect;
     case 'Authenticate': return accessor(new Authenticate())! as Authenticate;
+    case 'StreamChunk': return accessor(new StreamChunk())! as StreamChunk;
     default: return null;
   }
 }
 
 export function unionListToClientRequestType(
   type: ClientRequestType, 
-  accessor: (index: number, obj:Authenticate|ContractRequest|DelegateRequest|Disconnect) => Authenticate|ContractRequest|DelegateRequest|Disconnect|null, 
+  accessor: (index: number, obj:Authenticate|ContractRequest|DelegateRequest|Disconnect|StreamChunk) => Authenticate|ContractRequest|DelegateRequest|Disconnect|StreamChunk|null, 
   index: number
-): Authenticate|ContractRequest|DelegateRequest|Disconnect|null {
+): Authenticate|ContractRequest|DelegateRequest|Disconnect|StreamChunk|null {
   switch(ClientRequestType[type]) {
     case 'NONE': return null; 
     case 'ContractRequest': return accessor(index, new ContractRequest())! as ContractRequest;
     case 'DelegateRequest': return accessor(index, new DelegateRequest())! as DelegateRequest;
     case 'Disconnect': return accessor(index, new Disconnect())! as Disconnect;
     case 'Authenticate': return accessor(index, new Authenticate())! as Authenticate;
+    case 'StreamChunk': return accessor(index, new StreamChunk())! as StreamChunk;
     default: return null;
   }
 }

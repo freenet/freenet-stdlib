@@ -9,8 +9,6 @@ export { ContractInstanceId, ContractInstanceIdT } from './common/contract-insta
 export { ContractKey, ContractKeyT } from './common/contract-key.js';
 export { ContractType } from './common/contract-type.js';
 export { DeltaUpdate, DeltaUpdateT } from './common/delta-update.js';
-export { GetSecretRequest, GetSecretRequestT } from './common/get-secret-request.js';
-export { GetSecretResponse, GetSecretResponseT } from './common/get-secret-response.js';
 export { RelatedDeltaUpdate, RelatedDeltaUpdateT } from './common/related-delta-update.js';
 export { RelatedStateAndDeltaUpdate, RelatedStateAndDeltaUpdateT } from './common/related-state-and-delta-update.js';
 export { RelatedStateUpdate, RelatedStateUpdateT } from './common/related-state-update.js';
