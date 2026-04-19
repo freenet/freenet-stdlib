@@ -4,6 +4,24 @@
   "description": "Freenet standard library and utils",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./client-request": {
+      "types": "./dist/src/client-request.d.ts",
+      "default": "./dist/src/client-request.js"
+    },
+    "./common": {
+      "types": "./dist/src/common.d.ts",
+      "default": "./dist/src/common.js"
+    },
+    "./host-response": {
+      "types": "./dist/src/host-response.d.ts",
+      "default": "./dist/src/host-response.js"
+    }
+  },
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
