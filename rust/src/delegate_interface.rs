@@ -279,10 +279,12 @@ impl Display for DelegateKey {
 impl<'a> TryFromFbs<&FbsDelegateKey<'a>> for DelegateKey {
     fn try_decode_fbs(key: &FbsDelegateKey<'a>) -> Result<Self, WsApiError> {
         let mut key_bytes = [0; DELEGATE_HASH_LENGTH];
-        key_bytes.copy_from_slice(key.key().bytes().iter().as_ref());
+        key_bytes.copy_from_slice(key.key().bytes());
+        let code_hash = CodeHash::try_from(key.code_hash().bytes())
+            .map_err(|e| WsApiError::deserialization(e.to_string()))?;
         Ok(DelegateKey {
             key: key_bytes,
-            code_hash: CodeHash::from_code(key.code_hash().bytes()),
+            code_hash,
         })
     }
 }
