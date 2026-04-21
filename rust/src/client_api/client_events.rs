@@ -1393,7 +1393,48 @@ impl HostResponse {
                     finish_host_response_buffer(&mut builder, host_response_offset);
                     Ok(builder.finished_data().to_vec())
                 }
-                ContractResponse::SubscribeResponse { .. } => todo!(),
+                ContractResponse::SubscribeResponse { key, .. } => {
+                    // SubscribeResponse FBS type not yet in generated code,
+                    // serialize as PutResponse (same shape: just a key) so
+                    // the client receives a valid response instead of a crash.
+                    let instance_data = builder.create_vector(key.as_bytes());
+                    let instance_offset = FbsContractInstanceId::create(
+                        &mut builder,
+                        &ContractInstanceIdArgs {
+                            data: Some(instance_data),
+                        },
+                    );
+                    let code = Some(builder.create_vector(&key.code_hash().0));
+                    let key_offset = FbsContractKey::create(
+                        &mut builder,
+                        &ContractKeyArgs {
+                            instance: Some(instance_offset),
+                            code,
+                        },
+                    );
+                    let put_offset = FbsPutResponse::create(
+                        &mut builder,
+                        &PutResponseArgs {
+                            key: Some(key_offset),
+                        },
+                    );
+                    let contract_response_offset = FbsContractResponse::create(
+                        &mut builder,
+                        &ContractResponseArgs {
+                            contract_response_type: ContractResponseType::PutResponse,
+                            contract_response: Some(put_offset.as_union_value()),
+                        },
+                    );
+                    let host_response_offset = FbsHostResponse::create(
+                        &mut builder,
+                        &HostResponseArgs {
+                            response_type: HostResponseType::ContractResponse,
+                            response: Some(contract_response_offset.as_union_value()),
+                        },
+                    );
+                    finish_host_response_buffer(&mut builder, host_response_offset);
+                    Ok(builder.finished_data().to_vec())
+                }
                 ContractResponse::NotFound { instance_id } => {
                     let instance_data = builder.create_vector(instance_id.as_bytes());
                     let instance_offset = FbsContractInstanceId::create(

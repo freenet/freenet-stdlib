@@ -1,6 +1,7 @@
 import * as flatbuffers from "flatbuffers";
 import base58 from "bs58";
 
+import { CHUNK_SIZE, CHUNK_THRESHOLD, ReassemblyBuffer } from "./streaming";
 import { ContractContainerT } from "./common/contract-container";
 import { ContractInstanceIdT } from "./common/contract-instance-id";
 import { DeltaUpdateT } from "./common/delta-update";
@@ -24,7 +25,6 @@ import {
   DelegateRequestType,
   DelegateType,
   DisconnectT,
-  GetSecretRequestTypeT,
   GetT,
   InboundDelegateMsgT,
   InboundDelegateMsgType,
@@ -37,8 +37,12 @@ import {
   UserInputResponseT,
   WasmDelegateV1T,
 } from "./client-request";
+import { GetSecretRequestTypeT } from "./client-request/get-secret-request-type";
+import { StreamChunkT as ClientStreamChunkT } from "./client-request/stream-chunk";
 import { UpdateDataT } from "./common/update-data";
 import { UpdateDataType } from "./common/update-data-type";
+export { UpdateDataType } from "./common/update-data-type";
+export { ContractType } from "./common/contract-type";
 import { ContractKeyT } from "./common/contract-key";
 import { PutResponseT } from "./host-response/put-response";
 import { GetResponseT } from "./host-response/get-response";
@@ -54,17 +58,20 @@ import {
   OutboundDelegateMsgT,
   OutboundDelegateMsgType,
   RequestUserInputT,
-  SetSecretRequestT,
+  StreamChunkT,
+  SubscribeResponseT,
 } from "./host-response";
+import { SetSecretRequestT } from "./host-response/set-secret-request";
 import {
   ApplicationMessageT,
   ContractCodeT,
   ContractType,
-  GetSecretRequestT,
-  GetSecretResponseT,
   WasmContractV1T,
 } from "./common";
+import { GetSecretRequestT } from "./common/get-secret-request";
+import { GetSecretResponseT } from "./common/get-secret-response";
 import { ErrorT } from "./host-response/error";
+import { NotFoundT } from "./host-response/not-found";
 
 // Common types
 /**
@@ -321,9 +328,10 @@ export class PutRequest extends PutT {
     container: ContractContainerT | null = null,
     wrappedState: number[] = [],
     relatedContracts: RelatedContractsT | null = null,
-    subscribe: boolean = false
+    subscribe: boolean = false,
+    blockingSubscribe: boolean = false
   ) {
-    super(container, wrappedState, relatedContracts, subscribe);
+    super(container, wrappedState, relatedContracts, subscribe, blockingSubscribe);
   }
 }
 
@@ -346,9 +354,9 @@ export class UpdateRequest extends UpdateT {
  * @public
  */
 export class GetRequest extends GetT {
-  constructor(key: ContractKey, fetchContract: boolean = false, subscribe: boolean = false) {
+  constructor(key: ContractKey, fetchContract: boolean = false, subscribe: boolean = false, blockingSubscribe: boolean = false) {
     const contract_key = key.get_contract_key();
-    super(contract_key, fetchContract, subscribe);
+    super(contract_key, fetchContract, subscribe, blockingSubscribe);
   }
 }
 
@@ -382,9 +390,7 @@ export type UserInputResponse = UserInputResponseT;
 
 export type InboundMessage =
   | ApplicationMessage
-  | GetSecretResponse
-  | UserInputResponse
-  | GetSecretRequest;
+  | UserInputResponse;
 
 /**
  * Representation of DelegateRequest Inbound message
@@ -516,7 +522,7 @@ export class UpdateNotification extends UpdateNotificationT {
       obj.key?.code && obj.key.code.length > 0
         ? new Uint8Array(obj.key.code!)
         : undefined;
-    let key: ContractKey = new ContractKey(instance);
+    let key: ContractKey = new ContractKey(instance, code);
 
     return new UpdateNotification(key, obj.update!);
   }
@@ -546,10 +552,7 @@ export type SetSecretRequest = SetSecretRequestT;
 export type OutboundMessage =
   | ApplicationMessage
   | RequestUserInput
-  | ContextUpdated
-  | GetSecretRequest
-  | SetSecretRequest
-  | GetSecretResponse;
+  | ContextUpdated;
 
 export class OutboundDelegateMsg extends OutboundDelegateMsgT {
   constructor(
@@ -620,6 +623,14 @@ export interface ResponseHandler {
    */
   onContractUpdateNotification: (response: UpdateNotification) => void;
   /**
+   * Contract `NotFound` handler
+   */
+  onContractNotFound: (instanceId: ContractInstanceId) => void;
+  /**
+   * Contract `Subscribe` confirmation handler
+   */
+  onSubscribeResponse?: (key: ContractKey, subscribed: boolean) => void;
+  /**
    * `Delegate` response handler
    * @param response
    */
@@ -632,13 +643,16 @@ export interface ResponseHandler {
    * Callback executed after successfully establishing connection with websocket
    */
   onOpen: () => void;
+  /**
+   * Called when WebSocket connection closes
+   */
+  onClose?: (code: number, reason: string) => void;
 }
 
-const AUTHORIZATION_HEADER: string = "Authorization";
-const ENCODING_PROTOC_HEADER: string = `Encoding-Protocol`;
 const ENCODING_PROTOC: string = "flatbuffers";
 
 function getAuthTokenFromCookie(): string | null {
+  if (typeof document === "undefined") return null;
   const cookies = document.cookie.split(";");
   for (let cookie of cookies) {
     const [cookieName, cookieValue] = cookie.trim().split("=");
@@ -654,60 +668,77 @@ function getAuthTokenFromCookie(): string | null {
 }
 
 /**
- * The `LocutusWsApi` provides the API to manage the connection to the host, handle responses, and send requests.
+ * Resolves a WebSocket constructor for the current environment.
+ * Uses the global `WebSocket` in browsers, falls back to the `ws` package in Node.js.
+ */
+function resolveWebSocket(): typeof WebSocket {
+  if (typeof WebSocket !== "undefined") return WebSocket;
+  try {
+    // Node.js — require ws at runtime so it's not bundled in browsers
+    return require("ws") as typeof WebSocket;
+  } catch {
+    throw new Error(
+      "No WebSocket implementation found. Install the 'ws' package for Node.js support."
+    );
+  }
+}
+
+/**
+ * The `FreenetWsApi` provides the API to manage the connection to the host, handle responses, and send requests.
  * @example
  * Here's a simple example:
  * ```
  * const API_URL = new URL(`ws://${location.host}/contract/command/`);
- * const locutusApi = new LocutusWsApi(API_URL, handler);
+ * const freenetApi = new FreenetWsApi(API_URL, handler);
  * ```
  */
+interface PendingRequest<T> {
+  resolve: (value: T) => void;
+  reject: (reason: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** Default timeout for awaiting a response (30 seconds). */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 export class FreenetWsApi {
-  /**
-   * Websocket object for creating and managing a WebSocket connection to a server,
-   * as well as for sending and receiving data on the connection.
-   * @private
-   */
   private ws: WebSocket;
-  /**
-   * @private
-   */
   private responseHandler: ResponseHandler;
+  private reassembly: ReassemblyBuffer = new ReassemblyBuffer();
+  private nextStreamId = 0;
+  private pendingGets: PendingRequest<GetResponse>[] = [];
+  private pendingPuts: PendingRequest<PutResponse>[] = [];
+  private pendingUpdates: PendingRequest<UpdateResponse>[] = [];
 
   /**
    * @constructor
    * @param url - The websocket URL to establish the connection.
    * @param handler - The ResponseHandler implementation
+   * @param authToken - Optional auth token (falls back to browser cookie)
    */
   constructor(url: URL, handler: ResponseHandler, authToken?: string) {
-    const AUTH_TOKEN_PARAM = "authToken";
-    if (authToken) {
-      url.searchParams.append(AUTH_TOKEN_PARAM, authToken);
-    } else {
-      // try to get the auth token from cookies
-      const cookie = getAuthTokenFromCookie();
-      if (cookie) {
-        url.searchParams.append(AUTH_TOKEN_PARAM, cookie);
-      }
+    this.responseHandler = handler;
+    const token = authToken ?? getAuthTokenFromCookie();
+    if (token) {
+      url.searchParams.append("authToken", token);
     }
     url.searchParams.append("encodingProtocol", ENCODING_PROTOC);
-    this.ws = new WebSocket(url);
+    const WS = resolveWebSocket();
+    this.ws = new WS(url.toString());
     this.ws.binaryType = "arraybuffer";
-    this.responseHandler = handler;
-    this.ws.onmessage = (ev) => {
-      this.handleResponse(ev);
-    };
-    this.ws.addEventListener("open", (_) => {
+    this.ws.onmessage = (ev) => this.handleResponse(ev);
+    this.ws.addEventListener("open", () => {
       if (authToken) {
-        const request = new ClientRequestT(
+        this.sendRequest(new ClientRequestT(
           ClientRequestType.Authenticate,
-          new AuthenticateT(authToken!)
-        );
-        const fbb = new flatbuffers.Builder();
-        ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-        this.ws.send(fbb.asUint8Array());
+          new AuthenticateT(authToken)
+        ));
       }
       handler.onOpen();
+    });
+    this.ws.addEventListener("close", (ev: CloseEvent) => {
+      this.rejectAllPending(new Error(`Connection closed: ${ev.reason || ev.code}`));
+      handler.onClose?.(ev.code, ev.reason);
     });
   }
 
@@ -732,18 +763,21 @@ export class FreenetWsApi {
               host_resp.contractResponse as PutResponseT
             );
             this.responseHandler.onContractPut(put_response);
+            this.resolveNext(this.pendingPuts, put_response);
             break;
           case ContractResponseType.GetResponse:
             const get_response = GetResponse.fromGetResponseT(
               host_resp.contractResponse as GetResponseT
             );
             this.responseHandler.onContractGet(get_response);
+            this.resolveNext(this.pendingGets, get_response);
             break;
           case ContractResponseType.UpdateResponse:
             const update_response = UpdateResponse.fromUpdateResponseT(
               host_resp.contractResponse as UpdateResponseT
             );
             this.responseHandler.onContractUpdate(update_response);
+            this.resolveNext(this.pendingUpdates, update_response);
             break;
           case ContractResponseType.UpdateNotification:
             const update_notification =
@@ -753,6 +787,21 @@ export class FreenetWsApi {
             this.responseHandler.onContractUpdateNotification(
               update_notification
             );
+            break;
+          case ContractResponseType.NotFound:
+            const not_found = host_resp.contractResponse as NotFoundT;
+            const not_found_id = new Uint8Array(not_found.instanceId?.data ?? []);
+            this.responseHandler.onContractNotFound(not_found_id);
+            this.rejectNext(this.pendingGets, new Error("Contract not found"));
+            break;
+          case ContractResponseType.SubscribeResponse:
+            const sub_resp = host_resp.contractResponse as SubscribeResponseT;
+            const sub_instance = new Uint8Array(sub_resp.key?.instance?.data ?? []);
+            const sub_code = sub_resp.key?.code && sub_resp.key.code.length > 0
+              ? new Uint8Array(sub_resp.key.code)
+              : undefined;
+            const sub_key = new ContractKey(sub_instance, sub_code);
+            this.responseHandler.onSubscribeResponse?.(sub_key, sub_resp.subscribed);
             break;
           default:
             const cause = "Contract response type not implemented";
@@ -770,6 +819,43 @@ export class FreenetWsApi {
         break;
       case HostResponseType.Ok:
         break;
+      case HostResponseType.Error:
+        const error_resp = response.response as ErrorT;
+        const error_msg = error_resp.msg;
+        const error_cause = typeof error_msg === "string"
+          ? error_msg
+          : error_msg instanceof Uint8Array
+            ? new TextDecoder().decode(error_msg)
+            : "unknown error";
+        const host_error: HostError = { cause: error_cause };
+        this.responseHandler.onErr(host_error);
+        this.rejectAllPending(new Error(error_cause));
+        break;
+      case HostResponseType.StreamChunk: {
+        const streamChunk = response.response as StreamChunkT;
+        try {
+          const assembled = this.reassembly.receiveChunk(
+            streamChunk.streamId,
+            streamChunk.index,
+            streamChunk.total,
+            new Uint8Array(streamChunk.data)
+          );
+          if (assembled !== null) {
+            // Reassembly complete — re-dispatch the inner response
+            const syntheticEvent = { data: assembled.buffer } as MessageEvent;
+            this.handleResponse(syntheticEvent);
+          }
+        } catch (err) {
+          const streamErr: HostError = {
+            cause: `Stream reassembly error: ${err}`,
+          };
+          this.responseHandler.onErr(streamErr);
+          if (streamChunk.streamId !== undefined) {
+            this.reassembly.removeStream(streamChunk.streamId);
+          }
+        }
+        break;
+      }
       default:
         const cause = `Received wrong HostResponse type`;
         console.log(cause);
@@ -782,57 +868,126 @@ export class FreenetWsApi {
   }
 
   /**
-   * Sends a put request to the host through websocket
+   * Serializes a ClientRequest and sends it over the WebSocket.
+   * Automatically chunks payloads exceeding CHUNK_THRESHOLD.
+   */
+  private sendRequest(request: ClientRequestT): void {
+    const fbb = new flatbuffers.Builder(1024);
+    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
+    const bytes = fbb.asUint8Array();
+    if (bytes.byteLength > CHUNK_THRESHOLD) {
+      this.sendChunked(bytes);
+    } else {
+      this.ws.send(bytes);
+    }
+  }
+
+  /**
+   * Splits a serialized payload into StreamChunk messages and sends each.
+   */
+  private sendChunked(payload: Uint8Array): void {
+    const streamId = this.nextStreamId++;
+    const total = Math.ceil(payload.byteLength / CHUNK_SIZE);
+    for (let i = 0; i < total; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, payload.byteLength);
+      const chunk = new ClientStreamChunkT(
+        streamId,
+        i,
+        total,
+        Array.from(payload.subarray(start, end))
+      );
+      const request = new ClientRequestT(ClientRequestType.StreamChunk, chunk);
+      const fbb = new flatbuffers.Builder(end - start + 128);
+      ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
+      this.ws.send(fbb.asUint8Array());
+    }
+  }
+
+  /**
+   * Enqueues a pending response and returns a promise that resolves
+   * when the matching response arrives, or rejects on timeout.
+   */
+  private awaitResponse<T>(queue: PendingRequest<T>[]): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = queue.findIndex((p) => p.timer === timer);
+        if (idx !== -1) queue.splice(idx, 1);
+        reject(new Error("Request timeout"));
+      }, REQUEST_TIMEOUT_MS);
+      queue.push({ resolve, reject, timer });
+    });
+  }
+
+  /**
+   * Resolves the oldest pending request in a queue.
+   */
+  private resolveNext<T>(queue: PendingRequest<T>[], value: T): void {
+    const pending = queue.shift();
+    if (pending) {
+      clearTimeout(pending.timer);
+      pending.resolve(value);
+    }
+  }
+
+  /**
+   * Rejects the oldest pending request in a queue.
+   */
+  private rejectNext<T>(queue: PendingRequest<T>[], error: Error): void {
+    const pending = queue.shift();
+    if (pending) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+  }
+
+  /**
+   * Rejects all pending requests across all queues.
+   */
+  private rejectAllPending(error: Error): void {
+    for (const queue of [this.pendingGets, this.pendingPuts, this.pendingUpdates]) {
+      while (queue.length > 0) {
+        const pending = queue.shift()!;
+        clearTimeout(pending.timer);
+        pending.reject(error);
+      }
+    }
+  }
+
+  /**
+   * Sends a put request and returns the response.
    * @param put - The `PutRequest` object
    */
-  async put(put: PutRequest): Promise<void> {
-    let put_request = new ContractRequestT(
-      put.subscribe ? ContractRequestType.Subscribe : ContractRequestType.Put, 
-      put
-    );
-    let request = new ClientRequestT(
+  async put(put: PutRequest): Promise<PutResponse> {
+    this.sendRequest(new ClientRequestT(
       ClientRequestType.ContractRequest,
-      put_request
-    );
-    let fbb = new flatbuffers.Builder(1024);
-    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-    this.ws.send(fbb.asUint8Array());
+      new ContractRequestT(ContractRequestType.Put, put)
+    ));
+    return this.awaitResponse(this.pendingPuts);
   }
 
   /**
-   * Sends an update request to the host through websocket
+   * Sends an update request and returns the response.
    * @param update - The `UpdateRequest` object
    */
-  async update(update: UpdateRequest): Promise<void> {
-    let update_request = new ContractRequestT(
-      ContractRequestType.Update,
-      update
-    );
-    let request = new ClientRequestT(
+  async update(update: UpdateRequest): Promise<UpdateResponse> {
+    this.sendRequest(new ClientRequestT(
       ClientRequestType.ContractRequest,
-      update_request
-    );
-    let fbb = new flatbuffers.Builder(1024);
-    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-    this.ws.send(fbb.asUint8Array());
+      new ContractRequestT(ContractRequestType.Update, update)
+    ));
+    return this.awaitResponse(this.pendingUpdates);
   }
 
   /**
-   * Sends a get request to the host through websocket
+   * Sends a get request and returns the response.
    * @param get - The `GetRequest` object
    */
-  async get(get: GetRequest): Promise<void> {
-    let get_request = new ContractRequestT(
-      get.subscribe ? ContractRequestType.Subscribe : ContractRequestType.Get, 
-      get
-    );
-    let request = new ClientRequestT(
+  async get(get: GetRequest): Promise<GetResponse> {
+    this.sendRequest(new ClientRequestT(
       ClientRequestType.ContractRequest,
-      get_request
-    );
-    let fbb = new flatbuffers.Builder(1024);
-    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-    this.ws.send(fbb.asUint8Array());
+      new ContractRequestT(ContractRequestType.Get, get)
+    ));
+    return this.awaitResponse(this.pendingGets);
   }
 
   /**
@@ -840,27 +995,17 @@ export class FreenetWsApi {
    * @param subscribe - The `SubscribeRequest` object
    */
   async subscribe(subscribe: SubscribeRequest): Promise<void> {
-    let subscribe_request = new ContractRequestT(
-      ContractRequestType.Subscribe,
-      subscribe
-    );
-    let request = new ClientRequestT(
+    this.sendRequest(new ClientRequestT(
       ClientRequestType.ContractRequest,
-      subscribe_request
-    );
-    let fbb = new flatbuffers.Builder(1024);
-    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-    this.ws.send(fbb.asUint8Array());
+      new ContractRequestT(ContractRequestType.Subscribe, subscribe)
+    ));
   }
 
   /**
-   * Sends an disconnect notification to the host through websocket
+   * Sends a disconnect notification to the host through websocket.
    * @param disconnect - The `DisconnectRequest` object
    */
   async disconnect(disconnect: DisconnectRequest): Promise<void> {
-    let request = new ClientRequestT(ClientRequestType.Disconnect, disconnect);
-    let fbb = new flatbuffers.Builder(1024);
-    ClientRequest.finishClientRequestBuffer(fbb, request.pack(fbb));
-    this.ws.send(fbb.asUint8Array());
+    this.sendRequest(new ClientRequestT(ClientRequestType.Disconnect, disconnect));
   }
 }

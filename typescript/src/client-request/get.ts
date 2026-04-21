@@ -40,8 +40,13 @@ subscribe():boolean {
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
+blockingSubscribe():boolean {
+  const offset = this.bb!.__offset(this.bb_pos, 10);
+  return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
+}
+
 static startGet(builder:flatbuffers.Builder) {
-  builder.startObject(3);
+  builder.startObject(4);
 }
 
 static addKey(builder:flatbuffers.Builder, keyOffset:flatbuffers.Offset) {
@@ -56,17 +61,22 @@ static addSubscribe(builder:flatbuffers.Builder, subscribe:boolean) {
   builder.addFieldInt8(2, +subscribe, +false);
 }
 
+static addBlockingSubscribe(builder:flatbuffers.Builder, blockingSubscribe:boolean) {
+  builder.addFieldInt8(3, +blockingSubscribe, +false);
+}
+
 static endGet(builder:flatbuffers.Builder):flatbuffers.Offset {
   const offset = builder.endObject();
   builder.requiredField(offset, 4) // key
   return offset;
 }
 
-static createGet(builder:flatbuffers.Builder, keyOffset:flatbuffers.Offset, fetchContract:boolean, subscribe:boolean):flatbuffers.Offset {
+static createGet(builder:flatbuffers.Builder, keyOffset:flatbuffers.Offset, fetchContract:boolean, subscribe:boolean, blockingSubscribe:boolean):flatbuffers.Offset {
   Get.startGet(builder);
   Get.addKey(builder, keyOffset);
   Get.addFetchContract(builder, fetchContract);
   Get.addSubscribe(builder, subscribe);
+  Get.addBlockingSubscribe(builder, blockingSubscribe);
   return Get.endGet(builder);
 }
 
@@ -74,7 +84,8 @@ unpack(): GetT {
   return new GetT(
     (this.key() !== null ? this.key()!.unpack() : null),
     this.fetchContract(),
-    this.subscribe()
+    this.subscribe(),
+    this.blockingSubscribe()
   );
 }
 
@@ -83,6 +94,7 @@ unpackTo(_o: GetT): void {
   _o.key = (this.key() !== null ? this.key()!.unpack() : null);
   _o.fetchContract = this.fetchContract();
   _o.subscribe = this.subscribe();
+  _o.blockingSubscribe = this.blockingSubscribe();
 }
 }
 
@@ -90,7 +102,8 @@ export class GetT implements flatbuffers.IGeneratedObject {
 constructor(
   public key: ContractKeyT|null = null,
   public fetchContract: boolean = false,
-  public subscribe: boolean = false
+  public subscribe: boolean = false,
+  public blockingSubscribe: boolean = false
 ){}
 
 
@@ -100,7 +113,8 @@ pack(builder:flatbuffers.Builder): flatbuffers.Offset {
   return Get.createGet(builder,
     key,
     this.fetchContract,
-    this.subscribe
+    this.subscribe,
+    this.blockingSubscribe
   );
 }
 }

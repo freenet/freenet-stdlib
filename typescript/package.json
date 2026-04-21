@@ -1,24 +1,48 @@
 {
   "name": "@freenetorg/freenet-stdlib",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "description": "Freenet standard library and utils",
-  "main": "src/index.ts",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./client-request": {
+      "types": "./dist/src/client-request.d.ts",
+      "default": "./dist/src/client-request.js"
+    },
+    "./common": {
+      "types": "./dist/src/common.d.ts",
+      "default": "./dist/src/common.js"
+    },
+    "./host-response": {
+      "types": "./dist/src/host-response.d.ts",
+      "default": "./dist/src/host-response.js"
+    }
+  },
   "files": [
-    "**/*.ts",
-    "**/*.js"
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/**/*.js.map"
   ],
   "dependencies": {
-    "flatbuffers": "^23.5.26",
-    "bs58": "^5.0.0"
+    "bs58": "^6.0.0",
+    "flatbuffers": "^25.9.23"
+  },
+  "optionalDependencies": {
+    "ws": "^8.20.0"
   },
   "devDependencies": {
-    "@types/jest": "^28.1.8",
-    "@types/mocha": "^10.0.1",
-    "jest": "^28.1.3",
-    "ts-jest": "^28.0.6",
-    "ts-node": "10.9.1",
-    "typedoc": "^0.22.0",
-    "mock-socket": "^9.3.1"
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.6.0",
+    "jest": "^30.3.0",
+    "mock-socket": "^9.3.1",
+    "ts-jest": "^29.4.9",
+    "ts-node": "^10.9.2",
+    "typedoc": "^0.28.19",
+    "typescript": "^5.9.3"
   },
   "scripts": {
     "test": "jest",
@@ -28,10 +52,10 @@
     "flatc-schemas": "bash -c \"flatc --ts --gen-object-api -o ./src ../schemas/flatbuffers/*\""
   },
   "license": "MIT+APACHE-2.0",
-  "homepage": "https://github.com/freenet/freenet-core",
+  "homepage": "https://github.com/freenet/freenet-stdlib",
   "repository": {
     "type": "git",
-    "url": "https://github.com/freenet/freenet-core.git"
+    "url": "https://github.com/freenet/freenet-stdlib.git"
   },
   "author": {
     "name": "The Freenet Foundation Inc."

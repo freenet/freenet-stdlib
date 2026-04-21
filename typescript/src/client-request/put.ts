@@ -56,8 +56,13 @@ subscribe():boolean {
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
+blockingSubscribe():boolean {
+  const offset = this.bb!.__offset(this.bb_pos, 12);
+  return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
+}
+
 static startPut(builder:flatbuffers.Builder) {
-  builder.startObject(4);
+  builder.startObject(5);
 }
 
 static addContainer(builder:flatbuffers.Builder, containerOffset:flatbuffers.Offset) {
@@ -88,6 +93,10 @@ static addSubscribe(builder:flatbuffers.Builder, subscribe:boolean) {
   builder.addFieldInt8(3, +subscribe, +false);
 }
 
+static addBlockingSubscribe(builder:flatbuffers.Builder, blockingSubscribe:boolean) {
+  builder.addFieldInt8(4, +blockingSubscribe, +false);
+}
+
 static endPut(builder:flatbuffers.Builder):flatbuffers.Offset {
   const offset = builder.endObject();
   builder.requiredField(offset, 4) // container
@@ -102,7 +111,8 @@ unpack(): PutT {
     (this.container() !== null ? this.container()!.unpack() : null),
     this.bb!.createScalarList<number>(this.wrappedState.bind(this), this.wrappedStateLength()),
     (this.relatedContracts() !== null ? this.relatedContracts()!.unpack() : null),
-    this.subscribe()
+    this.subscribe(),
+    this.blockingSubscribe()
   );
 }
 
@@ -112,6 +122,7 @@ unpackTo(_o: PutT): void {
   _o.wrappedState = this.bb!.createScalarList<number>(this.wrappedState.bind(this), this.wrappedStateLength());
   _o.relatedContracts = (this.relatedContracts() !== null ? this.relatedContracts()!.unpack() : null);
   _o.subscribe = this.subscribe();
+  _o.blockingSubscribe = this.blockingSubscribe();
 }
 }
 
@@ -120,7 +131,8 @@ constructor(
   public container: ContractContainerT|null = null,
   public wrappedState: (number)[] = [],
   public relatedContracts: RelatedContractsT|null = null,
-  public subscribe: boolean = false
+  public subscribe: boolean = false,
+  public blockingSubscribe: boolean = false
 ){}
 
 
@@ -134,6 +146,7 @@ pack(builder:flatbuffers.Builder): flatbuffers.Offset {
   Put.addWrappedState(builder, wrappedState);
   Put.addRelatedContracts(builder, relatedContracts);
   Put.addSubscribe(builder, this.subscribe);
+  Put.addBlockingSubscribe(builder, this.blockingSubscribe);
 
   return Put.endPut(builder);
 }

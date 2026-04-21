@@ -3,7 +3,9 @@
 /* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
 
 import { GetResponse, GetResponseT } from '../host-response/get-response.js';
+import { NotFound, NotFoundT } from '../host-response/not-found.js';
 import { PutResponse, PutResponseT } from '../host-response/put-response.js';
+import { SubscribeResponse, SubscribeResponseT } from '../host-response/subscribe-response.js';
 import { UpdateNotification, UpdateNotificationT } from '../host-response/update-notification.js';
 import { UpdateResponse, UpdateResponseT } from '../host-response/update-response.js';
 
@@ -13,34 +15,40 @@ export enum ContractResponseType {
   GetResponse = 1,
   PutResponse = 2,
   UpdateNotification = 3,
-  UpdateResponse = 4
+  UpdateResponse = 4,
+  NotFound = 5,
+  SubscribeResponse = 6
 }
 
 export function unionToContractResponseType(
   type: ContractResponseType,
-  accessor: (obj:GetResponse|PutResponse|UpdateNotification|UpdateResponse) => GetResponse|PutResponse|UpdateNotification|UpdateResponse|null
-): GetResponse|PutResponse|UpdateNotification|UpdateResponse|null {
+  accessor: (obj:GetResponse|NotFound|PutResponse|SubscribeResponse|UpdateNotification|UpdateResponse) => GetResponse|NotFound|PutResponse|SubscribeResponse|UpdateNotification|UpdateResponse|null
+): GetResponse|NotFound|PutResponse|SubscribeResponse|UpdateNotification|UpdateResponse|null {
   switch(ContractResponseType[type]) {
     case 'NONE': return null; 
     case 'GetResponse': return accessor(new GetResponse())! as GetResponse;
     case 'PutResponse': return accessor(new PutResponse())! as PutResponse;
     case 'UpdateNotification': return accessor(new UpdateNotification())! as UpdateNotification;
     case 'UpdateResponse': return accessor(new UpdateResponse())! as UpdateResponse;
+    case 'NotFound': return accessor(new NotFound())! as NotFound;
+    case 'SubscribeResponse': return accessor(new SubscribeResponse())! as SubscribeResponse;
     default: return null;
   }
 }
 
 export function unionListToContractResponseType(
   type: ContractResponseType, 
-  accessor: (index: number, obj:GetResponse|PutResponse|UpdateNotification|UpdateResponse) => GetResponse|PutResponse|UpdateNotification|UpdateResponse|null, 
+  accessor: (index: number, obj:GetResponse|NotFound|PutResponse|SubscribeResponse|UpdateNotification|UpdateResponse) => GetResponse|NotFound|PutResponse|SubscribeResponse|UpdateNotification|UpdateResponse|null, 
   index: number
-): GetResponse|PutResponse|UpdateNotification|UpdateResponse|null {
+): GetResponse|NotFound|PutResponse|SubscribeResponse|UpdateNotification|UpdateResponse|null {
   switch(ContractResponseType[type]) {
     case 'NONE': return null; 
     case 'GetResponse': return accessor(index, new GetResponse())! as GetResponse;
     case 'PutResponse': return accessor(index, new PutResponse())! as PutResponse;
     case 'UpdateNotification': return accessor(index, new UpdateNotification())! as UpdateNotification;
     case 'UpdateResponse': return accessor(index, new UpdateResponse())! as UpdateResponse;
+    case 'NotFound': return accessor(index, new NotFound())! as NotFound;
+    case 'SubscribeResponse': return accessor(index, new SubscribeResponse())! as SubscribeResponse;
     default: return null;
   }
 }

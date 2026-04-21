@@ -13,12 +13,14 @@ export { GenerateRandData, GenerateRandDataT } from './host-response/generate-ra
 export { GetResponse, GetResponseT } from './host-response/get-response.js';
 export { HostResponse, HostResponseT } from './host-response/host-response.js';
 export { HostResponseType } from './host-response/host-response-type.js';
+export { NotFound, NotFoundT } from './host-response/not-found.js';
 export { Ok, OkT } from './host-response/ok.js';
 export { OutboundDelegateMsg, OutboundDelegateMsgT } from './host-response/outbound-delegate-msg.js';
 export { OutboundDelegateMsgType } from './host-response/outbound-delegate-msg-type.js';
 export { PutResponse, PutResponseT } from './host-response/put-response.js';
 export { RequestUserInput, RequestUserInputT } from './host-response/request-user-input.js';
-export { SetSecretRequest, SetSecretRequestT } from './host-response/set-secret-request.js';
+export { StreamChunk, StreamChunkT } from './host-response/stream-chunk.js';
+export { SubscribeResponse, SubscribeResponseT } from './host-response/subscribe-response.js';
 export { UpdateNotification, UpdateNotificationT } from './host-response/update-notification.js';
 export { UpdateResponse, UpdateResponseT } from './host-response/update-response.js';
 export { UserInputRequest, UserInputRequestT } from './host-response/user-input-request.js';
