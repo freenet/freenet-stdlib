@@ -43,17 +43,28 @@ If any check fails, stop and surface the problem.
 
 ## Publish
 
-Ask user for OTP now. Then run:
+Two auth paths. Prefer token (non-interactive, no timer):
 
+**Token (preferred):**
 ```
-bash scripts/release-typescript-ver.sh --yes --otp <OTP>
+bash scripts/release-typescript-ver.sh --yes --token <npm_token>
 ```
+Or set `NPM_TOKEN` env var and omit the flag. Token must have publish scope for the package and "bypass 2FA" enabled if org enforces 2FA.
 
-Flags explained:
-- `--yes` — skip interactive confirmations (can't prompt through Bash tool)
-- `--otp <code>` — pass 2FA code to `npm publish`
+**OTP (interactive auth):**
+```
+bash scripts/release-typescript-ver.sh --yes --otp <6-digit-code>
+```
+Ask user for OTP right before running — codes expire in ~30s.
 
-On 403 auth error: OTP likely expired. Ask user for fresh code, retry.
+Flags:
+- `--yes` — skip confirmation prompts (required under Bash tool)
+- `--token <tok>` — npm access token; auth via temp userconfig (not written to `$HOME/.npmrc`)
+- `--otp <code>` — 2FA code passed to `npm publish --otp`
+
+Never commit tokens. Never write token to `.npmrc` in repo. Script uses `mktemp` + `trap` to clean temp userconfig.
+
+On 403 E2FA/EOTP: OTP expired or token lacks 2FA bypass. Retry with fresh value.
 
 On success: script publishes, creates tag `typescript-v<version>`, prompts for push. With `--yes` it auto-pushes. If user wanted to skip push, add `--skip-push` and push manually later.
 
@@ -69,6 +80,7 @@ On success: script publishes, creates tag `typescript-v<version>`, prompts for p
 - `--dry-run` — build + pack preview only
 - `--yes` / `-y` — non-interactive (required when invoked via Bash tool)
 - `--otp <code>` — npm 2FA code
+- `--token <tok>` — npm access token (also reads `NPM_TOKEN` env var)
 - `--skip-push` — local tag only
 - `--skip-tests` — skip `npm test` (use when tests just ran)
 

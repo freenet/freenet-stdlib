@@ -6,19 +6,23 @@ TS_DIR="$SCRIPT_DIR/../typescript"
 
 usage() {
     cat <<EOF
-Usage: $0 [--dry-run] [--yes] [--otp <code>] [--skip-push] [--skip-tests]
+Usage: $0 [--dry-run] [--yes] [--otp <code>] [--token <token>] [--skip-push] [--skip-tests]
 
-  --dry-run     Build and pack preview only. No publish, no tag.
-  --yes         Skip confirmation prompts. Non-interactive.
-  --otp <code>  Pass npm 2FA one-time password to 'npm publish'.
-  --skip-push   Create tag locally, do not push to origin.
-  --skip-tests  Skip 'npm test' (use only if tests just passed).
+  --dry-run       Build and pack preview only. No publish, no tag.
+  --yes           Skip confirmation prompts. Non-interactive.
+  --otp <code>    Pass npm 2FA one-time password to 'npm publish'.
+  --token <tok>   Use npm access token instead of logged-in session.
+                  Alternative: set NPM_TOKEN env var. Tokens with
+                  "bypass 2fa" allow non-interactive publishing.
+  --skip-push     Create tag locally, do not push to origin.
+  --skip-tests    Skip 'npm test' (use only if tests just passed).
 EOF
 }
 
 DRY_RUN=0
 ASSUME_YES=0
 OTP=""
+TOKEN="${NPM_TOKEN:-}"
 SKIP_PUSH=0
 SKIP_TESTS=0
 
@@ -27,12 +31,23 @@ while [[ $# -gt 0 ]]; do
         --dry-run) DRY_RUN=1; shift;;
         --yes|-y) ASSUME_YES=1; shift;;
         --otp) OTP="${2:-}"; shift 2;;
+        --token) TOKEN="${2:-}"; shift 2;;
         --skip-push) SKIP_PUSH=1; shift;;
         --skip-tests) SKIP_TESTS=1; shift;;
         -h|--help) usage; exit 0;;
         *) echo "Unknown arg: $1"; usage; exit 2;;
     esac
 done
+
+NPM=(npm)
+if [[ -n "$TOKEN" ]]; then
+    TMP_NPMRC=$(mktemp)
+    trap 'rm -f "$TMP_NPMRC"' EXIT
+    chmod 600 "$TMP_NPMRC"
+    printf '//registry.npmjs.org/:_authToken=%s\n' "$TOKEN" > "$TMP_NPMRC"
+    NPM=(npm --userconfig "$TMP_NPMRC")
+    echo "Using npm access token (auth via temp userconfig)."
+fi
 
 cd "$TS_DIR"
 
@@ -54,7 +69,7 @@ if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null; then
     [[ $DRY_RUN -eq 1 ]] || exit 1
 fi
 
-if npm view "${PKG_NAME}@${PKG_VERSION}" version > /dev/null 2>&1; then
+if "${NPM[@]}" view "${PKG_NAME}@${PKG_VERSION}" version > /dev/null 2>&1; then
     echo "${PKG_NAME}@${PKG_VERSION} already published on npm."
     [[ $DRY_RUN -eq 1 ]] || exit 1
 fi
@@ -101,7 +116,7 @@ if [[ -n "$OTP" ]]; then
     PUBLISH_ARGS+=("--otp=$OTP")
 fi
 
-npm publish "${PUBLISH_ARGS[@]}"
+"${NPM[@]}" publish "${PUBLISH_ARGS[@]}"
 
 git tag -a "${TAG}" -m "Release ${PKG_NAME}@${PKG_VERSION}"
 echo "Tag ${TAG} created locally."
