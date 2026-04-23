@@ -5,7 +5,20 @@ description: Release the @freenetorg/freenet-stdlib npm package. Use when the us
 
 # Release @freenetorg/freenet-stdlib
 
-Release the TypeScript SDK to npm. Package: `@freenetorg/freenet-stdlib`. Registry: npmjs.org. Publish requires 2FA OTP.
+Release the TypeScript SDK to npm. Package: `@freenetorg/freenet-stdlib`. Registry: npmjs.org. Publish requires 2FA OTP or access token.
+
+## Two release paths
+
+### Path A — CI (preferred)
+
+1. Bump `typescript/package.json` version.
+2. PR → merge to main.
+3. Tag + push: `git tag -a typescript-v<version> -m "..." && git push origin typescript-v<version>`.
+4. `.github/workflows/release.yml` verifies tag matches package.json, builds, tests, packs, publishes via `NPM_TOKEN` secret.
+
+### Path B — Local (fallback)
+
+Use `scripts/release-typescript-ver.sh`. See sections below.
 
 ## Inputs to gather before starting
 
