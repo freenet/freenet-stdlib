@@ -1,6 +1,6 @@
 {
   "name": "@freenetorg/freenet-stdlib",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Freenet standard library and utils",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
@@ -23,9 +23,9 @@
     }
   },
   "files": [
-    "dist/**/*.js",
-    "dist/**/*.d.ts",
-    "dist/**/*.js.map"
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts",
+    "dist/src/**/*.js.map"
   ],
   "dependencies": {
     "bs58": "^6.0.0",
