@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed (wire-format break in `NodeDiagnosticsResponse`)
+- `NodeDiagnosticsResponse.contract_states` is now
+  `HashMap<String, ContractState>` (Base58 contract id) instead of
+  `HashMap<ContractKey, ContractState>`. The previous type had a
+  derived `Serialize` for `ContractKey` that emitted a struct
+  (`{instance, code}`), which `serde_json` rejects because JSON object
+  keys must be strings — every diagnostic report from a node hosting at
+  least one contract uploaded with empty `network_status`. The new key
+  matches the convention every other field in this struct already uses
+  (`peer_id: String`, `connected_peers: Vec<(String, String)>`,
+  `ContractHostingEntry::contract_key: String`). See
+  freenet/freenet-core#3987.
+- This is a bincode wire-format break for `NodeDiagnosticsResponse`.
+  Older clients (built against 0.6.x) that decode the
+  `HostResponse::QueryResponse(QueryResponse::NodeDiagnostics(_))`
+  variant will fail to deserialize the new payload. The only known
+  in-tree consumer is `fdev`'s diagnostics command, which is shipped
+  with `freenet-core` and rebuilt in lockstep. `freenet service report`
+  was already broken on the old shape and works with the new shape
+  via the local fix in freenet/freenet-core#3989.
+- Added a `serde_json` round-trip regression test for
+  `NodeDiagnosticsResponse` to prevent the same class of bug from
+  reappearing — any future field whose key type does not serialize as
+  a string would break this test at the source.
+
 ## [0.6.0] - 2026-04-13
 
 ### Changed (source-level breaking, wire-compatible)
