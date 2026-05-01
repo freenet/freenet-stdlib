@@ -1745,7 +1745,11 @@ impl<T> From<ContractResponse<T>> for HostResponse<T> {
 
 #[cfg(test)]
 mod node_diagnostics_response_tests {
-    use super::{ContractState, NodeDiagnosticsResponse};
+    use super::{
+        ConnectedPeerInfo, ContractState, NetworkInfo, NodeDiagnosticsResponse, NodeInfo,
+        SubscriptionInfo, SystemMetrics,
+    };
+    use crate::contract_interface::ContractInstanceId;
     use std::collections::HashMap;
 
     /// Regression for freenet/freenet-core#3987.
@@ -1758,8 +1762,12 @@ mod node_diagnostics_response_tests {
     /// invisible until the `freenet service report` binary tried to
     /// JSON-serialize the response for upload — every report from a node
     /// hosting at least one contract uploaded with empty `network_status`.
-    /// This test pins the fix: serde_json must succeed for a populated
-    /// response, and the round-tripped key must match the input string.
+    ///
+    /// All six fields are populated so that any future `pub` field added
+    /// to the struct gets exercised by serde_json the moment a contributor
+    /// sets a non-default value here. If a future field reintroduces the
+    /// non-string-key pattern (e.g. `HashMap<PeerId, _>`), this test will
+    /// fail at the source instead of silently breaking the report path.
     #[test]
     fn node_diagnostics_response_json_round_trips() {
         let mut contract_states = HashMap::new();
@@ -1767,21 +1775,50 @@ mod node_diagnostics_response_tests {
             "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9".to_string(),
             ContractState {
                 subscribers: 3,
-                subscriber_peer_ids: vec!["peer-a".to_string()],
+                subscriber_peer_ids: vec!["peer-a".to_string(), "peer-b".to_string()],
                 size_bytes: 1024,
             },
         );
+
         let response = NodeDiagnosticsResponse {
-            node_info: None,
-            network_info: None,
-            subscriptions: vec![],
+            node_info: Some(NodeInfo {
+                peer_id: "peer-self".to_string(),
+                is_gateway: true,
+                location: Some("0.5".to_string()),
+                listening_address: Some("0.0.0.0:31337".to_string()),
+                uptime_seconds: 3600,
+            }),
+            network_info: Some(NetworkInfo {
+                connected_peers: vec![("peer-x".to_string(), "10.0.0.1:31337".to_string())],
+                active_connections: 1,
+            }),
+            subscriptions: vec![SubscriptionInfo {
+                contract_key: ContractInstanceId::new([7u8; 32]),
+                client_id: 42,
+            }],
             contract_states,
-            system_metrics: None,
-            connected_peers_detailed: vec![],
+            system_metrics: Some(SystemMetrics {
+                active_connections: 1,
+                hosting_contracts: 1,
+            }),
+            connected_peers_detailed: vec![ConnectedPeerInfo {
+                peer_id: "peer-x".to_string(),
+                address: "10.0.0.1:31337".to_string(),
+            }],
         };
 
         let json = serde_json::to_string(&response).expect("must serialize to JSON");
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("output is valid JSON");
+
+        // Every top-level field is present and distinguishable.
+        let obj = parsed.as_object().expect("top-level must be object");
+        assert_eq!(obj.len(), 6, "expected six top-level fields, got {obj:?}");
+        assert_eq!(parsed["node_info"]["peer_id"], "peer-self");
+        assert_eq!(parsed["network_info"]["active_connections"], 1);
+        assert_eq!(parsed["subscriptions"][0]["client_id"], 42);
+        assert_eq!(parsed["system_metrics"]["hosting_contracts"], 1);
+        assert_eq!(parsed["connected_peers_detailed"][0]["peer_id"], "peer-x");
+
         let states = parsed["contract_states"]
             .as_object()
             .expect("contract_states must be a JSON object");
@@ -1789,6 +1826,18 @@ mod node_diagnostics_response_tests {
         assert_eq!(
             states["6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9"]["subscribers"],
             3
+        );
+
+        // Bincode round-trip must also still work for the same value
+        // (the new wire format is the contract; older clients are
+        // documented as incompatible in CHANGELOG).
+        let bytes = bincode::serialize(&response).expect("bincode must serialize");
+        let decoded: NodeDiagnosticsResponse =
+            bincode::deserialize(&bytes).expect("bincode must round-trip");
+        assert_eq!(
+            decoded.contract_states.len(),
+            1,
+            "bincode round-trip preserves contract_states entries"
         );
     }
 }
