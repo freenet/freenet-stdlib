@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.7.0]
+
+### Fixed (wire-format break in `NodeDiagnosticsResponse`)
+- `NodeDiagnosticsResponse.contract_states` is now
+  `HashMap<String, ContractState>` (Base58 contract id) instead of
+  `HashMap<ContractKey, ContractState>`. The previous type had a
+  derived `Serialize` for `ContractKey` that emitted a struct
+  (`{instance, code}`), which `serde_json` rejects because JSON object
+  keys must be strings — every diagnostic report from a node hosting at
+  least one contract uploaded with empty `network_status`. The new key
+  matches the convention every other field in this struct already uses
+  (`peer_id: String`, `connected_peers: Vec<(String, String)>`,
+  `ContractHostingEntry::contract_key: String`). See
+  freenet/freenet-core#3987.
+
+### Compatibility
+- This is a **bidirectional bincode wire-format break** for
+  `NodeDiagnosticsResponse`. Bincode encodes
+  `HashMap<ContractKey, ContractState>` and
+  `HashMap<String, ContractState>` as different byte sequences for the
+  same logical data, so:
+  - Older clients built against 0.6.x will fail to deserialize a
+    `HostResponse::QueryResponse(QueryResponse::NodeDiagnostics(_))`
+    payload produced by a 0.7-or-newer node.
+  - Newer clients built against 0.7.0 will fail to deserialize the same
+    variant produced by an older node.
+  Every other variant in `HostResponse`/`QueryResponse` is unchanged;
+  the `#[non_exhaustive]` enum discriminants from 0.6.0 still hold.
+  Run matched versions across gateway and tooling.
+- The Base58 stringification via `ContractKey::Display` drops the
+  `code_hash` field that the broken derived serializer would have
+  emitted alongside `instance`. No in-tree consumer reads `code_hash`
+  from this map; future consumers that need it will need a separate
+  field.
+- Known affected consumer sites that need source updates when
+  freenet-core bumps to a release including this stdlib:
+  - `crates/core/src/node/network_bridge/p2p_protoc.rs:1900,1916`
+    (producer-side: `.insert(contract_key, ...)` becomes
+    `.insert(contract_key.to_string(), ...)`)
+  - `crates/fdev/src/diagnostics.rs:158-170` (consumer-side: already
+    iterates and calls `.to_string()` on the key — source-compatible,
+    no change required)
+  - `crates/core/src/bin/commands/report.rs::diagnostics_to_json`
+    (the workaround merged in freenet/freenet-core#3989 — `.to_string()`
+    on `String` is a no-op, so still correct, but the helper becomes
+    redundant and can be simplified to a plain
+    `serde_json::to_string_pretty(&diag)`)
+  - `freenet-test-network/src/network.rs:1093` (out-of-tree consumer:
+    map lookup keyed by `ContractKey` needs `.to_string()`)
+- Added a `serde_json` round-trip regression test in stdlib for
+  `NodeDiagnosticsResponse` (every field populated) to prevent the
+  same class of bug from reappearing — any future struct field whose
+  key type does not serialize as a string would break this test at
+  the source.
+
 ## [0.6.0] - 2026-04-13
 
 ### Changed (source-level breaking, wire-compatible)

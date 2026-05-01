@@ -799,8 +799,17 @@ pub struct NodeDiagnosticsResponse {
     /// Contract subscription information
     pub subscriptions: Vec<SubscriptionInfo>,
 
-    /// Contract states for specific contracts
-    pub contract_states: std::collections::HashMap<ContractKey, ContractState>,
+    /// Contract states for specific contracts.
+    ///
+    /// Keys are the Base58-encoded contract id (i.e. `ContractKey::Display`),
+    /// matching the convention every other field in this struct uses
+    /// (`peer_id: String`, `connected_peers: Vec<(String, String)>`,
+    /// `ContractHostingEntry::contract_key: String`). Pre-0.7 this was
+    /// `HashMap<ContractKey, ContractState>`, which `serde_json` could not
+    /// serialize because JSON object keys must be strings — every report
+    /// from a node hosting at least one contract had its
+    /// `network_status` silently dropped. See freenet/freenet-core#3987.
+    pub contract_states: std::collections::HashMap<String, ContractState>,
 
     /// System metrics
     pub system_metrics: Option<SystemMetrics>,
@@ -1731,6 +1740,105 @@ pub enum ContractResponse<T = WrappedState> {
 impl<T> From<ContractResponse<T>> for HostResponse<T> {
     fn from(value: ContractResponse<T>) -> HostResponse<T> {
         HostResponse::ContractResponse(value)
+    }
+}
+
+#[cfg(test)]
+mod node_diagnostics_response_tests {
+    use super::{
+        ConnectedPeerInfo, ContractState, NetworkInfo, NodeDiagnosticsResponse, NodeInfo,
+        SubscriptionInfo, SystemMetrics,
+    };
+    use crate::contract_interface::ContractInstanceId;
+    use std::collections::HashMap;
+
+    /// Regression for freenet/freenet-core#3987.
+    ///
+    /// Pre-0.7 `contract_states` was `HashMap<ContractKey, ContractState>`.
+    /// `ContractKey` derives `Serialize` as a struct (`{instance, code}`),
+    /// which `serde_json` rejects with `key must be a string` because JSON
+    /// object keys must be strings. The wire path between core and clients
+    /// is bincode (which doesn't care about key types), so the bug stayed
+    /// invisible until the `freenet service report` binary tried to
+    /// JSON-serialize the response for upload — every report from a node
+    /// hosting at least one contract uploaded with empty `network_status`.
+    ///
+    /// All six fields are populated so that any future `pub` field added
+    /// to the struct gets exercised by serde_json the moment a contributor
+    /// sets a non-default value here. If a future field reintroduces the
+    /// non-string-key pattern (e.g. `HashMap<PeerId, _>`), this test will
+    /// fail at the source instead of silently breaking the report path.
+    #[test]
+    fn node_diagnostics_response_json_round_trips() {
+        let mut contract_states = HashMap::new();
+        contract_states.insert(
+            "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9".to_string(),
+            ContractState {
+                subscribers: 3,
+                subscriber_peer_ids: vec!["peer-a".to_string(), "peer-b".to_string()],
+                size_bytes: 1024,
+            },
+        );
+
+        let response = NodeDiagnosticsResponse {
+            node_info: Some(NodeInfo {
+                peer_id: "peer-self".to_string(),
+                is_gateway: true,
+                location: Some("0.5".to_string()),
+                listening_address: Some("0.0.0.0:31337".to_string()),
+                uptime_seconds: 3600,
+            }),
+            network_info: Some(NetworkInfo {
+                connected_peers: vec![("peer-x".to_string(), "10.0.0.1:31337".to_string())],
+                active_connections: 1,
+            }),
+            subscriptions: vec![SubscriptionInfo {
+                contract_key: ContractInstanceId::new([7u8; 32]),
+                client_id: 42,
+            }],
+            contract_states,
+            system_metrics: Some(SystemMetrics {
+                active_connections: 1,
+                hosting_contracts: 1,
+            }),
+            connected_peers_detailed: vec![ConnectedPeerInfo {
+                peer_id: "peer-x".to_string(),
+                address: "10.0.0.1:31337".to_string(),
+            }],
+        };
+
+        let json = serde_json::to_string(&response).expect("must serialize to JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("output is valid JSON");
+
+        // Every top-level field is present and distinguishable.
+        let obj = parsed.as_object().expect("top-level must be object");
+        assert_eq!(obj.len(), 6, "expected six top-level fields, got {obj:?}");
+        assert_eq!(parsed["node_info"]["peer_id"], "peer-self");
+        assert_eq!(parsed["network_info"]["active_connections"], 1);
+        assert_eq!(parsed["subscriptions"][0]["client_id"], 42);
+        assert_eq!(parsed["system_metrics"]["hosting_contracts"], 1);
+        assert_eq!(parsed["connected_peers_detailed"][0]["peer_id"], "peer-x");
+
+        let states = parsed["contract_states"]
+            .as_object()
+            .expect("contract_states must be a JSON object");
+        assert_eq!(states.len(), 1);
+        assert_eq!(
+            states["6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9"]["subscribers"],
+            3
+        );
+
+        // Bincode round-trip must also still work for the same value
+        // (the new wire format is the contract; older clients are
+        // documented as incompatible in CHANGELOG).
+        let bytes = bincode::serialize(&response).expect("bincode must serialize");
+        let decoded: NodeDiagnosticsResponse =
+            bincode::deserialize(&bytes).expect("bincode must round-trip");
+        assert_eq!(
+            decoded.contract_states.len(),
+            1,
+            "bincode round-trip preserves contract_states entries"
+        );
     }
 }
 
