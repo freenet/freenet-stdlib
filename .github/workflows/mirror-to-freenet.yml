@@ -1,0 +1,27 @@
+name: Mirror to Freenet
+
+# Pushes the latest freenet-stdlib history to the Freenet-hosted demo
+# repo at `freenet:96rknpy1GYhZ/freenet-stdlib` whenever main moves.
+#
+# Mode is `history` because freenet-stdlib's full history is small
+# enough (~720 KiB pack) to fit in the repo contract; consumers get
+# `git log` and the full commit tree. The reusable workflow lives in
+# freenet/freenet-git -- see its header comment for details on how to
+# set up the identity bundle and gateway WS URL secrets.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Daily safety net. 12:53 UTC, offset from freenet-core's 11:42 to
+    # avoid both pushing through the same gateway in the same minute.
+    - cron: "53 12 * * *"
+
+jobs:
+  mirror:
+    uses: freenet/freenet-git/.github/workflows/mirror-repo.yml@main
+    with:
+      freenet_repo: "96rknpy1GYhZ/freenet-stdlib"
+      mode: history
+    secrets: inherit
