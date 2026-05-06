@@ -14,17 +14,29 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    # Daily safety net. 12:53 UTC, offset from freenet-core's 11:42 to
-    # avoid both pushing through the same gateway in the same minute.
+    # Daily safety net at 12:53 UTC. Staggered from freenet-core's
+    # 11:42 for log readability only -- the reusable workflow's
+    # concurrency group keys on `inputs.freenet_repo`, so different
+    # prefixes do not contend on the receiver side.
     - cron: "53 12 * * *"
 
 jobs:
   mirror:
-    # Pinned to the merge SHA of freenet-git#17 rather than `@main`.
-    # `secrets: inherit` + an unpinned ref would let any commit to
-    # freenet-git/main exfiltrate this repo's secrets (CARGO_REGISTRY_TOKEN
-    # and NPM_TOKEN). SHA-pinning closes that vector; bump the SHA when
-    # the reusable workflow is rev'd.
+    # Pinned to the merge SHA of freenet-git#17 (with the
+    # deterministic-snapshot fix from #18) rather than `@main`. An
+    # unpinned ref + `secrets: inherit` would let any commit to
+    # freenet-git/main exfiltrate this repo's secrets (CARGO_REGISTRY_TOKEN,
+    # NPM_TOKEN). SHA-pinning + explicit `secrets:` mapping below closes
+    # the workflow-definition vector; bump the SHA when the reusable
+    # workflow is rev'd.
+    #
+    # Note: the reusable workflow's `cargo install freenet-git --locked`
+    # step still pulls the latest crates.io release of freenet-git (its
+    # `freenet_git_version` input defaults to `latest` and we don't
+    # override it). A malicious freenet-git release would still execute
+    # under this caller's secrets. Acceptable today because we control
+    # crates.io publishing for that crate; if that changes, override
+    # `freenet_git_version` here with a pinned semver.
     uses: freenet/freenet-git/.github/workflows/mirror-repo.yml@4a4ab090c5591473f579ce2d1b626aba7b3a8ba3
     with:
       freenet_repo: "96rknpy1GYhZ/freenet-stdlib"
