@@ -32,7 +32,6 @@ impl CodeHash {
         bs58::encode(self.0)
             .with_alphabet(bs58::Alphabet::BITCOIN)
             .into_string()
-            .to_lowercase()
     }
 }
 
@@ -78,5 +77,30 @@ impl Display for CodeHash {
 impl std::fmt::Debug for CodeHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("CodeHash").field(&self.encode()).finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_roundtrips_with_case_sensitive_alphabet() {
+        // Bytes chosen so the base58 encoding contains uppercase characters,
+        // which a lowercasing `encode` would corrupt.
+        let original = CodeHash([0xFF; CONTRACT_KEY_SIZE]);
+        let encoded = original.encode();
+        assert!(
+            encoded.chars().any(|c| c.is_ascii_uppercase()),
+            "test fixture must contain uppercase base58 chars, got {encoded}"
+        );
+
+        let mut decoded = [0u8; CONTRACT_KEY_SIZE];
+        bs58::decode(&encoded)
+            .with_alphabet(bs58::Alphabet::BITCOIN)
+            .onto(&mut decoded)
+            .expect("encoded CodeHash must decode with the BITCOIN alphabet");
+
+        assert_eq!(original.0, decoded);
     }
 }
