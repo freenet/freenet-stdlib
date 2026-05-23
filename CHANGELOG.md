@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0]
+
+### Fixed
+- `CodeHash::encode` no longer lowercases its Base58 output. The
+  BITCOIN alphabet is case-sensitive, so lowercasing corrupted the
+  bytes for any hash whose encoding contained uppercase characters and
+  broke the `encode` → `ContractKey::from_params` roundtrip (which
+  decodes with the same case-sensitive alphabet). `CodeHash::encode`
+  now matches `ContractInstanceId::encode`,
+  `ContractKey::encoded_code_hash`, and `ContractCode::hash_str`, all
+  of which already preserved case. See freenet/freenet-core#4214.
+
 ## [0.7.0]
 
 ### Fixed (wire-format break in `NodeDiagnosticsResponse`)
