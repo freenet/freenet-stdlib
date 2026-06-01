@@ -37,7 +37,6 @@ import {
   UserInputResponseT,
   WasmDelegateV1T,
 } from "./client-request";
-import { GetSecretRequestTypeT } from "./client-request/get-secret-request-type";
 import { StreamChunkT as ClientStreamChunkT } from "./client-request/stream-chunk";
 import { UpdateDataT } from "./common/update-data";
 import { UpdateDataType } from "./common/update-data-type";
@@ -61,15 +60,12 @@ import {
   StreamChunkT,
   SubscribeResponseT,
 } from "./host-response";
-import { SetSecretRequestT } from "./host-response/set-secret-request";
 import {
   ApplicationMessageT,
   ContractCodeT,
   ContractType,
   WasmContractV1T,
 } from "./common";
-import { GetSecretRequestT } from "./common/get-secret-request";
-import { GetSecretResponseT } from "./common/get-secret-response";
 import { ErrorT } from "./host-response/error";
 import { NotFoundT } from "./host-response/not-found";
 
@@ -294,22 +290,6 @@ export class DelegateContainer extends DelegateContainerT {
 }
 
 /**
- * Representation of the delegate GetSecretRequest message content
- * @public
- */
-export type GetSecretRequest = GetSecretRequestT;
-/**
- * Representation of the delegate GetSecretRequest message type
- * @public
- */
-export type GetSecretRequestType = GetSecretRequestTypeT;
-/**
- * Representation of the delegate GetSecretResponse message content
- * @public
- */
-export type GetSecretResponse = GetSecretResponseT;
-
-/**
  * Representation of the delegate Application message
  *
  */
@@ -425,7 +405,6 @@ export class DelegateRequest extends DelegateRequestT {
     delegateRequestType: DelegateRequestType = DelegateRequestType.NONE,
     delegateRequest:
       | ApplicationMessages
-      | GetSecretRequestType
       | RegisterDelegate
       | UnregisterDelegate
   ) {
@@ -539,11 +518,6 @@ export type ContextUpdated = ContextUpdatedT;
  * @public
  */
 export type RequestUserInput = RequestUserInputT;
-/**
- * Representation of GetSecretRequest message
- * @public
- */
-export type SetSecretRequest = SetSecretRequestT;
 
 /**
  * Representation of the outbound delegate message types
