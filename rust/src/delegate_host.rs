@@ -136,6 +136,21 @@ extern "C" {
     fn __frnt__delegate__has_secret(key_ptr: i64, key_len: i32) -> i32;
     /// Remove a secret. Returns 0 on success, or negative error code.
     fn __frnt__delegate__remove_secret(key_ptr: i64, key_len: i32) -> i32;
+    /// Length (in bytes) of the serialized key list for all stored secret keys
+    /// whose raw key starts with the `prefix_len`-byte prefix at `prefix_ptr`
+    /// (an empty prefix matches every key). Returns the byte count to allocate
+    /// before calling `__frnt__delegate__list_secrets`, or a negative error code.
+    fn __frnt__delegate__list_secrets_len(prefix_ptr: i64, prefix_len: i32) -> i32;
+    /// Enumerate stored secret keys matching the prefix. Writes a length-prefixed
+    /// list to `out_ptr` (max `out_len` bytes): each record is a 4-byte
+    /// little-endian length followed by that many key bytes. Returns the number
+    /// of bytes written, or a negative error code.
+    fn __frnt__delegate__list_secrets(
+        prefix_ptr: i64,
+        prefix_len: i32,
+        out_ptr: i64,
+        out_len: i32,
+    ) -> i32;
 }
 
 #[cfg(target_family = "wasm")]
@@ -435,6 +450,53 @@ impl DelegateCtx {
         }
     }
 
+    /// Enumerate the keys of every secret this delegate has stored whose raw
+    /// key begins with `prefix` (pass an empty slice to list all keys).
+    ///
+    /// Returns the matching raw keys (the same byte strings originally passed
+    /// to [`set_secret`](Self::set_secret)). Order is unspecified. The host
+    /// caps the number of keys returned; if storage holds more matching keys
+    /// than the cap, the list is truncated (callers needing exhaustive
+    /// enumeration should narrow the prefix).
+    ///
+    /// This closes the gap that previously forced apps storing an open-ended
+    /// key family (e.g. `room:<owner_vk>`) to maintain their own key registry:
+    /// after a delegate-WASM rebuild the delegate can now rediscover what it
+    /// has stored instead of probing a hardcoded key set.
+    pub fn list_secrets(&self, prefix: &[u8]) -> Vec<Vec<u8>> {
+        #[cfg(target_family = "wasm")]
+        {
+            let len = unsafe {
+                __frnt__delegate__list_secrets_len(prefix.as_ptr() as i64, prefix.len() as i32)
+            };
+            if len <= 0 {
+                // Negative => error; zero => no matching keys. Either way the
+                // caller gets an empty list (errors are non-fatal: enumeration
+                // is advisory).
+                return Vec::new();
+            }
+            let mut out = vec![0u8; len as usize];
+            let written = unsafe {
+                __frnt__delegate__list_secrets(
+                    prefix.as_ptr() as i64,
+                    prefix.len() as i32,
+                    out.as_mut_ptr() as i64,
+                    out.len() as i32,
+                )
+            };
+            if written < 0 {
+                return Vec::new();
+            }
+            out.truncate(written as usize);
+            decode_secret_key_list(&out)
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = prefix;
+            Vec::new()
+        }
+    }
+
     // ========================================================================
     // Contract methods (V2 — direct synchronous access)
     // ========================================================================
@@ -619,5 +681,90 @@ impl std::fmt::Debug for DelegateCtx {
         f.debug_struct("DelegateCtx")
             .field("context_len", &self.len())
             .finish_non_exhaustive()
+    }
+}
+
+// ============================================================================
+// Secret-key-list wire codec (shared host↔delegate contract for list_secrets)
+// ============================================================================
+
+/// Serialize a list of raw secret keys into the wire format read back by
+/// [`decode_secret_key_list`]: for each key, a 4-byte little-endian length
+/// followed by that many key bytes. This is the encoding the host
+/// (`__frnt__delegate__list_secrets`) writes into the delegate's output buffer.
+///
+/// Kept in stdlib (rather than only in the host) so the format has exactly one
+/// authoritative definition that both sides — and the round-trip tests — share.
+pub fn encode_secret_key_list<'a, I>(keys: I) -> Vec<u8>
+where
+    I: IntoIterator<Item = &'a [u8]>,
+{
+    let mut buf = Vec::new();
+    for key in keys {
+        buf.extend_from_slice(&(key.len() as u32).to_le_bytes());
+        buf.extend_from_slice(key);
+    }
+    buf
+}
+
+/// Inverse of [`encode_secret_key_list`]. A truncated trailing record (which can
+/// only happen if the buffer was clipped mid-record) is dropped rather than
+/// panicking, so a short read degrades to "fewer keys" instead of a trap.
+pub fn decode_secret_key_list(buf: &[u8]) -> Vec<Vec<u8>> {
+    let mut keys = Vec::new();
+    let mut pos = 0usize;
+    while pos + 4 <= buf.len() {
+        let len = u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]) as usize;
+        pos += 4;
+        if pos + len > buf.len() {
+            // Truncated record: stop here rather than over-read.
+            break;
+        }
+        keys.push(buf[pos..pos + len].to_vec());
+        pos += len;
+    }
+    keys
+}
+
+#[cfg(test)]
+mod secret_key_list_codec_tests {
+    use super::{decode_secret_key_list, encode_secret_key_list};
+
+    #[test]
+    fn round_trip_multiple_keys() {
+        let keys: Vec<&[u8]> = vec![b"room:alice", b"room:bob", b"private_key"];
+        let encoded = encode_secret_key_list(keys.iter().copied());
+        let decoded = decode_secret_key_list(&encoded);
+        assert_eq!(
+            decoded,
+            vec![
+                b"room:alice".to_vec(),
+                b"room:bob".to_vec(),
+                b"private_key".to_vec()
+            ]
+        );
+    }
+
+    #[test]
+    fn round_trip_empty_list() {
+        let encoded = encode_secret_key_list(std::iter::empty::<&[u8]>());
+        assert!(encoded.is_empty());
+        assert!(decode_secret_key_list(&encoded).is_empty());
+    }
+
+    #[test]
+    fn round_trip_empty_key() {
+        // A zero-length key is a legal (if unusual) record.
+        let encoded = encode_secret_key_list([b"".as_slice()]);
+        assert_eq!(encoded, vec![0, 0, 0, 0]);
+        assert_eq!(decode_secret_key_list(&encoded), vec![Vec::<u8>::new()]);
+    }
+
+    #[test]
+    fn truncated_trailing_record_is_dropped() {
+        let mut encoded = encode_secret_key_list([b"abc".as_slice(), b"defgh".as_slice()]);
+        // Clip mid-way through the second record's payload.
+        encoded.truncate(encoded.len() - 2);
+        assert_eq!(decode_secret_key_list(&encoded), vec![b"abc".to_vec()]);
     }
 }

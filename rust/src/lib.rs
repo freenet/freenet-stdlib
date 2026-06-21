@@ -38,7 +38,9 @@ pub mod prelude {
     pub use crate::code_hash::*;
     pub use crate::contract_interface::wasm_interface::ContractInterfaceResult;
     pub use crate::contract_interface::*;
-    pub use crate::delegate_host::{error_codes, DelegateCtx};
+    pub use crate::delegate_host::{
+        decode_secret_key_list, encode_secret_key_list, error_codes, DelegateCtx,
+    };
     pub use crate::delegate_interface::wasm_interface::DelegateInterfaceResult;
     pub use crate::delegate_interface::*;
     pub use crate::parameters::*;
