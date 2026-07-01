@@ -56,6 +56,30 @@ pub fn chunk_request(data: Vec<u8>, stream_id: u32) -> Vec<ClientRequest<'static
         .collect()
 }
 
+/// Fail-fast check that a serialized payload of `len` bytes fits within
+/// [`MAX_TOTAL_CHUNKS`] before the client streams any chunk.
+///
+/// This mirrors the node's reassembly cap: [`ReassemblyBuffer::receive_chunk`]
+/// rejects a `total` exceeding [`MAX_TOTAL_CHUNKS`] with
+/// [`StreamError::TotalChunksTooLarge`] on the *first* chunk. Without this guard
+/// the client would stream the entire oversized payload (up to hundreds of MiB)
+/// before the node rejects it, wasting all of that bandwidth.
+///
+/// The chunk-count math matches [`chunk_bytes`] exactly, so the `total` computed
+/// here equals the `total` the node validates on the wire.
+pub fn ensure_chunkable(len: usize) -> Result<(), StreamError> {
+    let total = len.div_ceil(CHUNK_SIZE).max(1);
+    if total > MAX_TOTAL_CHUNKS as usize {
+        return Err(StreamError::TotalChunksTooLarge {
+            // Clamp only guards against a theoretical >u32::MAX-chunk (multi-TiB)
+            // payload; the comparison above is done in `usize` so it is exact.
+            total: total.min(u32::MAX as usize) as u32,
+            max: MAX_TOTAL_CHUNKS,
+        });
+    }
+    Ok(())
+}
+
 /// Split a serialized response payload into `StreamChunk` host response variants.
 ///
 /// Uses `Bytes::slice()` internally for zero-copy: each chunk shares the
@@ -607,6 +631,40 @@ mod tests {
         let data3 = vec![0xEE; CHUNK_SIZE * 2 + 1];
         let chunks3 = chunk_request(data3, 7);
         assert_eq!(chunks3.len(), 3);
+    }
+
+    #[test]
+    fn ensure_chunkable_rejects_oversized() {
+        // A length that needs more than MAX_TOTAL_CHUNKS chunks must be rejected,
+        // mirroring the node's ReassemblyBuffer cap. Only the length integer is
+        // passed — no multi-MiB payload is allocated.
+        let len = (MAX_TOTAL_CHUNKS as usize + 1) * CHUNK_SIZE;
+        match ensure_chunkable(len) {
+            Err(StreamError::TotalChunksTooLarge { total, max }) => {
+                assert_eq!(total, MAX_TOTAL_CHUNKS + 1);
+                assert_eq!(max, MAX_TOTAL_CHUNKS);
+            }
+            other => panic!("expected TotalChunksTooLarge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ensure_chunkable_accepts_at_limit() {
+        // Exactly MAX_TOTAL_CHUNKS chunks is the largest allowed payload.
+        let at_limit = MAX_TOTAL_CHUNKS as usize * CHUNK_SIZE;
+        assert!(ensure_chunkable(at_limit).is_ok());
+        // One byte over the exact multiple needs one more chunk → rejected.
+        assert!(matches!(
+            ensure_chunkable(at_limit + 1),
+            Err(StreamError::TotalChunksTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn ensure_chunkable_accepts_small() {
+        assert!(ensure_chunkable(0).is_ok());
+        assert!(ensure_chunkable(1024).is_ok());
+        assert!(ensure_chunkable(CHUNK_THRESHOLD).is_ok());
     }
 
     #[test]
