@@ -170,7 +170,7 @@ impl WebApi {
     }
 
     pub async fn send(&mut self, request: ClientRequest<'static>) -> Result<(), Error> {
-        use super::streaming::{chunk_request, CHUNK_THRESHOLD};
+        use super::streaming::{chunk_request, ensure_chunkable, CHUNK_THRESHOLD};
 
         // Check WebSocket ready state before sending.
         // Per WebSocket spec, send() silently discards data when socket is CLOSING/CLOSED.
@@ -195,6 +195,19 @@ impl WebApi {
         let send = bincode::serialize(&request)?;
 
         if send.len() > CHUNK_THRESHOLD {
+            // Fail fast if the payload would exceed the node's reassembly cap
+            // (ReassemblyBuffer::receive_chunk rejects total > MAX_TOTAL_CHUNKS on
+            // the first chunk). Refuse to send anything rather than streaming the
+            // whole oversized payload just to have the node reject it.
+            if let Err(e) = ensure_chunkable(send.len()) {
+                let err = serde_json::json!({
+                    "error": format!("{e}"),
+                    "origin": "chunk cap check",
+                    "request": format!("{request:?}"),
+                });
+                (self.error_handler)(Error::ConnectionError(err.clone()));
+                return Err(Error::ConnectionError(err));
+            }
             let stream_id = self.next_stream_id;
             self.next_stream_id = self.next_stream_id.wrapping_add(1);
             let chunks = chunk_request(send, stream_id);

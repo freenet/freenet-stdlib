@@ -268,7 +268,7 @@ async fn process_request(
     req: Option<ClientRequest<'static>>,
     next_stream_id: &mut u32,
 ) -> Result<(), Error> {
-    use super::streaming::{chunk_request, CHUNK_THRESHOLD};
+    use super::streaming::{chunk_request, ensure_chunkable, CHUNK_THRESHOLD};
 
     let req = req.ok_or(Error::ChannelClosed)?;
     let msg = bincode::serialize(&req)
@@ -276,6 +276,12 @@ async fn process_request(
         .map_err(Error::OtherError)?;
 
     if msg.len() > CHUNK_THRESHOLD {
+        // Fail fast if the payload would exceed the node's reassembly cap
+        // (ReassemblyBuffer::receive_chunk rejects total > MAX_TOTAL_CHUNKS on the
+        // first chunk). Refuse to send anything rather than streaming the whole
+        // oversized payload just to have the node reject it. The error propagates
+        // to the caller via the request handler.
+        ensure_chunkable(msg.len()).map_err(|e| Error::OtherError(e.into()))?;
         let stream_id = *next_stream_id;
         *next_stream_id = next_stream_id.wrapping_add(1);
         let chunks = chunk_request(msg, stream_id);
