@@ -279,8 +279,17 @@ async fn process_request(
         // Fail fast if the payload would exceed the node's reassembly cap
         // (ReassemblyBuffer::receive_chunk rejects total > MAX_TOTAL_CHUNKS on the
         // first chunk). Refuse to send anything rather than streaming the whole
-        // oversized payload just to have the node reject it. The error propagates
-        // to the caller via the request handler.
+        // oversized payload just to have the node reject it.
+        //
+        // Returning `Err` here breaks the request_handler loop (`break err`),
+        // which tears down the WebApi connection. That is intentional and
+        // acceptable: an over-cap request is unsendable and out-of-spec (>64 MiB,
+        // already above the 50 MiB MAX_STATE_SIZE), and the error is still
+        // delivered to the caller via `recv()` before teardown. (The browser/wasm
+        // path surfaces the same error to the JS caller without tearing down the
+        // connection.) We deliberately do not thread `response_tx` through here to
+        // report the error per-request; the extra plumbing isn't worth it for a
+        // request that cannot be sent regardless.
         ensure_chunkable(msg.len()).map_err(|e| Error::OtherError(e.into()))?;
         let stream_id = *next_stream_id;
         *next_stream_id = next_stream_id.wrapping_add(1);
@@ -675,6 +684,83 @@ mod test {
             .await?;
         tokio::time::timeout(Duration::from_secs(5), rx).await??;
         tokio::time::timeout(Duration::from_secs(5), server_result).await???;
+        Ok(())
+    }
+
+    /// Regression test pinning the send-path chunk-limit guard in
+    /// `process_request`. An oversized request (serialized length above the
+    /// 64 MiB `MAX_TOTAL_CHUNKS * CHUNK_SIZE` cap) must be rejected locally with a
+    /// `TotalChunksTooLarge` error *before* any chunk is streamed.
+    ///
+    /// Acceptance criterion: if the `ensure_chunkable(...)` call is removed from
+    /// `process_request`, the client instead streams the whole payload and the
+    /// delivered error no longer mentions "exceeds maximum", so this test fails.
+    /// (Verified by temporarily removing the guard.)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_send_oversized_rejected_before_streaming(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use crate::client_api::streaming::{CHUNK_SIZE, MAX_TOTAL_CHUNKS};
+        use crate::client_api::ContractRequest;
+        use crate::prelude::{
+            ContractCode, ContractContainer, ContractWasmAPIVersion, Parameters, RelatedContracts,
+            WrappedContract, WrappedState,
+        };
+        use std::sync::Arc;
+
+        let (listener, port) = bind_free_port().await;
+        // The server only completes the WS handshake, then drains anything the
+        // client sends until the client disconnects or a short idle window
+        // elapses, then drops. With the guard present the client sends nothing (it
+        // fails locally); if the guard were removed it would stream ~64 MiB of
+        // chunks, which this drain loop absorbs so the send path can't deadlock.
+        let server = tokio::task::spawn(async move {
+            let (tcp, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .expect("accept timed out")
+                .expect("accept failed");
+            let mut ws = tokio_tungstenite::accept_async(tcp)
+                .await
+                .expect("ws handshake failed");
+            let _ = tokio::time::timeout(Duration::from_secs(3), async {
+                while let Some(Ok(_)) = ws.next().await {}
+            })
+            .await;
+        });
+
+        let (ws_conn, _) =
+            tokio_tungstenite::connect_async(format!("ws://localhost:{port}/")).await?;
+        let mut client = WebApi::start(ws_conn);
+
+        // A Put whose state is one byte over the 64 MiB (256 * 256 KiB) chunk cap;
+        // serialization overhead only makes it larger, so it needs more than
+        // MAX_TOTAL_CHUNKS chunks. This is the single deliberate ~64 MiB alloc.
+        let oversized_state = MAX_TOTAL_CHUNKS as usize * CHUNK_SIZE + 1;
+        let code = Arc::new(ContractCode::from(vec![1, 2, 3]));
+        let contract = ContractContainer::Wasm(ContractWasmAPIVersion::V1(WrappedContract::new(
+            code,
+            Parameters::from(Vec::new()),
+        )));
+        let request = ClientRequest::ContractOp(ContractRequest::Put {
+            contract,
+            state: WrappedState::new(vec![0u8; oversized_state]),
+            related_contracts: RelatedContracts::new(),
+            subscribe: false,
+            blocking_subscribe: false,
+        });
+
+        client.send(request).await?;
+        let err = client
+            .recv()
+            .await
+            .expect_err("oversized request must be rejected, not streamed");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("exceeds maximum"),
+            "expected a TotalChunksTooLarge error from the send-path guard, got: {msg}"
+        );
+
+        drop(client);
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
         Ok(())
     }
 
