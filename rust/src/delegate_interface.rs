@@ -5,6 +5,7 @@ use std::{
     io::Read,
     ops::Deref,
     path::Path,
+    time::Duration,
 };
 
 use blake3::{traits::digest::Digest, Hasher as Blake3};
@@ -567,6 +568,15 @@ pub enum InboundDelegateMsg<'a> {
     // Appended in 0.10.0 at tag 8. New variants go at the END, never inserted —
     // see the wire-format note on this enum.
     UnsubscribeContractResponse(UnsubscribeContractResponse),
+    /// Delivered by the host when a wakeup previously requested via
+    /// [`OutboundDelegateMsg::ScheduleWakeup`] fires. `tag` is the opaque
+    /// value the delegate supplied when scheduling, echoed back verbatim so
+    /// the delegate can identify which wakeup fired. Owned (`'static`).
+    ///
+    /// Appended at tag **9**, after `UnsubscribeContractResponse` at tag 8.
+    WakeupFired {
+        tag: Vec<u8>,
+    },
 }
 
 impl InboundDelegateMsg<'_> {
@@ -593,6 +603,7 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::UnsubscribeContractResponse(r) => {
                 InboundDelegateMsg::UnsubscribeContractResponse(r)
             }
+            InboundDelegateMsg::WakeupFired { tag } => InboundDelegateMsg::WakeupFired { tag },
         }
     }
 
@@ -626,10 +637,42 @@ impl InboundDelegateMsg<'_> {
                 context,
                 ..
             }) => Some(context),
-            // No wildcard, deliberately. Every variant carries a context, and
-            // the `_ => None` that used to sit here is what let UserResponse go
-            // unhandled and silently report "no context". Exhaustive means a
-            // new variant is a compile error here instead.
+            // `WakeupFired` carries no `DelegateContext`, so `None` here is
+            // the honest answer rather than a missing arm. The distinction:
+            // `DelegateContext` is per-conversation working state, secrets are
+            // durable state. Every variant that carries a context is a *reply*
+            // -- the host handing back the context it was threading through a
+            // multi-message exchange the delegate started. A wakeup is not a
+            // reply; it opens a new conversation, and `tag` supplies the
+            // correlation instead.
+            //
+            // The stronger reason is what a context here would commit the host
+            // to: persisting per-delegate context across arbitrary wall-clock
+            // time -- a week, for the River rotation case that motivates this
+            // primitive. That is a storage subsystem, not a field, and it is
+            // #5467 Phase 3. Adding the field now would either promise
+            // persistence that does not exist or ship an always-empty context
+            // that reads as a bug for the life of the wire format.
+            //
+            // The use case confirms the primitive is complete without it:
+            // River's weekly rotation needs to know *which rooms* to rotate,
+            // which is durable state it already holds in its secrets.
+            InboundDelegateMsg::WakeupFired { .. } => None,
+            // No wildcard, deliberately. The `_ => None` that used to sit here
+            // is what let UserResponse go unhandled and silently report "no
+            // context". Exhaustive means a new variant is a compile error here
+            // instead — which is how `WakeupFired` above came to be considered
+            // explicitly rather than defaulting into the wildcard.
+            //
+            // Correcting a premise this crate briefly asserted: "every variant
+            // carries a context" was already false before `WakeupFired`, and
+            // false about *this accessor* rather than about the structs. In
+            // 0.8.5 this match listed seven variants, omitted `UserResponse`
+            // — which does have a context field — and ended in `_ => None`. So
+            // the claim was true of the types and wrong about the code. That
+            // is why the `WakeupFired` exemption in the test asserts
+            // `get_context()` is `None`: it pins what this function does, not
+            // what the struct definitions look like.
         }
     }
 
@@ -663,10 +706,12 @@ impl InboundDelegateMsg<'_> {
                 context,
                 ..
             }) => Some(context),
-            // No wildcard, deliberately. Every variant carries a context, and
-            // the `_ => None` that used to sit here is what let UserResponse go
-            // unhandled and silently report "no context". Exhaustive means a
-            // new variant is a compile error here instead.
+            // `WakeupFired` carries no context; see `get_context`.
+            InboundDelegateMsg::WakeupFired { .. } => None,
+            // No wildcard, deliberately. The `_ => None` that used to sit here
+            // is what let UserResponse go unhandled and silently report "no
+            // context". Exhaustive means a new variant is a compile error here
+            // instead.
         }
     }
 }
@@ -853,11 +898,64 @@ pub enum OutboundDelegateMsg {
     SubscribeContractRequest(SubscribeContractRequest),
     SendDelegateMessage(DelegateMessage),
     // Appended in 0.10.0 at tag 8. New variants go at the END, never inserted —
-    // see the wire-format note on this enum. freenet-stdlib#82 also appends
-    // here (ScheduleWakeup) and must therefore move to tag 9; at the time of
-    // writing that PR still declares tag 8, so whichever lands second will trip
-    // the pin, which is the intended outcome rather than a surprise.
+    // see the wire-format note on this enum. `ScheduleWakeup` below took the
+    // next tag rather than this one, which is the rule working as intended.
     UnsubscribeContractRequest(UnsubscribeContractRequest),
+    /// Ask the host to deliver an [`InboundDelegateMsg::WakeupFired`] to this
+    /// delegate once `after` has elapsed. `tag` is opaque to the host and
+    /// echoed back on fire. Re-scheduling with the same `tag` replaces any
+    /// prior pending wakeup for this `(delegate, tag)` pair (cancel-by-tag).
+    ///
+    /// # `after` is a delay, not a deadline, because a delegate has no clock
+    ///
+    /// The delay is measured by the **host**, from the moment it receives this
+    /// message. There is no other clock in the story: a delegate compiles to
+    /// `wasm32-unknown-unknown`, where `SystemTime::now()` compiles and then
+    /// **panics** at runtime, and freenet-core registers no temporal host
+    /// function in any of the four delegate namespaces. So an absolute
+    /// `SystemTime` deadline would be a field the sender could not fill.
+    ///
+    /// A relative delay is also the more capable of the two. If a clock host
+    /// function is ever added, absolute scheduling is `target - now`, expressed
+    /// in terms of this field; an absolute field would gain nothing it did not
+    /// already need that clock for. And a delegate re-arming inside its
+    /// `WakeupFired` handler just asks for the same delay again, so the
+    /// recurring case needs neither a clock nor a timestamp on the fire.
+    ///
+    /// Because the host resolves the delay against its own clock, wall-clock
+    /// steps (NTP correction, a manual change) are the host scheduler's problem
+    /// rather than a semantic left undefined on the wire. Long delays are still
+    /// approximate: nothing here promises precision, only "not before".
+    ///
+    /// # Durability is a REQUIREMENT ON THE HOST, and is not implemented
+    ///
+    /// For a week-long delay to be useful the host must persist pending wakeups
+    /// across a node restart. **No host does this today**, and nothing in this
+    /// crate can make it true — freenet-core#3972 must implement it. Stated as
+    /// an obligation rather than a guarantee on purpose: the one comparable
+    /// piece of per-delegate host state, `DELEGATE_SUBSCRIPTIONS`, is an
+    /// in-memory `LazyLock<DashMap>` that a restart discards entirely, so the
+    /// precedent runs the wrong way and a reader should not assume otherwise.
+    ///
+    /// Assuming the host does implement it, delivery is **at-most-once**: a
+    /// wakeup is removed from the schedule when it fires, so a crash in the
+    /// window between firing and the delegate finishing `process()` can lose
+    /// that fire. A recurring delegate that re-arms only inside its
+    /// `WakeupFired` handler can therefore have its chain broken; one that needs
+    /// a hard guarantee should also re-assert its next wakeup from its startup
+    /// logic. The host is expected to bound how many wakeups a single delegate
+    /// may hold pending, so keep the set of live tags small.
+    ///
+    /// Appended at tag **9**, after `UnsubscribeContractRequest` at tag 8.
+    ScheduleWakeup {
+        /// How long the host should wait before firing, measured from when it
+        /// receives this message. `Duration` bincodes to the same 12 bytes a
+        /// `SystemTime` would (u64 seconds LE + u32 nanos), so nothing is paid
+        /// for the change — and unlike `SystemTime` it has no value that fails
+        /// to serialize (a pre-epoch `SystemTime` errors on the sender).
+        after: Duration,
+        tag: Vec<u8>,
+    },
 }
 
 impl From<ApplicationMessage> for OutboundDelegateMsg {
@@ -922,6 +1020,8 @@ impl OutboundDelegateMsg {
             OutboundDelegateMsg::SendDelegateMessage(msg) => msg.processed,
             OutboundDelegateMsg::RequestUserInput(_) => true,
             OutboundDelegateMsg::ContextUpdated(_) => true,
+            // Fire-and-forget scheduling request; it carries no reprocessing loop.
+            OutboundDelegateMsg::ScheduleWakeup { .. } => true,
         }
     }
 
@@ -1462,6 +1562,80 @@ mod message_origin_tests {
         let decoded: InboundDelegateMsg<'_> = bincode::deserialize(&encoded).unwrap();
         assert!(matches!(decoded, InboundDelegateMsg::ApplicationMessage(_)));
     }
+
+    /// Wire-format pin for [`InboundDelegateMsg::WakeupFired`]. It is the 10th
+    /// variant (declaration index 9), so its bincode tag must be `9` (4-byte
+    /// LE) — it sits behind `UnsubscribeContractResponse` at tag 8. Once
+    /// shipped this tag is frozen: reordering or inserting a variant ahead of
+    /// it would silently redirect a host's wakeup delivery to the wrong variant
+    /// on a delegate compiled against this stdlib.
+    #[test]
+    fn inbound_wakeup_fired_wire_format_is_stable() {
+        let msg = InboundDelegateMsg::WakeupFired {
+            tag: vec![0xAA, 0xBB],
+        };
+        let encoded = bincode::serialize(&msg).unwrap();
+
+        // tag 9 (u32 LE) + Vec<u8> len (u64 LE = 2) + the two tag bytes.
+        let mut expected = vec![9u8, 0, 0, 0];
+        expected.extend_from_slice(&[2, 0, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[0xAA, 0xBB]);
+        assert_eq!(
+            encoded, expected,
+            "WakeupFired must stay at variant tag 9 with a stable payload layout"
+        );
+
+        let decoded: InboundDelegateMsg<'_> = bincode::deserialize(&encoded).unwrap();
+        assert!(matches!(
+            decoded,
+            InboundDelegateMsg::WakeupFired { tag } if tag == vec![0xAA, 0xBB]
+        ));
+    }
+
+    /// Wire-format pin for [`OutboundDelegateMsg::ScheduleWakeup`]. It is the
+    /// 10th variant (declaration index 9), so its bincode tag must be `9` —
+    /// behind `UnsubscribeContractRequest` at tag 8.
+    ///
+    /// The **whole** byte layout is pinned, not just the tag. `Duration`
+    /// encodes as u64 seconds LE + u32 nanos, and that is a property of serde's
+    /// impl rather than of this crate — so if it ever changed, a round-trip
+    /// test would keep passing while every deployed delegate disagreed with the
+    /// host about how long a week is. A hand-built expectation is the only
+    /// thing that catches that.
+    #[test]
+    fn outbound_schedule_wakeup_wire_format_is_stable() {
+        let after = Duration::new(604_800, 7); // one week, plus 7ns
+        let msg = OutboundDelegateMsg::ScheduleWakeup {
+            after,
+            tag: vec![0x01, 0x02, 0x03],
+        };
+        let encoded = bincode::serialize(&msg).unwrap();
+
+        // tag 9 (u32 LE) | secs (u64 LE) | nanos (u32 LE) | tag len (u64 LE) | tag bytes
+        let mut expected = vec![9u8, 0, 0, 0];
+        expected.extend_from_slice(&604_800u64.to_le_bytes());
+        expected.extend_from_slice(&7u32.to_le_bytes());
+        expected.extend_from_slice(&3u64.to_le_bytes());
+        expected.extend_from_slice(&[0x01, 0x02, 0x03]);
+        assert_eq!(
+            encoded, expected,
+            "ScheduleWakeup must stay at variant tag 9 with a stable payload \
+             layout; reordering OutboundDelegateMsg variants, or a change in how \
+             Duration encodes, is a wire-format break"
+        );
+
+        let decoded: OutboundDelegateMsg = bincode::deserialize(&encoded).unwrap();
+        match decoded {
+            OutboundDelegateMsg::ScheduleWakeup {
+                after: decoded_after,
+                tag,
+            } => {
+                assert_eq!(decoded_after, after);
+                assert_eq!(tag, vec![0x01, 0x02, 0x03]);
+            }
+            other => panic!("expected ScheduleWakeup, got {other:?}"),
+        }
+    }
 }
 
 /// Executable evidence for the wire-compatibility rules documented on
@@ -1482,8 +1656,8 @@ mod delegate_wire_compat {
     /// The number of variants each enum has **today**. These are not free
     /// parameters: see `an_unpinned_variant_fails_this_test`, which is what
     /// makes them fail closed rather than drift.
-    const INBOUND_VARIANT_COUNT: u32 = 9;
-    const OUTBOUND_VARIANT_COUNT: u32 = 9;
+    const INBOUND_VARIANT_COUNT: u32 = 10;
+    const OUTBOUND_VARIANT_COUNT: u32 = 10;
 
     fn instance_id() -> ContractInstanceId {
         ContractInstanceId::new([0x5Au8; 32])
@@ -1531,6 +1705,7 @@ mod delegate_wire_compat {
             InboundDelegateMsg::ContractNotification(_) => 6,
             InboundDelegateMsg::DelegateMessage(_) => 7,
             InboundDelegateMsg::UnsubscribeContractResponse(_) => 8,
+            InboundDelegateMsg::WakeupFired { .. } => 9,
         }
     }
 
@@ -1547,6 +1722,7 @@ mod delegate_wire_compat {
             OutboundDelegateMsg::SubscribeContractRequest(_) => 6,
             OutboundDelegateMsg::SendDelegateMessage(_) => 7,
             OutboundDelegateMsg::UnsubscribeContractRequest(_) => 8,
+            OutboundDelegateMsg::ScheduleWakeup { .. } => 9,
         }
     }
 
@@ -1596,6 +1772,9 @@ mod delegate_wire_compat {
                 result: Ok(()),
                 context: ctx.clone(),
             }),
+            InboundDelegateMsg::WakeupFired {
+                tag: vec![0xAA, 0xBB],
+            },
         ]
     }
 
@@ -1632,6 +1811,10 @@ mod delegate_wire_compat {
                 vec![0xEE],
             )),
             OutboundDelegateMsg::UnsubscribeContractRequest(UnsubscribeContractRequest::new(id)),
+            OutboundDelegateMsg::ScheduleWakeup {
+                after: Duration::from_secs(604_800),
+                tag: vec![0x01, 0x02, 0x03],
+            },
         ]
     }
 
@@ -1978,14 +2161,28 @@ mod delegate_wire_compat {
     #[test]
     fn every_inbound_variant_with_a_context_exposes_it() {
         for mut msg in every_inbound() {
-            let carries_context = !matches!(msg, InboundDelegateMsg::ApplicationMessage(_));
             let tag = pinned_inbound_tag(&msg);
 
-            // ApplicationMessage has a context field too, so in fact every
-            // variant present today should expose one. Asserted uniformly
-            // rather than by an allow-list, so the question a new variant
-            // raises is "does it have a context", not "is it in the list".
-            let _ = carries_context;
+            // `WakeupFired` is the one inbound variant with no context field,
+            // and it is named here rather than skipped by a wildcard, matching
+            // the outbound test below. See `get_context` for why it has none:
+            // a context is per-conversation working state handed back on a
+            // reply, and a wakeup opens a conversation rather than continuing
+            // one. Carrying one would commit the host to persisting delegate
+            // context across arbitrary wall-clock time, which is #5467 Phase 3.
+            //
+            // This asserts the accessor returns `None`, not that the struct
+            // lacks a field. That distinction is the point: the claim "every
+            // variant carries a context" was already false of this accessor in
+            // 0.8.5, where it omitted `UserResponse` behind a `_ => None`
+            // wildcard. Pin the behaviour, not the shape.
+            if matches!(msg, InboundDelegateMsg::WakeupFired { .. }) {
+                assert!(
+                    msg.get_context().is_none() && msg.get_mut_context().is_none(),
+                    "WakeupFired is documented as carrying no context; if it grew one,                      remove this exemption rather than widening it"
+                );
+                continue;
+            }
 
             assert!(
                 msg.get_context().is_some(),
@@ -2002,16 +2199,22 @@ mod delegate_wire_compat {
 
     /// The same, for the outbound side.
     ///
-    /// `RequestUserInput` and `ContextUpdated` genuinely have no context field
-    /// to return, so they are the two exceptions and are named explicitly
-    /// rather than skipped by a wildcard.
+    /// `RequestUserInput`, `ContextUpdated` and `ScheduleWakeup` genuinely have
+    /// no context field to return, so they are the three exceptions and are
+    /// named explicitly rather than skipped by a wildcard.
+    ///
+    /// `ScheduleWakeup` is fire-and-forget — its `processed()` is `true` and it
+    /// produces no response in the same batch — so there is no round trip for a
+    /// context to survive.
     #[test]
     fn every_outbound_variant_with_a_context_exposes_it() {
         for mut msg in every_outbound() {
             let tag = pinned_outbound_tag(&msg);
             let has_no_context = matches!(
                 msg,
-                OutboundDelegateMsg::RequestUserInput(_) | OutboundDelegateMsg::ContextUpdated(_)
+                OutboundDelegateMsg::RequestUserInput(_)
+                    | OutboundDelegateMsg::ContextUpdated(_)
+                    | OutboundDelegateMsg::ScheduleWakeup { .. }
             );
             if has_no_context {
                 continue;

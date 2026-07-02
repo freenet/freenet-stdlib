@@ -1643,12 +1643,18 @@ impl HostResponse {
                             "SendDelegateMessage reached client serialization - this is a bug"
                         );
                     }
+                    OutboundDelegateMsg::ScheduleWakeup { .. } => {
+                        tracing::error!(
+                            "ScheduleWakeup reached client serialization - this is a bug"
+                        );
+                    }
                     // Deliberately exhaustive, no wildcard. `#[non_exhaustive]`
                     // does not apply inside the defining crate, so a new
                     // outbound variant is a compile error here until someone
                     // decides whether it has a FlatBuffers union member or is
                     // executor-only like the contract requests above. Adding
-                    // the unsubscribe pair is what proved this fires.
+                    // the unsubscribe pair is what proved this fires, and
+                    // ScheduleWakeup is the second variant it caught.
                 });
                 let messages_offset = builder.create_vector(&messages);
                 let delegate_response_offset = FbsDelegateResponse::create(

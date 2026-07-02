@@ -204,6 +204,79 @@ half is freenet-core#5565.
   only reason a field could be appended to it without corrupting anything after
   it. That property is now pinned rather than assumed.
 
+### Added — scheduled-wakeup primitive for delegates
+
+Lets an always-on delegate run periodic background work (key rotation, TTL
+pruning, scheduled publication) without a connected UI, instead of pushing that
+work into a client sync loop that stops when the tab closes.
+Driving use case: freenet/river#228. Host half: freenet/freenet-core#3972.
+
+- `OutboundDelegateMsg::ScheduleWakeup { after: Duration, tag: Vec<u8> }` — the
+  delegate asks the host to deliver a wakeup once `after` has elapsed, measured
+  by the **host** from when it receives the message. `tag` is opaque to the host
+  and echoed back on fire. Re-scheduling with the same `tag` replaces the prior
+  pending wakeup for that `(delegate, tag)` pair.
+- `InboundDelegateMsg::WakeupFired { tag: Vec<u8> }` — delivered when a
+  scheduled wakeup fires.
+
+##### Why a delay and not a deadline
+
+An earlier draft used `at: SystemTime`. **A delegate cannot fill that field.**
+Delegates compile to `wasm32-unknown-unknown`, where `SystemTime::now()` compiles
+and then panics at runtime, and freenet-core registers no temporal host function
+in any of the four delegate namespaces — so there is no value the delegate could
+compute for an absolute deadline, including the "one week from now" that motivates
+this primitive.
+
+A delay is also strictly more capable. If a clock host function is ever added,
+absolute scheduling becomes `target - now`, expressed with this same field;
+an absolute field would gain nothing it did not already need that clock for. And
+a delegate re-arming inside its `WakeupFired` handler simply asks for the same
+delay again, so the recurring case needs neither a clock nor a timestamp on the
+fire.
+
+It removes two failure modes rather than merely an ambiguity: a pre-epoch
+`SystemTime` fails to serialize on the *sender*, and wall-clock steps (NTP, a
+manual change) are now the host scheduler's business rather than a semantic left
+undefined on the wire. `Duration` encodes identically to `SystemTime` — u64
+seconds LE + u32 nanos — so the wire size is unchanged, and the pin test asserts
+the whole byte layout rather than round-tripping through this crate's own encoder.
+
+##### Durability is a requirement on the host, and is unimplemented
+
+A week-long delay is only useful if pending wakeups survive a node restart.
+**No host does this today.** freenet-core#3972 must implement it; nothing in this
+crate can make it true. Said as an obligation rather than a guarantee because the
+precedent runs the other way — `DELEGATE_SUBSCRIPTIONS`, the one comparable piece
+of per-delegate host state, is an in-memory `LazyLock<DashMap>` that a restart
+discards entirely.
+
+#### Compatibility
+
+Both variants are **appended at tag 9**, behind the unsubscribe pair at tag 8,
+so no existing variant's bincode tag moves and
+every message a deployed delegate already understood still decodes. The two
+directions are not symmetric, and the asymmetry is the part that matters:
+
+- **Old delegate -> new host** (outbound): safe. An older delegate never emits
+  `ScheduleWakeup`, and every tag it does emit is unchanged.
+- **New host -> old delegate** (inbound): `WakeupFired` at a tag an older
+  delegate does not know is a **hard bincode decode error**, not a skipped
+  message. It is safe here only because the host sends `WakeupFired` solely to a
+  delegate that asked for it by emitting `ScheduleWakeup` — a delegate built
+  against an older stdlib cannot have asked, so it can never be sent one. That
+  opt-in-by-construction property is a **requirement on the host
+  implementation**, not a property of the wire format, and freenet-core#3972
+  must preserve it.
+- Adding `ScheduleWakeup` is a **source-level break for exhaustive `match`
+  sites on `OutboundDelegateMsg`**, which is intentionally *not*
+  `#[non_exhaustive]` so the host is forced to handle every outbound variant.
+  `InboundDelegateMsg` stays `#[non_exhaustive]`.
+
+New wire-format pin tests (`inbound_wakeup_fired_wire_format_is_stable`,
+`outbound_schedule_wakeup_wire_format_is_stable`) freeze both tags.
+
+
 ### TypeScript SDK 0.4.0 — Breaking (npm package `@freenetorg/freenet-stdlib`)
 
 The npm package is versioned separately from the Rust crate. This release
