@@ -1579,6 +1579,11 @@ impl HostResponse {
                             "SendDelegateMessage reached client serialization - this is a bug"
                         );
                     }
+                    OutboundDelegateMsg::ScheduleWakeup { .. } => {
+                        tracing::error!(
+                            "ScheduleWakeup reached client serialization - this is a bug"
+                        );
+                    }
                 });
                 let messages_offset = builder.create_vector(&messages);
                 let delegate_response_offset = FbsDelegateResponse::create(

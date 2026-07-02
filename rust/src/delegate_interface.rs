@@ -5,6 +5,7 @@ use std::{
     io::Read,
     ops::Deref,
     path::Path,
+    time::SystemTime,
 };
 
 use blake3::{traits::digest::Digest, Hasher as Blake3};
@@ -498,8 +499,11 @@ impl AsRef<[u8]> for DelegateContext {
 /// This is the inbound counterpart of [`OutboundDelegateMsg`] and sits on the
 /// host↔delegate wire boundary. Marked `#[non_exhaustive]` so future variants
 /// can be added without a source-level break; downstream `match` sites must
-/// include a wildcard arm. This matches the pre-existing `#[non_exhaustive]`
-/// on `OutboundDelegateMsg`.
+/// include a wildcard arm. Inbound variants the host does not recognize are
+/// forwarded through to the delegate WASM unchanged, so a wildcard is safe here.
+/// (`OutboundDelegateMsg` is deliberately *not* `#[non_exhaustive]`: the host
+/// must consciously handle every outbound variant, so the compiler should force
+/// an arm for each new one.)
 ///
 /// Wire format: bincode with variant index 0..=N in declaration order. The
 /// `inbound_delegate_msg_wire_format_is_stable` test pins the bytes for
@@ -515,6 +519,13 @@ pub enum InboundDelegateMsg<'a> {
     SubscribeContractResponse(SubscribeContractResponse),
     ContractNotification(ContractNotification),
     DelegateMessage(DelegateMessage),
+    /// Delivered by the host when a wakeup previously requested via
+    /// [`OutboundDelegateMsg::ScheduleWakeup`] fires. `tag` is the opaque
+    /// value the delegate supplied when scheduling, echoed back verbatim so
+    /// the delegate can identify which wakeup fired. Owned (`'static`).
+    WakeupFired {
+        tag: Vec<u8>,
+    },
 }
 
 impl InboundDelegateMsg<'_> {
@@ -538,6 +549,7 @@ impl InboundDelegateMsg<'_> {
                 InboundDelegateMsg::ContractNotification(r)
             }
             InboundDelegateMsg::DelegateMessage(r) => InboundDelegateMsg::DelegateMessage(r),
+            InboundDelegateMsg::WakeupFired { tag } => InboundDelegateMsg::WakeupFired { tag },
         }
     }
 
@@ -689,6 +701,25 @@ pub enum OutboundDelegateMsg {
     UpdateContractRequest(UpdateContractRequest),
     SubscribeContractRequest(SubscribeContractRequest),
     SendDelegateMessage(DelegateMessage),
+    /// Ask the host to deliver an [`InboundDelegateMsg::WakeupFired`] to this
+    /// delegate at (or after) the absolute time `at`. `tag` is opaque to the
+    /// host and echoed back on fire. Re-scheduling with the same `tag` replaces
+    /// any prior pending wakeup for this `(delegate, tag)` pair (cancel-by-tag).
+    /// The host persists the schedule so it survives node restart, and drops it
+    /// silently if the delegate is no longer registered when it would fire.
+    ///
+    /// Delivery is **at-most-once**: a wakeup is removed from the durable
+    /// schedule when it fires, so a node crash in the narrow window between
+    /// firing and the delegate finishing `process()` can lose that fire. A
+    /// recurring delegate that re-arms only inside its `WakeupFired` handler can
+    /// therefore have its chain broken by such a crash; a delegate that needs a
+    /// hard guarantee should also re-assert its next wakeup from its startup
+    /// logic. The host additionally bounds how many wakeups a single delegate
+    /// may hold pending, so keep the set of live tags small.
+    ScheduleWakeup {
+        at: SystemTime,
+        tag: Vec<u8>,
+    },
 }
 
 impl From<ApplicationMessage> for OutboundDelegateMsg {
@@ -746,6 +777,8 @@ impl OutboundDelegateMsg {
             OutboundDelegateMsg::SendDelegateMessage(msg) => msg.processed,
             OutboundDelegateMsg::RequestUserInput(_) => true,
             OutboundDelegateMsg::ContextUpdated(_) => true,
+            // Fire-and-forget scheduling request; it carries no reprocessing loop.
+            OutboundDelegateMsg::ScheduleWakeup { .. } => true,
         }
     }
 
@@ -1224,5 +1257,66 @@ mod message_origin_tests {
         // And it must still round-trip into the same variant.
         let decoded: InboundDelegateMsg<'_> = bincode::deserialize(&encoded).unwrap();
         assert!(matches!(decoded, InboundDelegateMsg::ApplicationMessage(_)));
+    }
+
+    /// Wire-format pin for [`InboundDelegateMsg::WakeupFired`]. It is the 9th
+    /// variant (declaration index 8), so its bincode tag must be `8` (4-byte
+    /// LE). Once shipped this tag is frozen: reordering or inserting a variant
+    /// ahead of it would silently redirect a host's wakeup delivery to the
+    /// wrong variant on a delegate compiled against this stdlib.
+    #[test]
+    fn inbound_wakeup_fired_wire_format_is_stable() {
+        let msg = InboundDelegateMsg::WakeupFired {
+            tag: vec![0xAA, 0xBB],
+        };
+        let encoded = bincode::serialize(&msg).unwrap();
+
+        // tag 8 (u32 LE) + Vec<u8> len (u64 LE = 2) + the two tag bytes.
+        let mut expected = vec![8u8, 0, 0, 0];
+        expected.extend_from_slice(&[2, 0, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[0xAA, 0xBB]);
+        assert_eq!(
+            encoded, expected,
+            "WakeupFired must stay at variant tag 8 with a stable payload layout"
+        );
+
+        let decoded: InboundDelegateMsg<'_> = bincode::deserialize(&encoded).unwrap();
+        assert!(matches!(
+            decoded,
+            InboundDelegateMsg::WakeupFired { tag } if tag == vec![0xAA, 0xBB]
+        ));
+    }
+
+    /// Wire-format pin for [`OutboundDelegateMsg::ScheduleWakeup`]. It is the
+    /// 9th variant (declaration index 8), so its bincode tag must be `8`.
+    /// Pins the tag and round-trip (the full `SystemTime` byte layout is left
+    /// to serde's stable impl and asserted via round-trip rather than a brittle
+    /// hardcoded prefix).
+    #[test]
+    fn outbound_schedule_wakeup_wire_format_is_stable() {
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+        let msg = OutboundDelegateMsg::ScheduleWakeup {
+            at,
+            tag: vec![0x01, 0x02, 0x03],
+        };
+        let encoded = bincode::serialize(&msg).unwrap();
+        assert_eq!(
+            encoded[..4],
+            [8, 0, 0, 0],
+            "ScheduleWakeup must stay at variant tag 8 on the wire; \
+             reordering OutboundDelegateMsg variants is a wire-format break"
+        );
+
+        let decoded: OutboundDelegateMsg = bincode::deserialize(&encoded).unwrap();
+        match decoded {
+            OutboundDelegateMsg::ScheduleWakeup {
+                at: decoded_at,
+                tag,
+            } => {
+                assert_eq!(decoded_at, at);
+                assert_eq!(tag, vec![0x01, 0x02, 0x03]);
+            }
+            other => panic!("expected ScheduleWakeup, got {other:?}"),
+        }
     }
 }

@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.8.3]
+
+### Added
+- Scheduled-wakeup primitive for delegates (freenet/freenet-core#3972):
+  - `OutboundDelegateMsg::ScheduleWakeup { at: SystemTime, tag: Vec<u8> }` —
+    a delegate asks the host to deliver a wakeup at an absolute time. Opaque
+    `tag` is echoed back on fire. Re-scheduling with the same `tag` replaces
+    the prior pending wakeup for that `(delegate, tag)` pair (cancel-by-tag).
+  - `InboundDelegateMsg::WakeupFired { tag: Vec<u8> }` — delivered by the host
+    when a scheduled wakeup fires.
+  - Lets always-on delegates run periodic background work (key rotation, TTL
+    pruning, scheduled publication) without a connected UI, instead of pushing
+    that work into a client sync loop.
+
+### Compatibility
+- **Wire-compatible, source-additive.** Both variants are appended at the end
+  of their enums (bincode variant tag 8), so no existing variant's tag shifts —
+  delegate WASM compiled against an older stdlib keeps deserializing every
+  message it already understood. New wire-format pin tests
+  (`inbound_wakeup_fired_wire_format_is_stable`,
+  `outbound_schedule_wakeup_wire_format_is_stable`) freeze the tags.
+- Adding `ScheduleWakeup` is a **source-level break for exhaustive `match`
+  sites on `OutboundDelegateMsg`** (which is intentionally *not*
+  `#[non_exhaustive]`, so the host is forced to handle every outbound variant).
+  `InboundDelegateMsg` remains `#[non_exhaustive]`; unknown inbound variants are
+  forwarded to the delegate WASM unchanged.
+
 ## [0.8.0]
 
 ### Fixed
