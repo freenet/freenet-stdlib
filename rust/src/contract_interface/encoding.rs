@@ -84,10 +84,8 @@ impl RelatedContractsContainer {
     ) -> Result<Related<C>, <<C as EncodingAdapter>::SelfEncoder as Encoder<C>>::Error> {
         let id = <C as TypedContract>::instance_id(params);
         if let Some(res) = self.contracts.get(&id) {
-            match <<C as EncodingAdapter>::SelfEncoder>::deserialize(res.as_ref()) {
-                Ok(state) => return Ok(Related::Found { state }),
-                Err(err) => return Err(err),
-            }
+            let state = <<C as EncodingAdapter>::SelfEncoder>::deserialize(res.as_ref())?;
+            return Ok(Related::Found { state });
         }
         if self.pending.contains(&id) {
             return Ok(Related::RequestPending);
