@@ -31,13 +31,19 @@ impl WebApi {
     where
         ErrFn: FnMut(Error) + Clone + 'static,
     {
+        // Deliver binary frames as ArrayBuffer so `onmessage` can decode them
+        // synchronously, with no per-message FileReader (see comment there).
+        // Set before the handlers are installed so no dispatched frame can
+        // observe the default Blob type.
+        conn.set_binary_type(web_sys::BinaryType::Arraybuffer);
+
         let eh = Rc::new(RefCell::new(error_handler.clone()));
         let result_handler = Rc::new(RefCell::new(result_handler));
         let reassembly = Rc::new(RefCell::new(super::streaming::ReassemblyBuffer::new()));
 
         let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
-            // Binary frames arrive as ArrayBuffer (`binaryType` is set below and
-            // must stay in sync with this decode path). Do NOT route through
+            // Binary frames arrive as ArrayBuffer (`binaryType` is set in
+            // `start()` and must stay in sync with this decode path). Do NOT route through
             // Blob + FileReader here: a per-message FileReader whose `onloadend`
             // closure is `forget()`-leaked pins `FileReader.result`, retaining
             // every inbound payload for the life of the tab
@@ -80,10 +86,13 @@ impl WebApi {
                     total,
                     data,
                 }) => {
-                    match reassembly
+                    // Bind the outcome before matching: a `borrow_mut()` in the
+                    // match scrutinee lives until the end of the match, so
+                    // re-borrowing `reassembly` inside an arm would panic.
+                    let outcome = reassembly
                         .borrow_mut()
-                        .receive_chunk(stream_id, index, total, data)
-                    {
+                        .receive_chunk(stream_id, index, total, data);
+                    match outcome {
                         Ok(Some(complete)) => {
                             let inner: HostResult = match bincode::deserialize(&complete) {
                                 Ok(val) => val,
@@ -149,9 +158,6 @@ impl WebApi {
         conn.set_onclose(Some(onclose_callback.as_ref().unchecked_ref()));
         onclose_callback.forget();
 
-        // Deliver binary frames as ArrayBuffer so `onmessage` can decode them
-        // synchronously, with no per-message FileReader (see comment there).
-        conn.set_binary_type(web_sys::BinaryType::Arraybuffer);
         WebApi {
             conn,
             error_handler: Box::new(error_handler),
