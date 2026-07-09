@@ -36,93 +36,81 @@ impl WebApi {
         let reassembly = Rc::new(RefCell::new(super::streaming::ReassemblyBuffer::new()));
 
         let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
-            // Extract the Blob from the MessageEvent
+            // Binary frames arrive as ArrayBuffer (`binaryType` is set below and
+            // must stay in sync with this decode path). Do NOT route through
+            // Blob + FileReader here: a per-message FileReader whose `onloadend`
+            // closure is `forget()`-leaked pins `FileReader.result`, retaining
+            // every inbound payload for the life of the tab
+            // (https://github.com/freenet/freenet-core/issues/4746).
             let value: JsValue = e.data();
-            let blob: web_sys::Blob = value.into();
+            let array_buffer = match value.dyn_into::<js_sys::ArrayBuffer>() {
+                Ok(ab) => ab,
+                Err(other) => {
+                    eh.borrow_mut()(Error::ConnectionError(serde_json::json!({
+                        "error": format!("unexpected non-binary websocket message: {other:?}"),
+                        "source": "host response decoding"
+                    })));
+                    return;
+                }
+            };
+            let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
 
-            // Create a FileReader to read the Blob
-            let file_reader = web_sys::FileReader::new().unwrap();
+            use super::client_events::HostResponse;
 
-            // Clone FileReader and function references for use in the onloadend_callback
-            let fr_clone = file_reader.clone();
-            let eh_clone = eh.clone();
-            let result_handler_clone = result_handler.clone();
-            let reassembly_clone = reassembly.clone();
+            let response: HostResult = match bincode::deserialize(&bytes) {
+                Ok(val) => val,
+                Err(err) => {
+                    eh.borrow_mut()(Error::ConnectionError(serde_json::json!({
+                        "error": format!("{err}"),
+                        "source": "host response deserialization"
+                    })));
+                    return;
+                }
+            };
 
-            let onloadend_callback = Closure::<dyn FnMut()>::new(move || {
-                let array_buffer = fr_clone
-                    .result()
-                    .unwrap()
-                    .dyn_into::<js_sys::ArrayBuffer>()
-                    .unwrap();
-                let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
-
-                use super::client_events::HostResponse;
-
-                let response: HostResult = match bincode::deserialize(&bytes) {
-                    Ok(val) => val,
-                    Err(err) => {
-                        eh_clone.borrow_mut()(Error::ConnectionError(serde_json::json!({
-                            "error": format!("{err}"),
-                            "source": "host response deserialization"
-                        })));
-                        return;
-                    }
-                };
-
-                match response {
-                    Ok(HostResponse::StreamHeader { .. }) => {
-                        // StreamHeader is metadata only — the following StreamChunks
-                        // will be reassembled transparently by the ReassemblyBuffer.
-                        // Browser incremental streaming is not yet supported.
-                        return;
-                    }
-                    Ok(HostResponse::StreamChunk {
-                        stream_id,
-                        index,
-                        total,
-                        data,
-                    }) => {
-                        match reassembly_clone
-                            .borrow_mut()
-                            .receive_chunk(stream_id, index, total, data)
-                        {
-                            Ok(Some(complete)) => {
-                                let inner: HostResult = match bincode::deserialize(&complete) {
-                                    Ok(val) => val,
-                                    Err(err) => {
-                                        eh_clone.borrow_mut()(Error::ConnectionError(
-                                            serde_json::json!({
-                                                "error": format!("{err}"),
-                                                "source": "stream reassembly deserialization"
-                                            }),
-                                        ));
-                                        return;
-                                    }
-                                };
-                                result_handler_clone.borrow_mut()(inner);
-                            }
-                            Ok(None) => return, // more chunks needed
-                            Err(e) => {
-                                reassembly_clone.borrow_mut().remove_stream(stream_id);
-                                eh_clone.borrow_mut()(Error::ConnectionError(serde_json::json!({
-                                    "error": format!("{e}"),
-                                    "source": "streaming reassembly"
-                                })));
-                                return;
-                            }
+            match response {
+                Ok(HostResponse::StreamHeader { .. }) => {
+                    // StreamHeader is metadata only — the following StreamChunks
+                    // will be reassembled transparently by the ReassemblyBuffer.
+                    // Browser incremental streaming is not yet supported.
+                }
+                Ok(HostResponse::StreamChunk {
+                    stream_id,
+                    index,
+                    total,
+                    data,
+                }) => {
+                    match reassembly
+                        .borrow_mut()
+                        .receive_chunk(stream_id, index, total, data)
+                    {
+                        Ok(Some(complete)) => {
+                            let inner: HostResult = match bincode::deserialize(&complete) {
+                                Ok(val) => val,
+                                Err(err) => {
+                                    eh.borrow_mut()(Error::ConnectionError(serde_json::json!({
+                                        "error": format!("{err}"),
+                                        "source": "stream reassembly deserialization"
+                                    })));
+                                    return;
+                                }
+                            };
+                            result_handler.borrow_mut()(inner);
+                        }
+                        Ok(None) => (), // more chunks needed
+                        Err(e) => {
+                            reassembly.borrow_mut().remove_stream(stream_id);
+                            eh.borrow_mut()(Error::ConnectionError(serde_json::json!({
+                                "error": format!("{e}"),
+                                "source": "streaming reassembly"
+                            })));
                         }
                     }
-                    other => {
-                        result_handler_clone.borrow_mut()(other);
-                    }
                 }
-            });
-
-            // Set the FileReader handlers
-            file_reader.set_onloadend(Some(onloadend_callback.as_ref().unchecked_ref()));
-            file_reader.read_as_array_buffer(&blob).unwrap();
-            onloadend_callback.forget();
+                other => {
+                    result_handler.borrow_mut()(other);
+                }
+            }
         });
         conn.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
         onmessage_callback.forget();
@@ -161,7 +149,9 @@ impl WebApi {
         conn.set_onclose(Some(onclose_callback.as_ref().unchecked_ref()));
         onclose_callback.forget();
 
-        conn.set_binary_type(web_sys::BinaryType::Blob);
+        // Deliver binary frames as ArrayBuffer so `onmessage` can decode them
+        // synchronously, with no per-message FileReader (see comment there).
+        conn.set_binary_type(web_sys::BinaryType::Arraybuffer);
         WebApi {
             conn,
             error_handler: Box::new(error_handler),
