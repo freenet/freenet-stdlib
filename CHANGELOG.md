@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.8.3] - 2026-07-10
+
+### Fixed
+- **WASM `WebApi` leaked every inbound WebSocket message for the life of
+  the tab.** `WebApi::start`'s `onmessage` handler decoded each incoming
+  Blob with a per-message `FileReader` whose `onloadend` closure was
+  `forget()`-leaked; the leaked closure pinned the `FileReader`, and
+  `FileReader.result` pinned the full decoded payload, so every inbound
+  message's bytes were retained forever. Long-lived consumers (River)
+  grew to multi-GB tab memory in both Chrome and Firefox. The socket now
+  sets `binaryType = "arraybuffer"` and decodes `e.data()` synchronously
+  in `onmessage`, removing the Blob → `FileReader` async hop entirely, so
+  there is no per-message closure to leak and no `FileReader` to pin
+  payloads. Same wire format, same `HostResult` dispatch, same streaming
+  reassembly path — only the frame-decode transport changed. A non-binary
+  frame now reports a connection error through the normal error handler
+  instead of crashing on an unchecked cast. See
+  freenet/freenet-core#4746.
+- **`BorrowMutError` → WASM abort on any malformed or duplicate stream
+  chunk.** The `receive_chunk` `borrow_mut()` in the reassembly `match`
+  scrutinee lived until the end of the `match`, so the error arm's
+  `remove_stream` re-borrow panicked (`BorrowMutError`, aborting the WASM
+  instance) on any malformed or duplicate stream chunk. The borrow is now
+  hoisted out of the scrutinee. `binaryType` is also set before the
+  handlers are installed so the ordering is self-evidently safe rather
+  than relying on `start()` being synchronous. Pre-existing on `main`,
+  surfaced by PR review.
+
 ## [0.8.0]
 
 ### Fixed
