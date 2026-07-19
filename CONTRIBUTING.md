@@ -15,6 +15,7 @@ We welcome contributions to Freenet! Here's what you need to know.
 - Bug fixes should include a regression test that fails without the fix.
 - Run `cargo fmt`, `cargo clippy --all-targets`, and `cargo test` before pushing.
 - Keep PRs focused — one logical change per PR.
+- The flatbuffers bindings in `rust/src/generated/` are checked in and are the source of truth. A normal build does **not** regenerate them. If you edit a schema under `schemas/flatbuffers/`, regenerate with `REGEN_FLATBUFFERS=1 cargo build` and commit the `.fbs` and its regenerated `_generated.rs` together.
 
 ## AI-Assisted Contributions
 
