@@ -233,9 +233,20 @@ impl<'a> TryFromFbs<&FbsContractKey<'a>> for ContractKey {
     fn try_decode_fbs(key: &FbsContractKey<'a>) -> Result<Self, WsApiError> {
         let key_bytes: [u8; CONTRACT_KEY_SIZE] = key.instance().data().bytes().try_into().unwrap();
         let instance = ContractInstanceId::new(key_bytes);
+        // The `code` field carries the already-computed 32-byte code hash
+        // (BLAKE3 of the wasm), so pass those bytes straight through. Calling
+        // `CodeHash::from_code` here would hash the hash again —
+        // BLAKE3(BLAKE3(wasm)) — yielding a key that never matches the store and
+        // breaking every FlatBuffers UpdateRequest ("Contract not in store and
+        // no code provided"). GET/SUBSCRIBE dodged this because they decode only
+        // the instance id; UPDATE decodes the full key. The delegate decoder
+        // already does the pass-through correctly (see
+        // `DelegateKey::try_decode_fbs`). Regression test below.
         let code = key
             .code()
-            .map(|code_hash| CodeHash::from_code(code_hash.bytes()))
+            .map(|code_hash| CodeHash::try_from(code_hash.bytes()))
+            .transpose()
+            .map_err(|e| WsApiError::deserialization(e.to_string()))?
             .ok_or_else(|| WsApiError::deserialization("ContractKey missing code hash".into()))?;
         Ok(ContractKey { instance, code })
     }
@@ -267,4 +278,54 @@ pub(super) fn internal_fmt_key(
         .with_alphabet(bs58::Alphabet::BITCOIN)
         .into_string();
     write!(f, "{}", &r[..8])
+}
+
+#[cfg(test)]
+mod fbs_tests {
+    use super::*;
+    use crate::common_generated::common::{
+        ContractInstanceId as FbsContractInstanceId, ContractInstanceIdArgs, ContractKeyArgs,
+    };
+
+    /// The wire `code` field carries the raw 32-byte code hash, and the decoder
+    /// must return those exact bytes. Regression for the double-hash bug where
+    /// `try_decode_fbs` re-hashed the hash (BLAKE3(BLAKE3(wasm))), producing a
+    /// key that never matched the store and failing every FlatBuffers
+    /// UpdateRequest with "Contract not in store and no code provided".
+    #[test]
+    fn contract_key_code_hash_passes_through_fbs_decode() {
+        let instance_bytes = [7u8; CONTRACT_KEY_SIZE];
+        // A distinct, arbitrary code hash. The decoder must reproduce it
+        // verbatim; if it re-hashes, the assertion below fails.
+        let code_bytes = [42u8; CONTRACT_KEY_SIZE];
+
+        let mut builder = flatbuffers::FlatBufferBuilder::new();
+        let instance_data = builder.create_vector(&instance_bytes);
+        let instance_offset = FbsContractInstanceId::create(
+            &mut builder,
+            &ContractInstanceIdArgs {
+                data: Some(instance_data),
+            },
+        );
+        let code = Some(builder.create_vector(&code_bytes));
+        let key_offset = FbsContractKey::create(
+            &mut builder,
+            &ContractKeyArgs {
+                instance: Some(instance_offset),
+                code,
+            },
+        );
+        builder.finish_minimal(key_offset);
+
+        let fbs_key = flatbuffers::root::<FbsContractKey>(builder.finished_data())
+            .expect("valid ContractKey flatbuffer");
+        let decoded = ContractKey::try_decode_fbs(&fbs_key).expect("decode ContractKey");
+
+        assert_eq!(
+            decoded.code_hash().as_ref(),
+            &code_bytes,
+            "decoder must pass the code hash through unchanged, not re-hash it"
+        );
+        assert_eq!(decoded.id().as_bytes(), &instance_bytes);
+    }
 }
