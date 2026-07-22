@@ -18,10 +18,21 @@
   The variant is **appended last** (bincode tag `3`, one past
   `UnregisterDelegate`), so the encodings of `ApplicationMessages`,
   `RegisterDelegate`, and `UnregisterDelegate` are byte-for-byte unchanged and
-  older clients keep working. New wire-format pin tests lock all four variant
-  tags to guard against a future reorder. The flatbuffers
-  (`EncodingProtocol::Flatbuffers`) client path is intentionally not extended;
-  the Rust consumers of this feature use the bincode `Native` path.
+  older clients keep working. New wire-format pin tests freeze the complete
+  bincode byte vector of all four variants (the three pre-existing ones
+  anchored to the shipped `0.8.3` format) to guard against a future reorder or
+  nested-encoding change. The flatbuffers (`EncodingProtocol::Flatbuffers`)
+  client path is intentionally not extended; the Rust consumers of this feature
+  use the bincode `Native` path.
+
+### Fixed
+- **`DelegateRequest::try_decode_fbs` no longer panics on an unknown union
+  discriminant.** The generated flatbuffers verifier accepts any
+  `DelegateRequestType` discriminant it doesn't recognize (`_ => Ok(())`), and
+  the union type field is a raw `u8` a client can set to any value, so a
+  crafted request reached an `unreachable!()` and took down the connection
+  handler. It now returns a clean per-request `DeserializationError` naming the
+  unknown discriminant.
 
 ## [0.8.3] - 2026-07-10
 
