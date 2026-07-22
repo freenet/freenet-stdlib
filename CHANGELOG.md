@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.8.4] - 2026-07-21
+
+### Added
+- **`DelegateRequest::RegisterDelegateWithPredecessors`** — a new client
+  request variant for registering a delegate while requesting a one-shot,
+  node-side copy-forward of the LOCAL-scope secrets belonging to one or more
+  retired delegate generations (`predecessors: Vec<DelegateKey>`) into the new
+  delegate's namespace. This is the wire primitive for consent-gated,
+  one-click delegate migration (freenet-core#4117, freenet-core#2776): the
+  node copies already-sealed secret bytes only, performing no execution of any
+  old delegate WASM. The copy-forward is best-effort over unknown
+  predecessors and idempotent per `(predecessor -> successor)` pair. `cipher`
+  and `nonce` mirror `RegisterDelegate` for field-shape parity and are ignored
+  by the node (as they have been since freenet-core#4140).
+
+  The variant is **appended last** (bincode tag `3`, one past
+  `UnregisterDelegate`), so the encodings of `ApplicationMessages`,
+  `RegisterDelegate`, and `UnregisterDelegate` are byte-for-byte unchanged and
+  older clients keep working. New wire-format pin tests lock all four variant
+  tags to guard against a future reorder. The flatbuffers
+  (`EncodingProtocol::Flatbuffers`) client path is intentionally not extended;
+  the Rust consumers of this feature use the bincode `Native` path.
+
 ## [0.8.3] - 2026-07-10
 
 ### Fixed
