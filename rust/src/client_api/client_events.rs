@@ -548,7 +548,18 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                         .map(|summary_data| StateSummary::from(summary_data.bytes()));
                     ContractRequest::Subscribe { key, summary }
                 }
-                _ => unreachable!(),
+                // Reachable, not `unreachable!()`: the generated flatbuffers
+                // verifier accepts any unknown union discriminant (`_ => Ok(())`)
+                // and the union type field is a raw `u8` a client can set freely,
+                // so a crafted request reaches here. Return a per-request error
+                // instead of panicking the connection handler. (Mirrors the same
+                // fix on `DelegateRequest::try_decode_fbs`.)
+                other => {
+                    return Err(WsApiError::deserialization(format!(
+                        "unknown ContractRequestType discriminant: {}",
+                        other.0
+                    )));
+                }
             }
         };
 
@@ -578,6 +589,35 @@ pub enum DelegateRequest<'a> {
         nonce: [u8; 24],
     },
     UnregisterDelegate(DelegateKey),
+    /// Registers a delegate AND requests a one-shot, node-side copy-forward of
+    /// the LOCAL-scope secrets belonging to `predecessors` into the newly
+    /// registered delegate's own secret namespace.
+    ///
+    /// `predecessors` are the delegate keys of retired generations of this
+    /// delegate. It is a **list** because a user may skip one or more
+    /// generations between the version they last ran and the current one, so
+    /// several prior namespaces can need forwarding in a single registration.
+    /// The copy-forward is:
+    ///   - **consent-gated on the client side** — the node performs NO
+    ///     execution of any old delegate WASM; it only copies the
+    ///     already-sealed LOCAL-scope secret bytes it holds for a predecessor
+    ///     into the successor's namespace,
+    ///   - **best-effort over unknown predecessors** — the server silently
+    ///     ignores any predecessor key it does not hold, and
+    ///   - **idempotent per `(predecessor -> successor)` pair** —
+    ///     re-registering with the same predecessors copies nothing new.
+    ///
+    /// `cipher` and `nonce` mirror [`DelegateRequest::RegisterDelegate`] purely
+    /// for field-shape parity. The node has ignored both since
+    /// freenet-core#4140 (secrets are sealed client-side), so they carry no
+    /// behavior here either; they exist only so the two registration variants
+    /// stay structurally identical.
+    RegisterDelegateWithPredecessors {
+        delegate: DelegateContainer,
+        cipher: [u8; 32],
+        nonce: [u8; 24],
+        predecessors: Vec<DelegateKey>,
+    },
 }
 
 impl DelegateRequest<'_> {
@@ -602,6 +642,17 @@ impl DelegateRequest<'_> {
                 nonce,
             },
             DelegateRequest::UnregisterDelegate(key) => DelegateRequest::UnregisterDelegate(key),
+            DelegateRequest::RegisterDelegateWithPredecessors {
+                delegate,
+                cipher,
+                nonce,
+                predecessors,
+            } => DelegateRequest::RegisterDelegateWithPredecessors {
+                delegate,
+                cipher,
+                nonce,
+                predecessors,
+            },
         }
     }
 
@@ -610,6 +661,7 @@ impl DelegateRequest<'_> {
             DelegateRequest::ApplicationMessages { key, .. } => key,
             DelegateRequest::RegisterDelegate { delegate, .. } => delegate.key(),
             DelegateRequest::UnregisterDelegate(key) => key,
+            DelegateRequest::RegisterDelegateWithPredecessors { delegate, .. } => delegate.key(),
         }
     }
 }
@@ -658,6 +710,18 @@ impl Display for ClientRequest<'_> {
                 }
                 DelegateRequest::UnregisterDelegate(key) => {
                     write!(f, "DelegateRequest::UnregisterDelegate for key `{key}`")
+                }
+                DelegateRequest::RegisterDelegateWithPredecessors {
+                    delegate,
+                    predecessors,
+                    ..
+                } => {
+                    write!(
+                        f,
+                        "DelegateRequest::RegisterDelegateWithPredecessors for delegate.key()=`{}` with {} predecessor(s)",
+                        delegate.key(),
+                        predecessors.len()
+                    )
                 }
             },
             ClientRequest::Disconnect { .. } => write!(f, "client disconnected"),
@@ -713,7 +777,18 @@ impl<'a> TryFromFbs<&FbsDelegateRequest<'a>> for DelegateRequest<'a> {
                     let key = DelegateKey::try_decode_fbs(&unregister.key())?;
                     DelegateRequest::UnregisterDelegate(key)
                 }
-                _ => unreachable!(),
+                // An unknown union discriminant is reachable, not `unreachable!()`:
+                // the generated flatbuffers verifier accepts any discriminant it
+                // doesn't recognize (`_ => Ok(())`), and the union type field is a
+                // raw `u8` the (public) TS builder can set to any value. Panicking
+                // here would let a single crafted request take down the connection
+                // handler, so return a per-request error instead.
+                other => {
+                    return Err(WsApiError::deserialization(format!(
+                        "unknown DelegateRequestType discriminant: {}",
+                        other.0
+                    )));
+                }
             }
         };
 
@@ -1953,5 +2028,382 @@ mod client_request_test {
         }
 
         Ok(())
+    }
+
+    /// The flatbuffers decode path must NOT panic on an unknown
+    /// `ContractRequestType` discriminant. Same class as the `DelegateRequest`
+    /// guard: the generated union verifier accepts any discriminant it doesn't
+    /// recognize (`_ => Ok(())`), and the union type field is a raw `u8` a
+    /// client can set to any value. Before the fix this hit `unreachable!()`
+    /// and downed the connection handler; now it is a clean per-request error.
+    #[test]
+    fn fbs_decode_rejects_unknown_contract_discriminant() {
+        use crate::generated::client_request::{
+            finish_client_request_buffer, ClientRequest as FbsClientRequest, ClientRequestArgs,
+            ClientRequestType, ContractRequest as FbsContractRequest, ContractRequestArgs,
+            ContractRequestType, DelegateKey as FbsDelegateKey, DelegateKeyArgs,
+            UnregisterDelegate, UnregisterDelegateArgs,
+        };
+
+        let mut b = flatbuffers::FlatBufferBuilder::new();
+        // Any well-formed table satisfies the required union value; the
+        // discriminant is unknown so the verifier never inspects it.
+        let key = b.create_vector(&[0u8; 32]);
+        let code_hash = b.create_vector(&[0u8; 32]);
+        let dk = FbsDelegateKey::create(
+            &mut b,
+            &DelegateKeyArgs {
+                key: Some(key),
+                code_hash: Some(code_hash),
+            },
+        );
+        let dummy = UnregisterDelegate::create(&mut b, &UnregisterDelegateArgs { key: Some(dk) });
+        // 99 is past the max known ContractRequestType (Subscribe = 4).
+        let contract = FbsContractRequest::create(
+            &mut b,
+            &ContractRequestArgs {
+                contract_request_type: ContractRequestType(99),
+                contract_request: Some(dummy.as_union_value()),
+            },
+        );
+        let client = FbsClientRequest::create(
+            &mut b,
+            &ClientRequestArgs {
+                client_request_type: ClientRequestType::ContractRequest,
+                client_request: Some(contract.as_union_value()),
+            },
+        );
+        finish_client_request_buffer(&mut b, client);
+        let bytes = b.finished_data().to_vec();
+
+        let client =
+            root_as_client_request(&bytes).expect("verifier accepts an unknown union discriminant");
+        let fbs_contract = client
+            .client_request_as_contract_request()
+            .expect("client_request is a ContractRequest");
+        assert!(
+            ContractRequest::try_decode_fbs(&fbs_contract).is_err(),
+            "an unknown ContractRequestType discriminant must be a clean \
+             per-request error, never a panic that downs the connection handler"
+        );
+    }
+}
+
+/// Wire-format pins for [`DelegateRequest`].
+///
+/// `DelegateRequest` crosses the client<->node boundary as bincode (the
+/// `EncodingProtocol::Native` path in freenet-core; the Rust clients in this
+/// crate — `browser.rs` and `regular.rs` — both `bincode::serialize` their
+/// requests). Bincode encodes an enum's variant as a 4-byte little-endian
+/// `u32` discriminant, so the *order* of the variants is the wire contract:
+/// reordering or inserting a variant anywhere but the end silently reassigns
+/// every following tag and breaks already-deployed clients (the v0.2.11
+/// break class).
+///
+/// `RegisterDelegateWithPredecessors` was appended as the LAST variant
+/// precisely so the three pre-existing tags stay byte-identical. These tests
+/// exist because, before this module, `DelegateRequest` had NO wire-format
+/// pin at all — a reorder would have shipped undetected.
+#[cfg(test)]
+mod delegate_request_wire_format {
+    use super::DelegateRequest;
+    use crate::code_hash::CodeHash;
+    use crate::prelude::{
+        ApplicationMessage, Delegate, DelegateCode, DelegateContainer, DelegateKey,
+        DelegateWasmAPIVersion, InboundDelegateMsg, Parameters,
+    };
+
+    fn sample_container() -> DelegateContainer {
+        let code = DelegateCode::from(vec![1u8, 2, 3, 4]);
+        let params = Parameters::from(vec![9u8, 8, 7]);
+        DelegateContainer::Wasm(DelegateWasmAPIVersion::V1(Delegate::from((&code, &params))))
+    }
+
+    fn sample_key(fill: u8) -> DelegateKey {
+        DelegateKey::new([fill; 32], CodeHash::new([fill.wrapping_add(1); 32]))
+    }
+
+    // The four sample values whose complete bincode encodings are frozen in
+    // `wire_format_is_frozen`. Kept byte-for-byte identical to the throwaway
+    // generator that produced the frozen vectors, so the freeze is
+    // reproducible: construct the value, `bincode::serialize`, compare.
+    fn sample_app_messages() -> DelegateRequest<'static> {
+        DelegateRequest::ApplicationMessages {
+            key: DelegateKey::new([0x11; 32], CodeHash::new([0x22; 32])),
+            params: Parameters::from(vec![0xDE, 0xAD, 0xBE, 0xEF]),
+            inbound: vec![InboundDelegateMsg::ApplicationMessage(
+                ApplicationMessage::new(vec![0x01, 0x02, 0x03]),
+            )],
+        }
+    }
+
+    fn sample_register() -> DelegateRequest<'static> {
+        DelegateRequest::RegisterDelegate {
+            delegate: sample_container(),
+            cipher: [0x55; 32],
+            nonce: [0x66; 24],
+        }
+    }
+
+    fn sample_unregister() -> DelegateRequest<'static> {
+        DelegateRequest::UnregisterDelegate(DelegateKey::new([0x11; 32], CodeHash::new([0x22; 32])))
+    }
+
+    fn sample_register_with_predecessors() -> DelegateRequest<'static> {
+        DelegateRequest::RegisterDelegateWithPredecessors {
+            delegate: sample_container(),
+            cipher: [0x33; 32],
+            nonce: [0x44; 24],
+            predecessors: vec![sample_key(0xA0), sample_key(0xB0), sample_key(0xC0)],
+        }
+    }
+
+    /// Complete-byte wire-format freeze for all four variants.
+    ///
+    /// The three pre-existing variants (`ApplicationMessages`,
+    /// `RegisterDelegate`, `UnregisterDelegate`) are pinned to their FULL
+    /// expected byte vectors — not just the 4-byte tag — so a field reorder or
+    /// a change to a nested type's encoding (e.g. `DelegateContainer`,
+    /// `DelegateKey`, `ApplicationMessage`) is caught, not only a variant
+    /// reorder. Those three vectors were generated from **origin/main @
+    /// 8b53702** (the shipped format) via a throwaway generator and confirmed
+    /// byte-identical to this branch's output, so the pin anchors to what old
+    /// clients actually speak. The fourth vector
+    /// (`RegisterDelegateWithPredecessors`, multi-predecessor list) was
+    /// generated from THIS branch.
+    ///
+    /// The test also DESERIALIZES each frozen vector, proving an old-format
+    /// byte stream still decodes into the expected variant on this build.
+    #[test]
+    fn wire_format_is_frozen() {
+        // --- origin/main @ 8b53702 (shipped format) ---
+        const APP_MESSAGES: &[u8] = &[
+            0, 0, 0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+            17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 34, 34, 34, 34, 34, 34, 34, 34, 34,
+            34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34,
+            34, 4, 0, 0, 0, 0, 0, 0, 0, 222, 173, 190, 239, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3,
+            0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        const REGISTER: &[u8] = &[
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 9, 8, 7, 4, 0, 0, 0, 0, 0,
+            0, 0, 1, 2, 3, 4, 99, 120, 29, 23, 20, 37, 163, 99, 18, 250, 5, 141, 135, 18, 213, 208,
+            81, 53, 169, 145, 236, 32, 53, 28, 233, 214, 92, 219, 25, 160, 84, 50, 88, 111, 44, 39,
+            24, 219, 97, 92, 222, 20, 205, 248, 149, 154, 214, 38, 193, 144, 31, 141, 32, 222, 49,
+            197, 66, 237, 16, 98, 165, 72, 6, 11, 99, 120, 29, 23, 20, 37, 163, 99, 18, 250, 5,
+            141, 135, 18, 213, 208, 81, 53, 169, 145, 236, 32, 53, 28, 233, 214, 92, 219, 25, 160,
+            84, 50, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+            85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 102, 102, 102, 102, 102, 102, 102, 102,
+            102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102,
+        ];
+        const UNREGISTER: &[u8] = &[
+            2, 0, 0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+            17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 34, 34, 34, 34, 34, 34, 34, 34, 34,
+            34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34,
+            34,
+        ];
+        // --- this branch (the new variant) ---
+        const REGISTER_WITH_PREDECESSORS: &[u8] = &[
+            3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 9, 8, 7, 4, 0, 0, 0, 0, 0,
+            0, 0, 1, 2, 3, 4, 99, 120, 29, 23, 20, 37, 163, 99, 18, 250, 5, 141, 135, 18, 213, 208,
+            81, 53, 169, 145, 236, 32, 53, 28, 233, 214, 92, 219, 25, 160, 84, 50, 88, 111, 44, 39,
+            24, 219, 97, 92, 222, 20, 205, 248, 149, 154, 214, 38, 193, 144, 31, 141, 32, 222, 49,
+            197, 66, 237, 16, 98, 165, 72, 6, 11, 99, 120, 29, 23, 20, 37, 163, 99, 18, 250, 5,
+            141, 135, 18, 213, 208, 81, 53, 169, 145, 236, 32, 53, 28, 233, 214, 92, 219, 25, 160,
+            84, 50, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
+            51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68,
+            68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 3, 0, 0, 0, 0, 0, 0, 0, 160,
+            160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160,
+            160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 161, 161, 161,
+            161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161,
+            161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 176, 176, 176, 176, 176,
+            176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176,
+            176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 177, 177, 177, 177, 177, 177, 177,
+            177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177,
+            177, 177, 177, 177, 177, 177, 177, 177, 192, 192, 192, 192, 192, 192, 192, 192, 192,
+            192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192,
+            192, 192, 192, 192, 192, 192, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193,
+            193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193,
+            193, 193, 193, 193,
+        ];
+
+        // 1. Serialization is byte-stable for every variant.
+        assert_eq!(
+            bincode::serialize(&sample_app_messages()).unwrap(),
+            APP_MESSAGES,
+            "ApplicationMessages (tag 0) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_register()).unwrap(),
+            REGISTER,
+            "RegisterDelegate (tag 1) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_unregister()).unwrap(),
+            UNREGISTER,
+            "UnregisterDelegate (tag 2) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_register_with_predecessors()).unwrap(),
+            REGISTER_WITH_PREDECESSORS,
+            "RegisterDelegateWithPredecessors (tag 3) encoding changed"
+        );
+
+        // 2. The four variant tags are exactly 0,1,2,3 — appending the new
+        //    variant did not shift the pre-existing three.
+        assert_eq!(APP_MESSAGES[..4], 0u32.to_le_bytes());
+        assert_eq!(REGISTER[..4], 1u32.to_le_bytes());
+        assert_eq!(UNREGISTER[..4], 2u32.to_le_bytes());
+        assert_eq!(REGISTER_WITH_PREDECESSORS[..4], 3u32.to_le_bytes());
+
+        // 3. Each frozen (old-format) byte stream still DECODES into its
+        //    variant on this build — an old client's bytes remain readable.
+        assert!(matches!(
+            bincode::deserialize::<DelegateRequest>(APP_MESSAGES).unwrap(),
+            DelegateRequest::ApplicationMessages { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<DelegateRequest>(REGISTER).unwrap(),
+            DelegateRequest::RegisterDelegate { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<DelegateRequest>(UNREGISTER).unwrap(),
+            DelegateRequest::UnregisterDelegate(_)
+        ));
+        assert!(matches!(
+            bincode::deserialize::<DelegateRequest>(REGISTER_WITH_PREDECESSORS).unwrap(),
+            DelegateRequest::RegisterDelegateWithPredecessors { .. }
+        ));
+    }
+
+    /// The new variant's tag is exactly `3u32` little-endian — a direct,
+    /// self-documenting assertion that it was appended one past
+    /// `UnregisterDelegate` (tag 2).
+    #[test]
+    fn register_with_predecessors_tag_is_three() {
+        let req = DelegateRequest::RegisterDelegateWithPredecessors {
+            delegate: sample_container(),
+            cipher: [0; 32],
+            nonce: [0; 24],
+            predecessors: vec![],
+        };
+        assert_eq!(
+            bincode::serialize(&req).unwrap()[..4],
+            3u32.to_le_bytes(),
+            "RegisterDelegateWithPredecessors must be the 4th variant (tag 3)"
+        );
+    }
+
+    /// The new variant round-trips through bincode, including a multi-element
+    /// `predecessors` list (the skip-generations case the variant exists for).
+    #[test]
+    fn register_with_predecessors_round_trips() {
+        let predecessors = vec![sample_key(0xA0), sample_key(0xB0), sample_key(0xC0)];
+        let delegate = sample_container();
+        let expected_key = delegate.key().clone();
+
+        let req = DelegateRequest::RegisterDelegateWithPredecessors {
+            delegate,
+            cipher: [0x33; 32],
+            nonce: [0x44; 24],
+            predecessors: predecessors.clone(),
+        };
+
+        let bytes = bincode::serialize(&req).unwrap();
+        let decoded: DelegateRequest = bincode::deserialize(&bytes).unwrap();
+
+        match decoded {
+            DelegateRequest::RegisterDelegateWithPredecessors {
+                delegate,
+                cipher,
+                nonce,
+                predecessors: got,
+            } => {
+                assert_eq!(delegate.key(), &expected_key, "delegate preserved");
+                assert_eq!(cipher, [0x33; 32], "cipher preserved");
+                assert_eq!(nonce, [0x44; 24], "nonce preserved");
+                assert_eq!(
+                    got, predecessors,
+                    "full predecessor list preserved in order"
+                );
+            }
+            other => panic!("round-trip produced the wrong variant: {other:?}"),
+        }
+    }
+
+    /// `key()` returns the newly-registered delegate's key (not a
+    /// predecessor's), matching `RegisterDelegate`'s behavior.
+    #[test]
+    fn key_returns_the_new_delegate() {
+        let delegate = sample_container();
+        let expected_key = delegate.key().clone();
+        let req = DelegateRequest::RegisterDelegateWithPredecessors {
+            delegate,
+            cipher: [0; 32],
+            nonce: [0; 24],
+            predecessors: vec![sample_key(0xA0)],
+        };
+        assert_eq!(req.key(), &expected_key);
+    }
+
+    /// The flatbuffers decode path must NOT panic on an unknown
+    /// `DelegateRequestType` discriminant. The generated union verifier accepts
+    /// any discriminant it doesn't recognize (`_ => Ok(())`), and the union
+    /// type field is a raw `u8` that the public (TypeScript) builder can set to
+    /// any value, so a crafted request reaches `DelegateRequest::try_decode_fbs`
+    /// with an out-of-range discriminant. Before the fix this hit
+    /// `unreachable!()` and took down the connection handler; now it is a clean
+    /// per-request error. (Regression guard for the P2 finding on PR #86.)
+    #[test]
+    fn fbs_decode_rejects_unknown_discriminant() {
+        use crate::client_api::TryFromFbs;
+        use crate::generated::client_request::{
+            finish_client_request_buffer, root_as_client_request,
+            ClientRequest as FbsClientRequest, ClientRequestArgs, ClientRequestType,
+            DelegateKey as FbsDelegateKey, DelegateKeyArgs, DelegateRequest as FbsDelegateRequest,
+            DelegateRequestArgs, DelegateRequestType, UnregisterDelegate, UnregisterDelegateArgs,
+        };
+
+        let mut b = flatbuffers::FlatBufferBuilder::new();
+        // A real, well-formed UnregisterDelegate table to hang off the union...
+        let key = b.create_vector(&[0u8; 32]);
+        let code_hash = b.create_vector(&[0u8; 32]);
+        let dk = FbsDelegateKey::create(
+            &mut b,
+            &DelegateKeyArgs {
+                key: Some(key),
+                code_hash: Some(code_hash),
+            },
+        );
+        let unreg = UnregisterDelegate::create(&mut b, &UnregisterDelegateArgs { key: Some(dk) });
+        // ...but LIE about the union type: 99 is past the max known
+        // discriminant (UnregisterDelegate = 3), yet the verifier accepts it.
+        let dreq = FbsDelegateRequest::create(
+            &mut b,
+            &DelegateRequestArgs {
+                delegate_request_type: DelegateRequestType(99),
+                delegate_request: Some(unreg.as_union_value()),
+            },
+        );
+        let creq = FbsClientRequest::create(
+            &mut b,
+            &ClientRequestArgs {
+                client_request_type: ClientRequestType::DelegateRequest,
+                client_request: Some(dreq.as_union_value()),
+            },
+        );
+        finish_client_request_buffer(&mut b, creq);
+        let bytes = b.finished_data().to_vec();
+
+        let client =
+            root_as_client_request(&bytes).expect("verifier accepts an unknown union discriminant");
+        let fbs_delegate = client
+            .client_request_as_delegate_request()
+            .expect("client_request is a DelegateRequest");
+        let decoded = DelegateRequest::try_decode_fbs(&fbs_delegate);
+        assert!(
+            decoded.is_err(),
+            "an unknown DelegateRequestType discriminant must be a clean \
+             per-request error, never a panic that downs the connection handler"
+        );
     }
 }
