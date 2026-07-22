@@ -548,7 +548,18 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                         .map(|summary_data| StateSummary::from(summary_data.bytes()));
                     ContractRequest::Subscribe { key, summary }
                 }
-                _ => unreachable!(),
+                // Reachable, not `unreachable!()`: the generated flatbuffers
+                // verifier accepts any unknown union discriminant (`_ => Ok(())`)
+                // and the union type field is a raw `u8` a client can set freely,
+                // so a crafted request reaches here. Return a per-request error
+                // instead of panicking the connection handler. (Mirrors the same
+                // fix on `DelegateRequest::try_decode_fbs`.)
+                other => {
+                    return Err(WsApiError::deserialization(format!(
+                        "unknown ContractRequestType discriminant: {}",
+                        other.0
+                    )));
+                }
             }
         };
 
@@ -2017,6 +2028,64 @@ mod client_request_test {
         }
 
         Ok(())
+    }
+
+    /// The flatbuffers decode path must NOT panic on an unknown
+    /// `ContractRequestType` discriminant. Same class as the `DelegateRequest`
+    /// guard: the generated union verifier accepts any discriminant it doesn't
+    /// recognize (`_ => Ok(())`), and the union type field is a raw `u8` a
+    /// client can set to any value. Before the fix this hit `unreachable!()`
+    /// and downed the connection handler; now it is a clean per-request error.
+    #[test]
+    fn fbs_decode_rejects_unknown_contract_discriminant() {
+        use crate::generated::client_request::{
+            finish_client_request_buffer, ClientRequest as FbsClientRequest, ClientRequestArgs,
+            ClientRequestType, ContractRequest as FbsContractRequest, ContractRequestArgs,
+            ContractRequestType, DelegateKey as FbsDelegateKey, DelegateKeyArgs,
+            UnregisterDelegate, UnregisterDelegateArgs,
+        };
+
+        let mut b = flatbuffers::FlatBufferBuilder::new();
+        // Any well-formed table satisfies the required union value; the
+        // discriminant is unknown so the verifier never inspects it.
+        let key = b.create_vector(&[0u8; 32]);
+        let code_hash = b.create_vector(&[0u8; 32]);
+        let dk = FbsDelegateKey::create(
+            &mut b,
+            &DelegateKeyArgs {
+                key: Some(key),
+                code_hash: Some(code_hash),
+            },
+        );
+        let dummy = UnregisterDelegate::create(&mut b, &UnregisterDelegateArgs { key: Some(dk) });
+        // 99 is past the max known ContractRequestType (Subscribe = 4).
+        let contract = FbsContractRequest::create(
+            &mut b,
+            &ContractRequestArgs {
+                contract_request_type: ContractRequestType(99),
+                contract_request: Some(dummy.as_union_value()),
+            },
+        );
+        let client = FbsClientRequest::create(
+            &mut b,
+            &ClientRequestArgs {
+                client_request_type: ClientRequestType::ContractRequest,
+                client_request: Some(contract.as_union_value()),
+            },
+        );
+        finish_client_request_buffer(&mut b, client);
+        let bytes = b.finished_data().to_vec();
+
+        let client =
+            root_as_client_request(&bytes).expect("verifier accepts an unknown union discriminant");
+        let fbs_contract = client
+            .client_request_as_contract_request()
+            .expect("client_request is a ContractRequest");
+        assert!(
+            ContractRequest::try_decode_fbs(&fbs_contract).is_err(),
+            "an unknown ContractRequestType discriminant must be a clean \
+             per-request error, never a panic that downs the connection handler"
+        );
     }
 }
 

@@ -26,13 +26,14 @@
   use the bincode `Native` path.
 
 ### Fixed
-- **`DelegateRequest::try_decode_fbs` no longer panics on an unknown union
-  discriminant.** The generated flatbuffers verifier accepts any
-  `DelegateRequestType` discriminant it doesn't recognize (`_ => Ok(())`), and
-  the union type field is a raw `u8` a client can set to any value, so a
-  crafted request reached an `unreachable!()` and took down the connection
-  handler. It now returns a clean per-request `DeserializationError` naming the
-  unknown discriminant.
+- **The flatbuffers decode path no longer panics on an unknown union
+  discriminant.** Both `DelegateRequest::try_decode_fbs` and
+  `ContractRequest::try_decode_fbs` matched their generated union type with an
+  `unreachable!()` catch-all, but it IS reachable: the generated verifier
+  accepts any discriminant it doesn't recognize (`_ => Ok(())`), and the union
+  type field is a raw `u8` a client can set to any value, so a crafted request
+  reached the catch-all and took down the connection handler. Both now return a
+  clean per-request `DeserializationError` naming the unknown discriminant.
 
 ## [0.8.3] - 2026-07-10
 
