@@ -989,6 +989,37 @@ mod test {
         );
     }
 
+    /// A closed stream channel must not end a still-live connection.
+    ///
+    /// This pins the stream arm's `None` branch. With `biased;` that arm is
+    /// only reached when `response_rx` is open but empty, so "the stream side
+    /// is finished" has to mean "keep waiting for responses", not "report the
+    /// connection closed" — the response channel is still live and about to
+    /// deliver. Reporting `ChannelClosed` here would drop a healthy connection.
+    #[tokio::test]
+    async fn recv_keeps_waiting_for_responses_after_the_stream_channel_closes() {
+        let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
+        let (response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+        let (stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+        // The stream side is done; the response side is still open and empty.
+        drop(stream_tx);
+
+        let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
+        let (received, _) = tokio::join!(client.recv(), async {
+            response_tx
+                .send(Err(ClientError::from("late response".to_string())))
+                .await
+                .expect("sending the late response must succeed");
+        });
+
+        let err = received.expect_err("the late response is an Err in this fixture");
+        assert!(
+            format!("{err}").contains("late response"),
+            "recv() gave up on a live response channel because the stream channel \
+             closed, got: {err}"
+        );
+    }
+
     /// `ChannelClosed` is still what a caller gets once genuinely nothing is
     /// left to deliver, so the tests above cannot be satisfied by never
     /// reporting a closed connection at all.
