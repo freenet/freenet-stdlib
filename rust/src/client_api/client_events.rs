@@ -384,9 +384,10 @@ impl ClientRequest<'_> {
                             data: Bytes::from(chunk.data().bytes().to_vec()),
                         }
                     }
-                    _ => {
-                        return Err(WsApiError::deserialization(
-                            "unknown client request type".to_string(),
+                    other => {
+                        return Err(crate::client_api::unknown_union_discriminant(
+                            "ClientRequestType",
+                            other.0,
                         ))
                     }
                 },
@@ -504,7 +505,7 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                     // not the full key (which may not be complete on the client side)
                     let fbs_key = get.key();
                     let key = crate::contract_interface::key::instance_id_from_fbs(
-                        "ContractKey.instance",
+                        "ContractKey.instance.data",
                         fbs_key.instance().data().bytes(),
                     )?;
                     let fetch_contract = get.fetch_contract();
@@ -544,7 +545,7 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                     // Extract just the instance ID for Subscribe
                     let fbs_key = subscribe.key();
                     let key = crate::contract_interface::key::instance_id_from_fbs(
-                        "ContractKey.instance",
+                        "ContractKey.instance.data",
                         fbs_key.instance().data().bytes(),
                     )?;
                     let summary = subscribe
@@ -559,10 +560,10 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                 // instead of panicking the connection handler. (Mirrors the same
                 // fix on `DelegateRequest::try_decode_fbs`.)
                 other => {
-                    return Err(WsApiError::deserialization(format!(
-                        "unknown ContractRequestType discriminant: {}",
-                        other.0
-                    )));
+                    return Err(crate::client_api::unknown_union_discriminant(
+                        "ContractRequestType",
+                        other.0,
+                    ));
                 }
             }
         };
@@ -797,10 +798,10 @@ impl<'a> TryFromFbs<&FbsDelegateRequest<'a>> for DelegateRequest<'a> {
                 // here would let a single crafted request take down the connection
                 // handler, so return a per-request error instead.
                 other => {
-                    return Err(WsApiError::deserialization(format!(
-                        "unknown DelegateRequestType discriminant: {}",
-                        other.0
-                    )));
+                    return Err(crate::client_api::unknown_union_discriminant(
+                        "DelegateRequestType",
+                        other.0,
+                    ));
                 }
             }
         };
@@ -1363,8 +1364,13 @@ impl HostResponse {
                         }
                         RelatedState { related_to, state } => {
                             let state_data = builder.create_vector(&state.into_bytes());
-                            let instance_data =
-                                builder.create_vector(related_to.encode().as_bytes());
+                            // RAW 32 bytes, like every other `common.ContractInstanceId`
+                            // producer. This wrote `related_to.encode()` — base58
+                            // TEXT — into a field the schema and the TypeScript
+                            // SDK both read as raw bytes. It is the encode half of
+                            // the decode bug this change fixes: the same field, the
+                            // same wrong transformation, mirrored.
+                            let instance_data = builder.create_vector(related_to.as_bytes());
 
                             let instance_offset = FbsContractInstanceId::create(
                                 &mut builder,
@@ -1390,8 +1396,13 @@ impl HostResponse {
                             )
                         }
                         RelatedDelta { related_to, delta } => {
-                            let instance_data =
-                                builder.create_vector(related_to.encode().as_bytes());
+                            // RAW 32 bytes, like every other `common.ContractInstanceId`
+                            // producer. This wrote `related_to.encode()` — base58
+                            // TEXT — into a field the schema and the TypeScript
+                            // SDK both read as raw bytes. It is the encode half of
+                            // the decode bug this change fixes: the same field, the
+                            // same wrong transformation, mirrored.
+                            let instance_data = builder.create_vector(related_to.as_bytes());
                             let delta_data = builder.create_vector(&delta.into_bytes());
 
                             let instance_offset = FbsContractInstanceId::create(
@@ -1422,8 +1433,13 @@ impl HostResponse {
                             state,
                             delta,
                         } => {
-                            let instance_data =
-                                builder.create_vector(related_to.encode().as_bytes());
+                            // RAW 32 bytes, like every other `common.ContractInstanceId`
+                            // producer. This wrote `related_to.encode()` — base58
+                            // TEXT — into a field the schema and the TypeScript
+                            // SDK both read as raw bytes. It is the encode half of
+                            // the decode bug this change fixes: the same field, the
+                            // same wrong transformation, mirrored.
+                            let instance_data = builder.create_vector(related_to.as_bytes());
                             let state_data = builder.create_vector(&state.into_bytes());
                             let delta_data = builder.create_vector(&delta.into_bytes());
 
@@ -2859,8 +2875,9 @@ mod fbs_decode_hardening {
     // stays valid.
     // ---------------------------------------------------------------------
 
-    fn client_request_type(d: u8) -> Vec<u8> {
+    fn client_request_type(d: u8, force_defaults: bool) -> Vec<u8> {
         let mut b = Builder::new();
+        b.force_defaults(force_defaults);
         let key = key_offset(&mut b, &INSTANCE, &CODE_HASH);
         let get = FbsGet::create(
             &mut b,
@@ -2889,8 +2906,9 @@ mod fbs_decode_hardening {
         b.finished_data().to_vec()
     }
 
-    fn contract_request_type(d: u8) -> Vec<u8> {
+    fn contract_request_type(d: u8, force_defaults: bool) -> Vec<u8> {
         let mut b = Builder::new();
+        b.force_defaults(force_defaults);
         let key = key_offset(&mut b, &INSTANCE, &CODE_HASH);
         let get = FbsGet::create(
             &mut b,
@@ -2904,8 +2922,9 @@ mod fbs_decode_hardening {
         finish_contract(&mut b, ContractRequestType(d), get.as_union_value())
     }
 
-    fn delegate_request_type(d: u8) -> Vec<u8> {
+    fn delegate_request_type(d: u8, force_defaults: bool) -> Vec<u8> {
         let mut b = Builder::new();
+        b.force_defaults(force_defaults);
         let dk = delegate_key_offset(&mut b, &[7u8; 32], &CODE_HASH);
         let params = b.create_vector(&[1u8, 2, 3]);
         let payload = b.create_vector(&[9u8; 4]);
@@ -2938,8 +2957,9 @@ mod fbs_decode_hardening {
     }
 
     /// A PUT whose `common.ContractContainer` union discriminant is `d`.
-    fn contract_type(d: u8) -> Vec<u8> {
+    fn contract_type(d: u8, force_defaults: bool) -> Vec<u8> {
         let mut b = Builder::new();
+        b.force_defaults(force_defaults);
         let code_data = b.create_vector(&[0u8; 8]);
         let code_hash = b.create_vector(&CODE_HASH);
         let code = FbsContractCode::create(
@@ -2989,8 +3009,9 @@ mod fbs_decode_hardening {
     }
 
     /// A RegisterDelegate whose `DelegateContainer` union discriminant is `d`.
-    fn delegate_type(d: u8) -> Vec<u8> {
+    fn delegate_type(d: u8, force_defaults: bool) -> Vec<u8> {
         let mut b = Builder::new();
+        b.force_defaults(force_defaults);
         let code_data = b.create_vector(&[0u8; 8]);
         let code_hash = b.create_vector(&CODE_HASH);
         let code = FbsDelegateCode::create(
@@ -3035,8 +3056,9 @@ mod fbs_decode_hardening {
     }
 
     /// An UPDATE whose `common.UpdateData` union discriminant is `d`.
-    fn update_data_type(d: u8) -> Vec<u8> {
+    fn update_data_type(d: u8, force_defaults: bool) -> Vec<u8> {
         let mut b = Builder::new();
+        b.force_defaults(force_defaults);
         let state = b.create_vector(&[5u8; 4]);
         let state_update = StateUpdate::create(&mut b, &StateUpdateArgs { state: Some(state) });
         let data = FbsUpdateData::create(
@@ -3058,8 +3080,9 @@ mod fbs_decode_hardening {
     }
 
     /// An ApplicationMessages whose `InboundDelegateMsg` union discriminant is `d`.
-    fn inbound_delegate_msg_type(d: u8) -> Vec<u8> {
+    fn inbound_delegate_msg_type(d: u8, force_defaults: bool) -> Vec<u8> {
         let mut b = Builder::new();
+        b.force_defaults(force_defaults);
         let payload = b.create_vector(&[9u8; 4]);
         let context = b.create_vector(&[0u8; 2]);
         let app = FbsApplicationMessage::create(
@@ -3096,26 +3119,29 @@ mod fbs_decode_hardening {
     }
 
     /// `(union name, builder, the union's real discriminant)`.
-    type UnionCase = (&'static str, fn(u8) -> Vec<u8>, u8);
+    type UnionCase = (&'static str, fn(u8, bool) -> Vec<u8>, u8);
 
     /// **No union discriminant, for any of the seven unions on the decode path,
     /// may panic the decoder.**
     ///
-    /// This is the highest-leverage test in the change: it is one sweep that
-    /// covers every union at once, and it covers the next union somebody adds
-    /// to the schema without anyone remembering to write a test for it. Four of
-    /// the seven were `unreachable!()` before this change and every one of them
-    /// is reachable — the generated verifiers all end in `_ => Ok(())`.
+    /// One sweep covering every union at once. Four of the seven were
+    /// `unreachable!()` before this change, and all four are reachable: the
+    /// generated verifiers end in `_ => Ok(())`, so an unrecognized discriminant
+    /// passes verification and lands in the decoder's match.
     ///
-    /// The assertion for the sweep is that the loop RETURNS: a panic anywhere
-    /// inside fails the test. On top of that, two properties are pinned
-    /// explicitly per union, because they are the ones a regression would break
-    /// first:
+    /// Scope, stated honestly: this covers a new *variant* on an existing union
+    /// for free, but NOT a new *union* — `cases` and its builders are written by
+    /// hand. `union_matches_never_use_unreachable` is the guard for that case.
     ///
-    /// - `NONE` (0) is an error, not a panic. NONE is not a hypothetical: the
-    ///   TypeScript SDK's `ContractContainer` and `DelegateContainer`
-    ///   constructors both take it as their DEFAULT argument.
-    /// - An out-of-range discriminant is an error, not a panic.
+    /// Four properties are pinned per union, and the third is the one that keeps
+    /// the other three honest:
+    ///
+    /// - The 0..=255 sweep RETURNS. A panic anywhere inside fails the test.
+    /// - An out-of-range discriminant is a clean error.
+    /// - That error came from the DECODER, not the verifier. Without this the
+    ///   sweep silently degrades to zero decoder coverage the moment a schema or
+    ///   builder change makes verification fail earlier — which is exactly what
+    ///   had happened to the NONE case below.
     /// - The real discriminant still decodes, so the guard did not break the
     ///   happy path.
     #[test]
@@ -3139,23 +3165,45 @@ mod fbs_decode_hardening {
                 // Must return, never panic. A mismatched-but-known discriminant
                 // may be rejected by the verifier rather than the decoder;
                 // either is a clean error and both are acceptable here.
-                let bytes = build(d);
+                let bytes = build(d, false);
                 let _ = ClientRequest::try_decode_fbs(&bytes);
             }
 
-            let none = build(0);
-            assert!(
-                ClientRequest::try_decode_fbs(&none).is_err(),
-                "{union}: a NONE discriminant must be a clean error"
+            // An out-of-range discriminant must be rejected BY THE DECODER.
+            // Asserting only `is_err()` would also pass on a verifier
+            // rejection, which reaches none of the code this change touches.
+            let out_of_range = build(200, false);
+            let err = ClientRequest::try_decode_fbs(&out_of_range)
+                .expect_err("{union}: an out-of-range discriminant must be a clean error");
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Failed decoding message from client request: unknown {union} \
+                     discriminant: 200"
+                ),
+                "{union}: the error must come from the decoder's union arm, not \
+                 from the verifier — otherwise this sweep pins nothing"
             );
 
-            let out_of_range = build(200);
-            assert!(
-                ClientRequest::try_decode_fbs(&out_of_range).is_err(),
-                "{union}: an out-of-range discriminant must be a clean error"
+            // `NONE` needs `force_defaults`: both builders elide a field equal
+            // to its default, so an ordinary `NONE` is written as ABSENT and
+            // `visit_union` rejects the present-value/absent-type pair before
+            // any decoder runs. Forcing defaults writes the zero explicitly,
+            // which is the shape a non-flatc encoder can put on the wire and
+            // the only one that actually reaches the match arm.
+            let none = build(0, true);
+            let err = ClientRequest::try_decode_fbs(&none)
+                .expect_err("{union}: a NONE discriminant must be a clean error");
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Failed decoding message from client request: unknown {union} \
+                     discriminant: 0"
+                ),
+                "{union}: an explicit NONE must reach the decoder's union arm"
             );
 
-            let good = build(valid);
+            let good = build(valid, false);
             assert!(
                 ClientRequest::try_decode_fbs(&good).is_ok(),
                 "{union}: the real discriminant must still decode; the guard \
@@ -3269,16 +3317,34 @@ mod fbs_decode_hardening {
 
     /// A wrong-length `related_to` is a clean error naming the field, not a
     /// panic and not a silently truncated id.
+    ///
+    /// Parameterized over all three variants: with one case, copy-pasting the
+    /// wrong variant's field name into the other two arms would fail nothing.
     #[test]
     fn related_to_wrong_length_is_rejected() {
-        let bytes = update_with_related(UpdateDataType::RelatedStateUpdate, &[1u8; 8]);
-        let err = ClientRequest::try_decode_fbs(&bytes)
-            .expect_err("an 8-byte related_to must be rejected");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("RelatedStateUpdate.related_to") && msg.contains("got 8 bytes"),
-            "the error must name the field and the observed length, got: {msg}"
-        );
+        for (variant, field) in [
+            (
+                UpdateDataType::RelatedStateUpdate,
+                "RelatedStateUpdate.related_to.data",
+            ),
+            (
+                UpdateDataType::RelatedDeltaUpdate,
+                "RelatedDeltaUpdate.related_to.data",
+            ),
+            (
+                UpdateDataType::RelatedStateAndDeltaUpdate,
+                "RelatedStateAndDeltaUpdate.related_to.data",
+            ),
+        ] {
+            let bytes = update_with_related(variant, &[1u8; 8]);
+            let err = ClientRequest::try_decode_fbs(&bytes)
+                .expect_err("an 8-byte related_to must be rejected");
+            let msg = err.to_string();
+            assert!(
+                msg.contains(field) && msg.contains("got 8 bytes"),
+                "the error must name {field} and the observed length, got: {msg}"
+            );
+        }
     }
 
     fn put_with_related_contract(id: &[u8]) -> Vec<u8> {
@@ -3487,6 +3553,61 @@ mod fbs_decode_hardening {
         assert!(
             ClientRequest::try_decode_fbs(&register_delegate(32, 24)).is_ok(),
             "correct cipher/nonce lengths must still decode"
+        );
+    }
+
+    /// The ENCODE half of the same bug: `HostResponse`'s three related-update
+    /// variants wrote `related_to.encode()` — base58 TEXT — into
+    /// `common.ContractInstanceId.data`, a field every other producer and every
+    /// consumer treats as 32 raw bytes.
+    ///
+    /// It survived because Rust only encodes host responses and only TypeScript
+    /// decodes them, so no Rust round-trip test ever crossed it, and the
+    /// TypeScript SDK has no test that reads `relatedTo` back out of a
+    /// notification. Pinned here by decoding the encoder's own output, which is
+    /// the cheapest thing that would have caught it.
+    #[test]
+    fn host_response_encodes_related_to_as_raw_bytes() {
+        use crate::client_api::{ContractResponse, HostResponse};
+        use crate::contract_interface::{ContractInstanceId, ContractKey, State};
+        use crate::generated::host_response::{root_as_host_response, ContractResponseType};
+
+        let related = ContractInstanceId::new(INSTANCE);
+        let key = ContractKey::from_params_and_code(
+            crate::parameters::Parameters::from(vec![1u8, 2]),
+            crate::contract_interface::ContractCode::from(vec![0u8; 8]),
+        );
+        let response = HostResponse::ContractResponse(ContractResponse::UpdateNotification {
+            key,
+            update: UpdateData::RelatedState {
+                related_to: related,
+                state: State::from(vec![9u8; 4]),
+            },
+        });
+
+        let bytes = response.into_fbs_bytes().expect("encoding must succeed");
+        let host = root_as_host_response(&bytes).expect("the encoder must emit a valid buffer");
+        let contract = host
+            .response_as_contract_response()
+            .expect("a ContractResponse");
+        assert_eq!(
+            contract.contract_response_type(),
+            ContractResponseType::UpdateNotification
+        );
+        let notification = contract
+            .contract_response_as_update_notification()
+            .expect("an UpdateNotification");
+        let related_update = notification
+            .update()
+            .update_data_as_related_state_update()
+            .expect("a RelatedStateUpdate");
+
+        assert_eq!(
+            related_update.related_to().data().bytes(),
+            &INSTANCE,
+            "related_to must be the 32 RAW id bytes. Encoding it as base58 text \
+             puts ~44 ASCII bytes in a field the TypeScript SDK reads as a raw \
+             Uint8Array, and that our own decoder now rejects."
         );
     }
 

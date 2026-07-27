@@ -142,7 +142,7 @@ impl<'a> TryFromFbs<&FbsRelatedContracts<'a>> for RelatedContracts<'a> {
             // the raw id and then unwrapped: it panicked on every well-formed
             // PUT carrying a related contract. See `instance_id_from_fbs`.
             let id = instance_id_from_fbs(
-                "RelatedContract.instance_id",
+                "RelatedContract.instance_id.data",
                 related.instance_id().data().bytes(),
             )?;
             let state = State::from(related.state().bytes());
@@ -334,7 +334,7 @@ impl<'a> TryFromFbs<&FbsUpdateData<'a>> for UpdateData<'a> {
                 let update = update_data.update_data_as_related_state_update().unwrap();
                 let state = State::from(update.state().bytes());
                 let related_to = instance_id_from_fbs(
-                    "RelatedStateUpdate.related_to",
+                    "RelatedStateUpdate.related_to.data",
                     update.related_to().data().bytes(),
                 )?;
                 Ok(UpdateData::RelatedState { related_to, state })
@@ -343,7 +343,7 @@ impl<'a> TryFromFbs<&FbsUpdateData<'a>> for UpdateData<'a> {
                 let update = update_data.update_data_as_related_delta_update().unwrap();
                 let delta = StateDelta::from(update.delta().bytes());
                 let related_to = instance_id_from_fbs(
-                    "RelatedDeltaUpdate.related_to",
+                    "RelatedDeltaUpdate.related_to.data",
                     update.related_to().data().bytes(),
                 )?;
                 Ok(UpdateData::RelatedDelta { related_to, delta })
@@ -355,7 +355,7 @@ impl<'a> TryFromFbs<&FbsUpdateData<'a>> for UpdateData<'a> {
                 let state = State::from(update.state().bytes());
                 let delta = StateDelta::from(update.delta().bytes());
                 let related_to = instance_id_from_fbs(
-                    "RelatedStateAndDeltaUpdate.related_to",
+                    "RelatedStateAndDeltaUpdate.related_to.data",
                     update.related_to().data().bytes(),
                 )?;
                 Ok(UpdateData::RelatedStateAndDelta {

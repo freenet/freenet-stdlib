@@ -19,7 +19,7 @@ use crate::generated::client_request::{
 use crate::common_generated::common::SecretsId as FbsSecretsId;
 
 use crate::client_api::{fixed_size_field, unknown_union_discriminant, TryFromFbs, WsApiError};
-use crate::contract_interface::{RelatedContracts, UpdateData};
+use crate::contract_interface::{RelatedContracts, UpdateData, CONTRACT_KEY_SIZE};
 use crate::prelude::{ContractInstanceId, WrappedState};
 use crate::versioning::ContractContainer;
 use crate::{code_hash::CodeHash, prelude::Parameters};
@@ -286,8 +286,14 @@ impl<'a> TryFromFbs<&FbsDelegateKey<'a>> for DelegateKey {
         // future field added here needs the same treatment.
         let key_bytes =
             fixed_size_field::<DELEGATE_HASH_LENGTH>("DelegateKey.key", key.key().bytes())?;
-        let code_hash = CodeHash::try_from(key.code_hash().bytes())
-            .map_err(|e| WsApiError::deserialization(e.to_string()))?;
+        // `CodeHash::try_from` DOES length-check, so this field never panicked —
+        // but its error stringifies to "invalid data", naming neither the field
+        // nor the length. Symmetric treatment means the same message shape, not
+        // merely the same safety, so it goes through the same helper.
+        let code_hash = CodeHash::new(fixed_size_field::<CONTRACT_KEY_SIZE>(
+            "DelegateKey.code_hash",
+            key.code_hash().bytes(),
+        )?);
         Ok(DelegateKey {
             key: key_bytes,
             code_hash,

@@ -70,6 +70,14 @@ impl ContractInstanceId {
     /// raw wire bytes, which panicked on every well-formed request: a random
     /// 32-byte id essentially never consists solely of base58 characters (the
     /// alphabet is 58 of 256 byte values, so the odds are about 2e-21).
+    ///
+    /// Caveat, pre-existing and unchanged: `bs58`'s `onto` writes the decoded
+    /// bytes LEFT-aligned into the 32-byte buffer and reports how many it
+    /// wrote, which this discards. So base58 text that decodes to fewer than 32
+    /// bytes yields a zero-padded id rather than an error — `from_base58("1")`
+    /// is the all-zero id. Callers that accept untrusted text (freenet-core
+    /// parses URL path segments with this) get a well-formed but wrong id
+    /// rather than a rejection.
     pub fn from_base58(bytes: impl AsRef<[u8]>) -> Result<Self, bs58::decode::Error> {
         let mut spec = [0; CONTRACT_KEY_SIZE];
         bs58::decode(bytes)
@@ -81,8 +89,9 @@ impl ContractInstanceId {
     /// Renamed to [`Self::from_base58`], which says what it actually does.
     ///
     /// Kept as a delegating alias so the rename is not a breaking change.
+    // No `since`: the release this lands in is not decided here, and a guessed
+    // version is unfixable once published.
     #[deprecated(
-        since = "0.8.5",
         note = "renamed to `from_base58`: this parses base58 TEXT, not raw bytes. \
                 For a raw 32-byte id use `ContractInstanceId::new`."
     )]
@@ -305,8 +314,10 @@ fn code_hash_error(observed: Option<usize>) -> String {
 /// (it panicked on every well-formed request, because a random 32-byte id
 /// essentially never consists solely of base58 characters).
 ///
-/// `field` is the schema path being decoded, so a GET, an UPDATE and a related
-/// contract each name their own field in the error.
+/// `field` is the schema path being decoded. GET, SUBSCRIBE and UPDATE all pass
+/// `"ContractKey.instance.data"` because that genuinely is the field in all
+/// three (each request carries a `common.ContractKey`); the related-contract
+/// sites name their own distinct fields.
 pub(crate) fn instance_id_from_fbs(
     field: &str,
     data: &[u8],
@@ -317,7 +328,8 @@ pub(crate) fn instance_id_from_fbs(
 
 impl<'a> TryFromFbs<&FbsContractKey<'a>> for ContractKey {
     fn try_decode_fbs(key: &FbsContractKey<'a>) -> Result<Self, WsApiError> {
-        let instance = instance_id_from_fbs("ContractKey.instance", key.instance().data().bytes())?;
+        let instance =
+            instance_id_from_fbs("ContractKey.instance.data", key.instance().data().bytes())?;
         // The `code` field carries the already-computed 32-byte code hash
         // (BLAKE3 of the wasm), so pass those bytes straight through. Calling
         // `CodeHash::from_code` here would hash the hash again -
