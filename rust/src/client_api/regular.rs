@@ -82,16 +82,25 @@ impl Stream for WebApi {
                 Poll::Pending
             }
             // End the stream only when there is nothing left anywhere: no
-            // queued handle, no assembly in flight, and no live response
-            // channel. `response_rx` is reached here in one of two states —
-            // open and momentarily empty, or closed and drained — because the
-            // arm above returns early otherwise, so `is_closed()` distinguishes
-            // them exactly. Without that conjunct a live connection whose
-            // response channel merely happened to be empty would be reported as
-            // ended, which is what the stream arm of `recv()` guards against.
-            // This is now the only way the stream can terminate.
+            // queued handle, no assembly in flight, and nothing more that can
+            // arrive on the response channel. Without the response conjunct a
+            // live connection whose response channel merely happened to be
+            // empty would be reported as ended, which is what the stream arm of
+            // `recv()` guards against. This is the only way the stream can
+            // terminate, so both halves matter.
+            //
+            // `is_closed()` alone is NOT enough: it means "every sender has
+            // dropped", not "drained", and the response arm's verdict above is
+            // already stale by the time we get here. The handler can queue its
+            // final result and drop both senders in between, which would end
+            // the stream with that result still buffered. `is_empty()` closes
+            // that window, and is accurate once `is_closed()` holds because no
+            // further send is possible and the `Acquire` load has made every
+            // prior one visible.
             Poll::Ready(None)
-                if self.pending_streams.is_empty() && self.response_rx.is_closed() =>
+                if self.pending_streams.is_empty()
+                    && self.response_rx.is_closed()
+                    && self.response_rx.is_empty() =>
             {
                 Poll::Ready(None)
             }
@@ -240,9 +249,11 @@ impl WebApi {
         // the stream arm: `response_tx` has capacity 1, so a busy handler simply
         // stays one response ahead and the arm is ready on every call, leaving a
         // queued handle to buffer its whole payload in the unbounded chunk
-        // channel while never being delivered. Both `None` branches below make
-        // the outcome the same under either polling order, so the ordering is
-        // not load-bearing and does not need pinning down.
+        // channel while never being delivered. Both `None` branches below mean
+        // neither polling order can LOSE a value, so ordering is not worth
+        // paying that price for. It does still decide delivery order when both
+        // a response and a handle are ready, which is nondeterministic and
+        // which `recv()` has never promised either way.
         //
         // Known residual, pre-existing and not addressed here: if a handle is
         // queued whose chunk sender already died, it assembles to
@@ -356,6 +367,11 @@ async fn request_handler(
         Error::ConnectionClosed => ErrorKind::Disconnect.into(),
         other => ClientError::from(format!("{other}")),
     };
+    // Both senders must die together, here, when this task returns. `recv()`
+    // and `poll_next` rely on it: each treats one channel closing as "check the
+    // other", so a `stream_tx` that outlived `response_tx` would turn a
+    // `ChannelClosed` return into an indefinite wait. Keep both owned by this
+    // task; do not move either into a longer-lived one.
     let _ = response_tx.send(Err(error)).await;
 }
 
@@ -1053,8 +1069,11 @@ mod test {
             .await
             .expect("sending the late response must succeed");
 
-        let err = receiving
+        // Bounded so a regression that never resolves fails the test instead of
+        // hanging the suite.
+        let err = tokio::time::timeout(Duration::from_secs(5), receiving)
             .await
+            .expect("recv() must resolve once the response is queued")
             .expect_err("the late response is an Err in this fixture");
         assert!(
             format!("{err}").contains("late response"),
@@ -1087,11 +1106,62 @@ mod test {
             );
         }
 
-        // Now nothing can arrive from either side.
+        // Now nothing can arrive from either side. Bounded for the same reason:
+        // the failure mode this guards against is a stream that never ends.
         drop(response_tx);
+        let ended = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("the stream must end rather than hang");
         assert!(
-            client.next().await.is_none(),
+            ended.is_none(),
             "the stream must end once both channels are closed and drained"
+        );
+    }
+
+    /// An assembly still in flight also keeps the stream alive.
+    ///
+    /// Pins the `pending_streams.is_empty()` half of the terminal condition.
+    /// The other `poll_next` tests all queue a handle whose payload is already
+    /// complete, so their assemblies finish on the first poll and never leave
+    /// anything pending for the guard to see.
+    #[tokio::test]
+    async fn poll_next_waits_for_an_assembly_still_in_flight() {
+        // Keep the chunk sender alive, so the payload is incomplete and the
+        // assembly cannot finish yet.
+        let (handle, sender) = queued_stream("streamed payload");
+
+        let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
+        let (response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+        let (stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+        stream_tx
+            .send(handle)
+            .await
+            .expect("queueing the handle must succeed");
+        drop(response_tx);
+        drop(stream_tx);
+
+        let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
+        {
+            // Two polls: the first moves the handle into `pending_streams`, the
+            // second finds every channel closed with the assembly unfinished.
+            let mut next = std::pin::pin!(client.next());
+            assert!(poll_once(next.as_mut()).is_pending());
+            assert!(
+                poll_once(next.as_mut()).is_pending(),
+                "the stream ended while an assembly was still in flight"
+            );
+        }
+
+        // Completing the stream lets it drain normally.
+        drop(sender);
+        let item = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("the stream must resolve once the assembly can finish")
+            .expect("the assembled response must be delivered");
+        let err = item.expect_err("the streamed payload is an Err in this fixture");
+        assert!(
+            format!("{err}").contains("streamed payload"),
+            "the in-flight assembly was dropped instead of delivered, got: {err}"
         );
     }
 
