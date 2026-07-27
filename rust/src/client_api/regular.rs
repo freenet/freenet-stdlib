@@ -994,7 +994,7 @@ mod test {
     /// This pins the stream arm's `None` branch. With `biased;` that arm is
     /// only reached when `response_rx` is open but empty, so "the stream side
     /// is finished" has to mean "keep waiting for responses", not "report the
-    /// connection closed" — the response channel is still live and about to
+    /// connection closed": the response channel is still live and about to
     /// deliver. Reporting `ChannelClosed` here would drop a healthy connection.
     #[tokio::test]
     async fn recv_keeps_waiting_for_responses_after_the_stream_channel_closes() {
