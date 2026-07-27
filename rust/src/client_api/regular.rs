@@ -53,17 +53,27 @@ impl Stream for WebApi {
         }
 
         // Poll regular responses.
-        match self.response_rx.poll_recv(cx) {
+        //
+        // A closed response channel is not terminal on its own:
+        // `request_handler` drops both senders together, so a `WsStreamHandle`
+        // it queued beforehand can still be waiting in `stream_rx`, and
+        // assemblies may still be in flight. Returning `None` here discarded a
+        // complete streamed response. Carry this poll's verdict down to the
+        // stream arm instead, which ends the stream on the full joint
+        // condition.
+        //
+        // The verdict has to come from THIS poll rather than a later
+        // `is_closed()` check: that reports "every sender dropped", not
+        // "drained", so between the two the handler could queue its final
+        // result and drop both senders, and the stream would end with that
+        // result still buffered. `Ready(None)` from `poll_recv` means closed
+        // AND drained, observed atomically, and once closed nothing more can
+        // arrive.
+        let responses_finished = match self.response_rx.poll_recv(cx) {
             Poll::Ready(Some(result)) => return Poll::Ready(Some(result)),
-            // Closed and drained. Not terminal on its own: `request_handler`
-            // drops both senders together, so a `WsStreamHandle` it queued
-            // beforehand can still be waiting in `stream_rx`, and assemblies
-            // may still be in flight. Fall through to the stream arm, which
-            // ends the stream on the full joint condition. Returning `None`
-            // here discarded a complete streamed response.
-            Poll::Ready(None) => {}
-            Poll::Pending => {}
-        }
+            Poll::Ready(None) => true,
+            Poll::Pending => false,
+        };
 
         // Poll stream handles and spawn assembly as a pending future.
         match self.stream_rx.poll_recv(cx) {
@@ -82,26 +92,13 @@ impl Stream for WebApi {
                 Poll::Pending
             }
             // End the stream only when there is nothing left anywhere: no
-            // queued handle, no assembly in flight, and nothing more that can
-            // arrive on the response channel. Without the response conjunct a
-            // live connection whose response channel merely happened to be
-            // empty would be reported as ended, which is what the stream arm of
-            // `recv()` guards against. This is the only way the stream can
-            // terminate, so both halves matter.
-            //
-            // `is_closed()` alone is NOT enough: it means "every sender has
-            // dropped", not "drained", and the response arm's verdict above is
-            // already stale by the time we get here. The handler can queue its
-            // final result and drop both senders in between, which would end
-            // the stream with that result still buffered. `is_empty()` closes
-            // that window, and is accurate once `is_closed()` holds because no
-            // further send is possible and the `Acquire` load has made every
-            // prior one visible.
-            Poll::Ready(None)
-                if self.pending_streams.is_empty()
-                    && self.response_rx.is_closed()
-                    && self.response_rx.is_empty() =>
-            {
+            // queued handle, no assembly in flight, and no more responses
+            // coming. Without the response conjunct a live connection whose
+            // response channel merely happened to be empty would be reported as
+            // ended, which is what the stream arm of `recv()` guards against.
+            // This is the only way the stream can terminate, so every part of
+            // the condition matters.
+            Poll::Ready(None) if self.pending_streams.is_empty() && responses_finished => {
                 Poll::Ready(None)
             }
             _ => Poll::Pending,
