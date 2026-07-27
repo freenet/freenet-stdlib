@@ -1911,7 +1911,7 @@ mod node_diagnostics_response_tests {
 
 #[cfg(test)]
 mod client_request_test {
-    use crate::client_api::{ContractRequest, TryFromFbs};
+    use crate::client_api::{ContractRequest, TryFromFbs, WsApiError};
     use crate::contract_interface::UpdateData;
     use crate::generated::client_request::root_as_client_request;
 
@@ -2000,7 +2000,7 @@ mod client_request_test {
     ///
     /// Built programmatically rather than from a hardcoded byte blob. The blob
     /// this replaces carried a present-but-ZERO-LENGTH `code` field, which is
-    /// what the TypeScript SDK's `ContractKey.fromInstanceId(...)` emits — a
+    /// what the TypeScript SDK's `ContractKey.fromInstanceId(...)` emits: a
     /// request the node cannot serve, because an UPDATE supplies no contract
     /// code and freenet-core resolves the WASM by code hash. Nobody could see
     /// that from reading the test; it took instrumenting the decoder. So the
@@ -2112,7 +2112,7 @@ mod client_request_test {
     }
 
     /// The exact bytes the TypeScript SDK's own test suite asserts as a correct
-    /// `UpdateRequest` — pinned here so the two suites cannot disagree silently.
+    /// `UpdateRequest`: pinned here so the two suites cannot disagree silently.
     ///
     /// Copied verbatim from `typescript/tests/websocket-interface.test.ts`
     /// (`EXPECTED_UPDATE_REQ`). It is byte-for-byte the blob this PR deleted
@@ -2127,11 +2127,16 @@ mod client_request_test {
     /// and stays green. Both suites run in CI, so this test is the only thing
     /// that makes that disagreement visible.
     ///
-    /// **If the TypeScript SDK is fixed** (see freenet/freenet-core#4978 — the
-    /// candidate is making `UpdateRequest` reject a key whose `code` is not 32
-    /// bytes), this test and the TS suite's expected-byte array must be updated
-    /// together. Leaving one behind re-creates the mirror-pinning that hid the
-    /// original bug.
+    /// Scope, so this is not over-trusted: it is a COPY of the TypeScript
+    /// array, not a reference to it. Nothing mechanically ties the two, so
+    /// editing the TypeScript side fails nothing here. (`include_str!` across
+    /// to `typescript/` is not the fix: `rust/` is the published package root
+    /// and the path would escape it.) So this is a convention, and the
+    /// convention is: if the TypeScript SDK is fixed (see
+    /// freenet/freenet-core#4978, whose candidate is making `UpdateRequest`
+    /// reject a key whose `code` is not 32 bytes), update the array and this
+    /// constant together. Leaving one behind re-creates the mirror-pinning
+    /// that hid the original bug.
     const TS_SDK_EXPECTED_UPDATE_REQ: &[u8] = &[
         4, 0, 0, 0, 220, 255, 255, 255, 8, 0, 0, 0, 0, 0, 0, 1, 232, 255, 255, 255, 8, 0, 0, 0, 0,
         0, 0, 2, 204, 255, 255, 255, 16, 0, 0, 0, 52, 0, 0, 0, 8, 0, 12, 0, 11, 0, 4, 0, 8, 0, 0,
@@ -2173,6 +2178,145 @@ mod client_request_test {
         assert!(
             msg.contains("4978"),
             "the error must point at the tracking issue for the real fix, got: {msg}"
+        );
+    }
+
+    /// Build a `ClientRequest` carrying a GET or SUBSCRIBE whose `ContractKey`
+    /// has an `instance` vector of the given length.
+    ///
+    /// The length is a parameter because the flatbuffers verifier checks that a
+    /// `(required)` vector is PRESENT, not that it is the right SIZE, so a
+    /// wrong-length instance is a shape a peer can actually put on the wire and
+    /// that `flatbuffers::root` will happily hand to the decoder.
+    fn client_request_with_instance_len(instance_len: usize, subscribe: bool) -> Vec<u8> {
+        use crate::generated::client_request::{
+            finish_client_request_buffer, ClientRequest as FbsClientRequest, ClientRequestArgs,
+            ClientRequestType, ContractRequest as FbsContractRequest, ContractRequestArgs,
+            ContractRequestType, Get as FbsGet, GetArgs, Subscribe as FbsSubscribe, SubscribeArgs,
+        };
+        use crate::generated::common::{
+            ContractInstanceId as FbsContractInstanceId, ContractInstanceIdArgs,
+            ContractKey as FbsContractKey, ContractKeyArgs,
+        };
+
+        let mut b = flatbuffers::FlatBufferBuilder::new();
+        let instance_data = b.create_vector(&vec![1u8; instance_len]);
+        let instance_offset = FbsContractInstanceId::create(
+            &mut b,
+            &ContractInstanceIdArgs {
+                data: Some(instance_data),
+            },
+        );
+        let code = Some(b.create_vector(&[42u8; 32]));
+        let key_offset = FbsContractKey::create(
+            &mut b,
+            &ContractKeyArgs {
+                instance: Some(instance_offset),
+                code,
+            },
+        );
+
+        let (request_type, request_offset) = if subscribe {
+            let sub = FbsSubscribe::create(
+                &mut b,
+                &SubscribeArgs {
+                    key: Some(key_offset),
+                    summary: None,
+                },
+            );
+            (ContractRequestType::Subscribe, sub.as_union_value())
+        } else {
+            let get = FbsGet::create(
+                &mut b,
+                &GetArgs {
+                    key: Some(key_offset),
+                    fetch_contract: false,
+                    subscribe: false,
+                    blocking_subscribe: false,
+                },
+            );
+            (ContractRequestType::Get, get.as_union_value())
+        };
+
+        let contract_offset = FbsContractRequest::create(
+            &mut b,
+            &ContractRequestArgs {
+                contract_request_type: request_type,
+                contract_request: Some(request_offset),
+            },
+        );
+        let client_offset = FbsClientRequest::create(
+            &mut b,
+            &ClientRequestArgs {
+                client_request_type: ClientRequestType::ContractRequest,
+                client_request: Some(contract_offset.as_union_value()),
+            },
+        );
+        finish_client_request_buffer(&mut b, client_offset);
+        b.finished_data().to_vec()
+    }
+
+    fn decode_client_request(bytes: &[u8]) -> Result<ContractRequest<'_>, WsApiError> {
+        let client_request =
+            root_as_client_request(bytes).expect("must be a well-formed ClientRequest");
+        let contract_request = client_request
+            .client_request_as_contract_request()
+            .expect("must be a ContractRequest");
+        ContractRequest::try_decode_fbs(&contract_request)
+    }
+
+    /// A GET whose instance is the wrong length is rejected, not panicked on.
+    ///
+    /// Pinned at the REQUEST level rather than through `ContractKey`'s decoder,
+    /// because GET does not go through `ContractKey::try_decode_fbs` at all: it
+    /// reads the instance bytes directly. A test that only covers the UPDATE
+    /// path leaves a revert of this site green, which is exactly the state this
+    /// suite was in before: the panic fix reached three call sites and only one
+    /// of them was pinned.
+    #[test]
+    fn get_with_wrong_length_instance_is_rejected_not_panicking() {
+        let bytes = client_request_with_instance_len(8, false);
+        let short = decode_client_request(&bytes)
+            .expect_err("a GET with an 8-byte instance must be rejected");
+        assert!(
+            short.to_string().contains("ContractKey.instance")
+                && short.to_string().contains("got 8 bytes"),
+            "got: {short}"
+        );
+
+        let bytes = client_request_with_instance_len(64, false);
+        let long = decode_client_request(&bytes)
+            .expect_err("a GET with a 64-byte instance must be rejected");
+        assert!(long.to_string().contains("got 64 bytes"), "got: {long}");
+    }
+
+    /// Same for SUBSCRIBE, which is a third independent decode site.
+    #[test]
+    fn subscribe_with_wrong_length_instance_is_rejected_not_panicking() {
+        let bytes = client_request_with_instance_len(8, true);
+        let short = decode_client_request(&bytes)
+            .expect_err("a SUBSCRIBE with an 8-byte instance must be rejected");
+        assert!(
+            short.to_string().contains("ContractKey.instance")
+                && short.to_string().contains("got 8 bytes"),
+            "got: {short}"
+        );
+
+        let bytes = client_request_with_instance_len(64, true);
+        let long = decode_client_request(&bytes)
+            .expect_err("a SUBSCRIBE with a 64-byte instance must be rejected");
+        assert!(long.to_string().contains("got 64 bytes"), "got: {long}");
+    }
+
+    /// A well-formed GET still decodes: the length guard must reject the wrong
+    /// size without breaking the right one.
+    #[test]
+    fn get_with_valid_instance_still_decodes() {
+        let bytes = client_request_with_instance_len(32, false);
+        let req = decode_client_request(&bytes).expect("a 32-byte instance must still decode");
+        assert!(
+            matches!(req, ContractRequest::Get { .. }),
+            "expected a Get, got {req:?}"
         );
     }
 

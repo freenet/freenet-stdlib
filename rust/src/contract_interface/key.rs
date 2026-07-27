@@ -293,8 +293,8 @@ impl<'a> TryFromFbs<&FbsContractKey<'a>> for ContractKey {
         let instance = instance_id_from_fbs(key.instance().data().bytes())?;
         // The `code` field carries the already-computed 32-byte code hash
         // (BLAKE3 of the wasm), so pass those bytes straight through. Calling
-        // `CodeHash::from_code` here would hash the hash again —
-        // BLAKE3(BLAKE3(wasm)) — yielding a key that never matches the store and
+        // `CodeHash::from_code` here would hash the hash again -
+        // BLAKE3(BLAKE3(wasm)): yielding a key that never matches the store and
         // breaking every FlatBuffers UpdateRequest ("Contract not in store and
         // no code provided"). GET/SUBSCRIBE dodged this because they decode only
         // the instance id; UPDATE decodes the full key. The delegate decoder
@@ -306,7 +306,7 @@ impl<'a> TryFromFbs<&FbsContractKey<'a>> for ContractKey {
         // `ContractKey.fromInstanceId(...)` emits a present-but-empty vector.
         // That is a deliberate narrowing, not an oversight: `try_decode_fbs` is
         // reached only from the UPDATE decode path, and an UPDATE genuinely needs
-        // the hash today — freenet-core gates on `code_blob_stored(key.code_hash())`
+        // the hash today: freenet-core gates on `code_blob_stored(key.code_hash())`
         // and, because UPDATE supplies no contract code, a miss fails the request
         // with "Contract not in store and no code provided". So an empty or absent
         // `code` has never produced a working UPDATE; before this change it merely
@@ -475,7 +475,7 @@ mod fbs_tests {
     /// A wrong-length `instance` is rejected, not panicked on.
     ///
     /// `instance`/`data` are `(required)` in the schema, but the flatbuffers
-    /// verifier checks PRESENCE, not LENGTH — so `flatbuffers::root` accepts an
+    /// verifier checks PRESENCE, not LENGTH: so `flatbuffers::root` accepts an
     /// 8-byte instance and the `try_into().unwrap()` this replaced then panicked
     /// with `TryFromSliceError`. Nothing catches unwind on this path and
     /// `panic = "abort"` is not set, so it killed the client's connection task:
@@ -491,7 +491,7 @@ mod fbs_tests {
         );
     }
 
-    /// An over-long `instance` is rejected too — the guard is a length equality,
+    /// An over-long `instance` is rejected too: the guard is a length equality,
     /// not a minimum, so a peer cannot pad its way past it.
     #[test]
     fn contract_key_decode_rejects_long_instance() {
@@ -509,7 +509,7 @@ mod fbs_tests {
     ///    TypeScript SDK's `ContractKey.fromInstanceId(...)` emits exactly this
     ///    shape, so narrowing to "32 bytes or nothing" is a deliberate call, not
     ///    an accident of using `CodeHash::try_from`. It is safe because an
-    ///    UPDATE carrying no code hash could never be served anyway — the node
+    ///    UPDATE carrying no code hash could never be served anyway: the node
     ///    resolves the WASM by code hash and fails at the store gate.
     /// 2. The message. The whole point of rejecting early is diagnosis: the
     ///    previous text was `io::ErrorKind::InvalidData`, which stringifies to
@@ -545,8 +545,8 @@ mod fbs_tests {
     }
 
     /// An absent `code` is rejected the same way. Unreachable from any
-    /// first-party producer — the TypeScript `pack()` always emits the vector
-    /// and the Rust stdlib has no client-to-node FBS request encoder — so this
+    /// first-party producer: the TypeScript `pack()` always emits the vector
+    /// and the Rust stdlib has no client-to-node FBS request encoder: so this
     /// only guards hand-rolled third-party encoders. Behavior is unchanged from
     /// before this PR (it was already rejected); only the message improved, so
     /// what is pinned here is that the two paths stay consistent.

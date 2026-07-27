@@ -345,7 +345,7 @@ describe("Freenet Websocket API - Result Deserialization", () => {
     // probes for it by code hash). This suite therefore asserts an encoding the
     // node will refuse. The Rust side pins that disagreement explicitly in
     // `client_api::client_events::typescript_sdk_instance_only_update_is_rejected_with_guidance`
-    // — if this array changes, that test must change with it, and vice versa.
+    //: if this array changes, that test must change with it, and vice versa.
     // Making `UpdateRequest` require a 32-byte code hash is tracked in
     // freenet/freenet-core#4978.
     // Define the expected Uint8Array request

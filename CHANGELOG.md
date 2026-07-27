@@ -5,7 +5,7 @@
 ### Fixed
 - **`ContractKey::try_decode_fbs` no longer double-hashes the code hash.** The
   wire `code` field carries the already-computed 32-byte code hash, but the
-  decoder passed it to `CodeHash::from_code` — the *hashing* constructor —
+  decoder passed it to `CodeHash::from_code`: the *hashing* constructor -
   producing `BLAKE3(BLAKE3(wasm))`, a key that never matches the store. Every
   FlatBuffers `UpdateRequest` failed as a result, which the client surfaced as
   a 30-second timeout rather than an error. GET and SUBSCRIBE were unaffected
@@ -21,8 +21,14 @@
   length. An 8-byte instance passed verification and then hit a
   `try_into().unwrap()`, panicking with `TryFromSliceError`; nothing catches
   unwind on that path, so a malformed message from any peer killed that
-  client's connection task. Reachable from UPDATE, GET and SUBSCRIBE; all
-  three now reject with an explicit error.
+  client's connection task. The `ContractKey.instance` field is now
+  length-checked at all three sites that decode it (UPDATE, GET, SUBSCRIBE).
+
+  Note the narrow scope: this covers the `ContractKey` fields only. The same
+  unchecked-`unwrap` class survives elsewhere on the same UPDATE request -
+  `UpdateData`'s `Related*` variants apply base58 decoding to bytes already in
+  final form and then unwrap: so an FBS UPDATE carrying one of those variants
+  still panics. Tracked in freenet-core#4983.
 
 ### Compatibility
 - **A `ContractKey` whose `code` field is absent or not exactly 32 bytes is now
@@ -41,7 +47,7 @@
   naming the field and the remedy.
 
   The real fix is for the node to resolve the code hash from the instance id,
-  as GET and SUBSCRIBE already do via `code_hash_from_id` — tracked in
+  as GET and SUBSCRIBE already do via `code_hash_from_id`: tracked in
   freenet-core#4978. Until then, build keys with both parts:
   `new ContractKey(instance, code)` rather than
   `ContractKey.fromInstanceId(...)`.
