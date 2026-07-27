@@ -28,7 +28,7 @@
   unchecked-`unwrap` class survives elsewhere on the same UPDATE request -
   `UpdateData`'s `Related*` variants apply base58 decoding to bytes already in
   final form and then unwrap: so an FBS UPDATE carrying one of those variants
-  still panics. Tracked in freenet-core#4983.
+  still panics. Tracked in freenet-core#4996.
 
 ### Compatibility
 - **A `ContractKey` whose `code` field is absent or not exactly 32 bytes is now
