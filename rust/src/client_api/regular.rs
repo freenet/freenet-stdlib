@@ -151,6 +151,24 @@ impl WebApi {
         }
     }
 
+    /// Build a `WebApi` directly over channel halves, so a test can drive
+    /// `recv()` against a chosen channel state without a socket or a live
+    /// request handler.
+    #[cfg(test)]
+    fn from_parts(
+        request_tx: Sender<ClientRequest<'static>>,
+        response_rx: Receiver<HostResult>,
+        stream_rx: Receiver<WsStreamHandle>,
+    ) -> Self {
+        Self {
+            request_tx,
+            response_rx,
+            stream_rx,
+            queue: VecDeque::new(),
+            pending_streams: FuturesUnordered::new(),
+        }
+    }
+
     pub async fn send(&mut self, request: ClientRequest<'static>) -> Result<(), Error> {
         tracing::debug!(?request, "sending request");
         self.request_tx
@@ -176,21 +194,54 @@ impl WebApi {
     /// them may cause responses to be delivered to the wrong consumer. Choose
     /// one consumption pattern per `WebApi` instance.
     pub async fn recv(&mut self) -> HostResult {
+        // Neither channel closing is terminal on its own. `request_handler`
+        // delivers its final `HostResult` on `response_tx` and only *then*
+        // returns, which drops both senders — so from the caller's side the
+        // buffered response and the closure of the stream channel become ready
+        // at the same instant, and `select!` chooses between ready arms at
+        // random. Treating whichever arm won as authoritative discarded the
+        // other one's pending value: roughly half the time the caller got a
+        // generic "comm channel between client/host closed" instead of the real
+        // error the handler had just queued. Report a closed connection only
+        // once BOTH channels are exhausted. (`Stream::poll_next` above already
+        // gets this precedence right; `recv` was the outlier.)
         tokio::select! {
             res = self.response_rx.recv() => {
-                res.ok_or_else(|| ClientError::from(ErrorKind::ChannelClosed))?
+                match res {
+                    Some(res) => res,
+                    None => {
+                        let handle = self
+                            .stream_rx
+                            .recv()
+                            .await
+                            .ok_or_else(|| ClientError::from(ErrorKind::ChannelClosed))?;
+                        Self::assemble_stream(handle).await
+                    }
+                }
             }
             handle = self.stream_rx.recv() => {
-                let handle = handle.ok_or_else(|| ClientError::from(ErrorKind::ChannelClosed))?;
-                let complete = handle
-                    .assemble()
-                    .await
-                    .map_err(|e| ClientError::from(format!("{e}")))?;
-                let inner: HostResult = bincode::deserialize(&complete)
-                    .map_err(|e| ClientError::from(format!("{e}")))?;
-                inner
+                match handle {
+                    Some(handle) => Self::assemble_stream(handle).await,
+                    None => self
+                        .response_rx
+                        .recv()
+                        .await
+                        .ok_or_else(|| ClientError::from(ErrorKind::ChannelClosed))?,
+                }
             }
         }
+    }
+
+    /// Reassemble a streamed response into the complete [`HostResult`] the
+    /// server sent.
+    async fn assemble_stream(handle: WsStreamHandle) -> HostResult {
+        let complete = handle
+            .assemble()
+            .await
+            .map_err(|e| ClientError::from(format!("{e}")))?;
+        let inner: HostResult =
+            bincode::deserialize(&complete).map_err(|e| ClientError::from(format!("{e}")))?;
+        inner
     }
 
     /// Receive the next streamed response as a [`WsStreamHandle`].
@@ -762,6 +813,78 @@ mod test {
         drop(client);
         let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
         Ok(())
+    }
+
+    /// `recv()` must not throw away a delivered response because the *other*
+    /// internal channel closed first.
+    ///
+    /// `request_handler` sends its final `HostResult` on `response_tx` and only
+    /// then returns, dropping both senders. Whenever the caller is scheduled
+    /// after the handler has finished — the normal case on a loaded machine —
+    /// both arms of `recv()`'s `select!` are ready at once, and `select!` picks
+    /// a ready arm at random. The old code treated a closed `stream_rx` as
+    /// terminal, so about half of those interleavings returned a generic
+    /// `ChannelClosed` and discarded the real error sitting in `response_rx`.
+    /// That is what made `test_send_oversized_rejected_before_streaming` fail
+    /// 6 runs in 25 of the full suite under load, reporting "comm channel
+    /// between client/host closed" in place of the guard's own message.
+    ///
+    /// This reproduces that interleaving directly rather than racing for it:
+    /// the response is buffered and both senders are dropped *before* `recv()`
+    /// is called, so the failing state is set up deterministically. The loop is
+    /// what makes the pin sharp — one iteration would only catch a reverted fix
+    /// half the time, whereas 200 make a false pass a 2^-200 event.
+    #[tokio::test]
+    async fn recv_delivers_buffered_response_when_stream_channel_closes_first() {
+        for i in 0..200 {
+            let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
+            let (response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+            let (stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+
+            // Exactly the shutdown ordering `request_handler` performs: deliver
+            // the final result, then drop the senders on task exit.
+            response_tx
+                .send(Err(ClientError::from(
+                    "request exceeds maximum".to_string(),
+                )))
+                .await
+                .expect("buffering the response must succeed");
+            drop(response_tx);
+            drop(stream_tx);
+
+            let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
+            let err = client
+                .recv()
+                .await
+                .expect_err("the buffered error must be delivered");
+            assert!(
+                format!("{err}").contains("request exceeds maximum"),
+                "iteration {i}: recv() discarded the buffered response and reported a closed \
+                 channel instead, got: {err}"
+            );
+        }
+    }
+
+    /// The mirror case: a stream handle queued before shutdown must survive the
+    /// response channel closing first. Guards against "fixing" the race by
+    /// simply inverting which arm wins.
+    #[tokio::test]
+    async fn recv_reports_closed_only_when_both_channels_are_exhausted() {
+        let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
+        let (_response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+        let (_stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+        drop(_response_tx);
+        drop(_stream_tx);
+
+        let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
+        let err = client
+            .recv()
+            .await
+            .expect_err("both channels closed and empty must surface as ChannelClosed");
+        assert!(
+            format!("{err}").contains("comm channel between client/host closed"),
+            "expected the channel-closed error once nothing is left to deliver, got: {err}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
