@@ -1993,17 +1993,94 @@ mod client_request_test {
         Ok(())
     }
 
+    /// A well-formed FlatBuffers `UpdateRequest` decodes to the expected key
+    /// and delta.
+    ///
+    /// Built programmatically rather than from a hardcoded byte blob. The blob
+    /// this replaces carried a present-but-ZERO-LENGTH `code` field, which is
+    /// what the TypeScript SDK's `ContractKey.fromInstanceId(...)` emits — a
+    /// request the node cannot serve, because an UPDATE supplies no contract
+    /// code and freenet-core resolves the WASM by code hash. Nobody could see
+    /// that from reading the test; it took instrumenting the decoder. So the
+    /// fixture now carries a real 32-byte hash and says so in source.
+    ///
+    /// The empty and absent cases are covered in
+    /// `contract_interface::key::fbs_tests`, next to the decoder that rejects
+    /// them.
     #[test]
     fn test_build_contract_update_op_from_fbs() -> Result<(), Box<dyn std::error::Error>> {
-        let update_op = vec![
-            4, 0, 0, 0, 220, 255, 255, 255, 8, 0, 0, 0, 0, 0, 0, 1, 232, 255, 255, 255, 8, 0, 0, 0,
-            0, 0, 0, 2, 204, 255, 255, 255, 16, 0, 0, 0, 52, 0, 0, 0, 8, 0, 12, 0, 11, 0, 4, 0, 8,
-            0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 2, 210, 255, 255, 255, 4, 0, 0, 0, 8, 0, 0, 0, 1, 2, 3,
-            4, 5, 6, 7, 8, 8, 0, 12, 0, 8, 0, 4, 0, 8, 0, 0, 0, 8, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 6, 0, 8, 0, 4, 0, 6, 0, 0, 0, 4, 0, 0, 0, 32, 0, 0, 0, 85, 111, 11, 171, 40,
-            85, 240, 177, 207, 81, 106, 157, 173, 90, 234, 2, 250, 253, 75, 210, 62, 7, 6, 34, 75,
-            26, 229, 230, 107, 167, 17, 108,
-        ];
+        use crate::generated::client_request::{
+            finish_client_request_buffer, ClientRequest as FbsClientRequest, ClientRequestArgs,
+            ClientRequestType, ContractRequest as FbsContractRequest, ContractRequestArgs,
+            ContractRequestType, Update as FbsUpdate, UpdateArgs,
+        };
+        use crate::generated::common::{
+            ContractInstanceId as FbsContractInstanceId, ContractInstanceIdArgs,
+            ContractKey as FbsContractKey, ContractKeyArgs, DeltaUpdate, DeltaUpdateArgs,
+            UpdateData as FbsUpdateData, UpdateDataArgs, UpdateDataType,
+        };
+        use crate::prelude::ContractInstanceId;
+
+        // Derive the instance bytes from the expected id rather than pasting a
+        // magic array, so the assertion below can't drift from the fixture.
+        let instance_id = ContractInstanceId::try_from(EXPECTED_ENCODED_CONTRACT_ID.to_string())?;
+        // A distinct, arbitrary code hash: if the decoder ever re-hashes it
+        // (the BLAKE3(BLAKE3(wasm)) bug this PR fixes), the assertion fails.
+        let code_hash = [42u8; 32];
+        let delta_bytes = [1u8, 2, 3, 4, 5, 6, 7, 8];
+
+        let mut b = flatbuffers::FlatBufferBuilder::new();
+
+        let instance_data = b.create_vector(instance_id.as_bytes());
+        let instance_offset = FbsContractInstanceId::create(
+            &mut b,
+            &ContractInstanceIdArgs {
+                data: Some(instance_data),
+            },
+        );
+        let code = Some(b.create_vector(&code_hash));
+        let key_offset = FbsContractKey::create(
+            &mut b,
+            &ContractKeyArgs {
+                instance: Some(instance_offset),
+                code,
+            },
+        );
+
+        let delta = b.create_vector(&delta_bytes);
+        let delta_offset = DeltaUpdate::create(&mut b, &DeltaUpdateArgs { delta: Some(delta) });
+        let update_data_offset = FbsUpdateData::create(
+            &mut b,
+            &UpdateDataArgs {
+                update_data_type: UpdateDataType::DeltaUpdate,
+                update_data: Some(delta_offset.as_union_value()),
+            },
+        );
+
+        let update_offset = FbsUpdate::create(
+            &mut b,
+            &UpdateArgs {
+                key: Some(key_offset),
+                data: Some(update_data_offset),
+            },
+        );
+        let contract_offset = FbsContractRequest::create(
+            &mut b,
+            &ContractRequestArgs {
+                contract_request_type: ContractRequestType::Update,
+                contract_request: Some(update_offset.as_union_value()),
+            },
+        );
+        let client_offset = FbsClientRequest::create(
+            &mut b,
+            &ClientRequestArgs {
+                client_request_type: ClientRequestType::ContractRequest,
+                client_request: Some(contract_offset.as_union_value()),
+            },
+        );
+        finish_client_request_buffer(&mut b, client_offset);
+
+        let update_op = b.finished_data().to_vec();
         let request = if let Ok(client_request) = root_as_client_request(&update_op) {
             let contract_request = client_request.client_request_as_contract_request().unwrap();
             ContractRequest::try_decode_fbs(&contract_request)?
@@ -2013,13 +2090,15 @@ mod client_request_test {
 
         match request {
             ContractRequest::Update { key, data } => {
+                assert_eq!(key.encoded_contract_id(), EXPECTED_ENCODED_CONTRACT_ID);
                 assert_eq!(
-                    key.encoded_contract_id(),
-                    "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9"
+                    key.code_hash().as_ref(),
+                    &code_hash,
+                    "the code hash must survive decode unchanged, not be re-hashed"
                 );
                 match data {
                     UpdateData::Delta(delta) => {
-                        assert_eq!(delta.to_vec(), &[1, 2, 3, 4, 5, 6, 7, 8])
+                        assert_eq!(delta.to_vec(), &delta_bytes)
                     }
                     _ => panic!("wrong update data type"),
                 }

@@ -229,6 +229,31 @@ impl std::fmt::Display for ContractKey {
     }
 }
 
+/// Error text for a `ContractKey` whose wire `code` field cannot be read as a
+/// contract code hash.
+///
+/// `observed` is the field's byte length, or `None` when the optional field was
+/// omitted entirely. Both cases share one message because they fail for the same
+/// reason and have the same remedy.
+///
+/// The old text was `CodeHash::try_from`'s `io::ErrorKind::InvalidData`, which
+/// stringifies to "invalid data" — nothing a browser developer can act on. Name
+/// the field, the expected length, what actually arrived, and why it matters.
+fn code_hash_error(observed: Option<usize>) -> String {
+    let seen = match observed {
+        Some(len) => format!("got {len} bytes"),
+        None => "the field was absent".to_string(),
+    };
+    format!(
+        "ContractKey.code must be the {CONTRACT_KEY_SIZE}-byte contract code hash; {seen}. \
+         An UPDATE cannot be addressed by instance id alone: the node resolves the \
+         contract's WASM by code hash, so a missing or wrong-length hash is rejected here \
+         instead of failing later as \"Contract not in store and no code provided\". Build \
+         the key with both parts — in the TypeScript SDK use `new ContractKey(instance, \
+         code)` rather than `ContractKey.fromInstanceId(...)`. See freenet/freenet-core#4978."
+    )
+}
+
 impl<'a> TryFromFbs<&FbsContractKey<'a>> for ContractKey {
     fn try_decode_fbs(key: &FbsContractKey<'a>) -> Result<Self, WsApiError> {
         let key_bytes: [u8; CONTRACT_KEY_SIZE] = key.instance().data().bytes().try_into().unwrap();
@@ -242,12 +267,31 @@ impl<'a> TryFromFbs<&FbsContractKey<'a>> for ContractKey {
         // the instance id; UPDATE decodes the full key. The delegate decoder
         // already does the pass-through correctly (see
         // `DelegateKey::try_decode_fbs`). Regression test below.
-        let code = key
+        //
+        // Anything other than exactly `CONTRACT_KEY_SIZE` bytes is rejected here,
+        // even though the schema marks `code` optional and the TypeScript SDK's
+        // `ContractKey.fromInstanceId(...)` emits a present-but-empty vector.
+        // That is a deliberate narrowing, not an oversight: `try_decode_fbs` is
+        // reached only from the UPDATE decode path, and an UPDATE genuinely needs
+        // the hash today — freenet-core gates on `code_blob_stored(key.code_hash())`
+        // and, because UPDATE supplies no contract code, a miss fails the request
+        // with "Contract not in store and no code provided". So an empty or absent
+        // `code` has never produced a working UPDATE; before this change it merely
+        // failed later, at the store gate, with an error pointing at the node
+        // rather than at the caller. Rejecting at the boundary with an actionable
+        // message is strictly better diagnostics for the same outcome.
+        //
+        // The honest end state is `Option<CodeHash>` threaded through
+        // `ContractRequest::Update`, once freenet-core resolves a `None` from the
+        // instance id the way GET and SUBSCRIBE already do via
+        // `code_hash_from_id`. That is tracked in freenet/freenet-core#4978; it
+        // needs a coordinated stdlib + core change, so it is not done here.
+        let code_bytes = key
             .code()
-            .map(|code_hash| CodeHash::try_from(code_hash.bytes()))
-            .transpose()
-            .map_err(|e| WsApiError::deserialization(e.to_string()))?
-            .ok_or_else(|| WsApiError::deserialization("ContractKey missing code hash".into()))?;
+            .map(|code_hash| code_hash.bytes())
+            .ok_or_else(|| WsApiError::deserialization(code_hash_error(None)))?;
+        let code = CodeHash::try_from(code_bytes)
+            .map_err(|_| WsApiError::deserialization(code_hash_error(Some(code_bytes.len()))))?;
         Ok(ContractKey { instance, code })
     }
 }
@@ -327,5 +371,109 @@ mod fbs_tests {
             "decoder must pass the code hash through unchanged, not re-hash it"
         );
         assert_eq!(decoded.id().as_bytes(), &instance_bytes);
+    }
+
+    /// Build a `ContractKey` flatbuffer whose `code` vector holds `code_bytes`,
+    /// or which omits the optional `code` field entirely when `code_bytes` is
+    /// `None`, and run it through the decoder.
+    fn decode_with_code(code_bytes: Option<&[u8]>) -> Result<ContractKey, WsApiError> {
+        let mut builder = flatbuffers::FlatBufferBuilder::new();
+        let instance_data = builder.create_vector(&[7u8; CONTRACT_KEY_SIZE]);
+        let instance_offset = FbsContractInstanceId::create(
+            &mut builder,
+            &ContractInstanceIdArgs {
+                data: Some(instance_data),
+            },
+        );
+        let code = code_bytes.map(|bytes| builder.create_vector(bytes));
+        let key_offset = FbsContractKey::create(
+            &mut builder,
+            &ContractKeyArgs {
+                instance: Some(instance_offset),
+                code,
+            },
+        );
+        builder.finish_minimal(key_offset);
+
+        let bytes = builder.finished_data().to_vec();
+        let fbs_key =
+            flatbuffers::root::<FbsContractKey>(&bytes).expect("valid ContractKey flatbuffer");
+        ContractKey::try_decode_fbs(&fbs_key)
+    }
+
+    /// A zero-length `code` is rejected, and the error says what to do about it.
+    ///
+    /// This pins BOTH halves of the decision, because each is easy to undo
+    /// without noticing the other:
+    ///
+    /// 1. The rejection itself. The schema marks `code` optional and the
+    ///    TypeScript SDK's `ContractKey.fromInstanceId(...)` emits exactly this
+    ///    shape, so narrowing to "32 bytes or nothing" is a deliberate call, not
+    ///    an accident of using `CodeHash::try_from`. It is safe because an
+    ///    UPDATE carrying no code hash could never be served anyway — the node
+    ///    resolves the WASM by code hash and fails at the store gate.
+    /// 2. The message. The whole point of rejecting early is diagnosis: the
+    ///    previous text was `io::ErrorKind::InvalidData`, which stringifies to
+    ///    "invalid data" and told a browser developer nothing. Reverting to a
+    ///    bare `try_from` error would keep this test's first assertion green
+    ///    while destroying the reason the change was made, so the message
+    ///    content is asserted too.
+    #[test]
+    fn contract_key_decode_rejects_empty_code_with_actionable_error() {
+        let err = decode_with_code(Some(&[])).expect_err("empty code must be rejected");
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("ContractKey.code"),
+            "error must name the offending field, got: {msg}"
+        );
+        assert!(
+            msg.contains("32-byte"),
+            "error must state the expected length, got: {msg}"
+        );
+        assert!(
+            msg.contains("got 0 bytes"),
+            "error must state the actual length, got: {msg}"
+        );
+        assert!(
+            msg.contains("instance id alone"),
+            "error must explain why the hash is required, got: {msg}"
+        );
+        assert!(
+            msg.contains("4978"),
+            "error must point at the tracking issue for the real fix, got: {msg}"
+        );
+    }
+
+    /// An absent `code` is rejected the same way. Unreachable from any
+    /// first-party producer — the TypeScript `pack()` always emits the vector
+    /// and the Rust stdlib has no client-to-node FBS request encoder — so this
+    /// only guards hand-rolled third-party encoders. Behavior is unchanged from
+    /// before this PR (it was already rejected); only the message improved, so
+    /// what is pinned here is that the two paths stay consistent.
+    #[test]
+    fn contract_key_decode_rejects_absent_code_with_actionable_error() {
+        let err = decode_with_code(None).expect_err("absent code must be rejected");
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("ContractKey.code") && msg.contains("4978"),
+            "absent-code error must carry the same guidance as the empty case, got: {msg}"
+        );
+        assert!(
+            msg.contains("absent"),
+            "absent-code error must distinguish itself from a wrong-length one, got: {msg}"
+        );
+    }
+
+    /// A wrong-but-nonzero length is rejected with the length it saw. Guards the
+    /// obvious partial fix of special-casing only the empty vector.
+    #[test]
+    fn contract_key_decode_rejects_wrong_length_code() {
+        let err = decode_with_code(Some(&[1u8; 16])).expect_err("16-byte code must be rejected");
+        assert!(
+            err.to_string().contains("got 16 bytes"),
+            "error must report the observed length, got: {err}"
+        );
     }
 }
