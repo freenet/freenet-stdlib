@@ -237,8 +237,19 @@ impl std::fmt::Display for ContractKey {
 /// reason and have the same remedy.
 ///
 /// The old text was `CodeHash::try_from`'s `io::ErrorKind::InvalidData`, which
-/// stringifies to "invalid data" — nothing a browser developer can act on. Name
+/// stringifies to "invalid data": nothing a browser developer can act on. Name
 /// the field, the expected length, what actually arrived, and why it matters.
+///
+/// Be precise about WHY, because the obvious phrasing is wrong. The node does
+/// NOT resolve a contract's WASM by code hash. It resolves by INSTANCE id:
+/// `ContractStore::fetch_contract` recovers the real hash from
+/// `key_to_code_part[key.id()]`, the module cache keys on `ContractKey` whose
+/// `Hash`/`Eq` use only the instance, and the state stores key on
+/// `as_bytes()`, which is instance bytes. The hash is load-bearing at exactly
+/// one place: the gate that asks whether this node already holds the code
+/// blob. Saying otherwise would tell a reader the hash is fundamentally
+/// required, which is the opposite of what freenet-core#4978 argues, and #4978
+/// is the fix we point them at.
 fn code_hash_error(observed: Option<usize>) -> String {
     let seen = match observed {
         Some(len) => format!("got {len} bytes"),
@@ -246,18 +257,40 @@ fn code_hash_error(observed: Option<usize>) -> String {
     };
     format!(
         "ContractKey.code must be the {CONTRACT_KEY_SIZE}-byte contract code hash; {seen}. \
-         An UPDATE cannot be addressed by instance id alone: the node resolves the \
-         contract's WASM by code hash, so a missing or wrong-length hash is rejected here \
-         instead of failing later as \"Contract not in store and no code provided\". Build \
-         the key with both parts — in the TypeScript SDK use `new ContractKey(instance, \
-         code)` rather than `ContractKey.fromInstanceId(...)`. See freenet/freenet-core#4978."
+         An UPDATE cannot be addressed by instance id alone: the node gates an UPDATE on \
+         already holding the contract's code blob and probes for it by code hash, so a \
+         missing or wrong-length hash is rejected here instead of failing later as \
+         \"missing contract: <key>\". Build the key with both parts: in the TypeScript SDK \
+         use `new ContractKey(instance, code)` rather than \
+         `ContractKey.fromInstanceId(...)`. See freenet/freenet-core#4978."
     )
+}
+
+/// Decode a wire `ContractInstanceId`'s bytes, rejecting a wrong length instead
+/// of panicking.
+///
+/// The flatbuffers verifier checks that a `(required)` vector is PRESENT; it
+/// does not check its LENGTH. So a peer can hand us an 8-byte `instance` that
+/// `flatbuffers::root` happily accepts, and the `try_into().unwrap()` this
+/// replaces then panicked with `TryFromSliceError`. There is no `catch_unwind`
+/// on this path and `panic = "abort"` is not set, so that unwound and killed
+/// the client's connection task: a wire-reachable remote panic.
+pub(crate) fn instance_id_from_fbs(data: &[u8]) -> Result<ContractInstanceId, WsApiError> {
+    let bytes: [u8; CONTRACT_KEY_SIZE] = data.try_into().map_err(|_| {
+        WsApiError::deserialization(format!(
+            "ContractKey.instance must be the {CONTRACT_KEY_SIZE}-byte contract instance id; \
+             got {} bytes. The flatbuffers verifier only checks that this required field is \
+             present, not that it is the right length, so a wrong-length id reaches the \
+             decoder and must be rejected here.",
+            data.len()
+        ))
+    })?;
+    Ok(ContractInstanceId::new(bytes))
 }
 
 impl<'a> TryFromFbs<&FbsContractKey<'a>> for ContractKey {
     fn try_decode_fbs(key: &FbsContractKey<'a>) -> Result<Self, WsApiError> {
-        let key_bytes: [u8; CONTRACT_KEY_SIZE] = key.instance().data().bytes().try_into().unwrap();
-        let instance = ContractInstanceId::new(key_bytes);
+        let instance = instance_id_from_fbs(key.instance().data().bytes())?;
         // The `code` field carries the already-computed 32-byte code hash
         // (BLAKE3 of the wasm), so pass those bytes straight through. Calling
         // `CodeHash::from_code` here would hash the hash again —
@@ -338,47 +371,32 @@ mod fbs_tests {
     /// UpdateRequest with "Contract not in store and no code provided".
     #[test]
     fn contract_key_code_hash_passes_through_fbs_decode() {
-        let instance_bytes = [7u8; CONTRACT_KEY_SIZE];
         // A distinct, arbitrary code hash. The decoder must reproduce it
         // verbatim; if it re-hashes, the assertion below fails.
         let code_bytes = [42u8; CONTRACT_KEY_SIZE];
-
-        let mut builder = flatbuffers::FlatBufferBuilder::new();
-        let instance_data = builder.create_vector(&instance_bytes);
-        let instance_offset = FbsContractInstanceId::create(
-            &mut builder,
-            &ContractInstanceIdArgs {
-                data: Some(instance_data),
-            },
-        );
-        let code = Some(builder.create_vector(&code_bytes));
-        let key_offset = FbsContractKey::create(
-            &mut builder,
-            &ContractKeyArgs {
-                instance: Some(instance_offset),
-                code,
-            },
-        );
-        builder.finish_minimal(key_offset);
-
-        let fbs_key = flatbuffers::root::<FbsContractKey>(builder.finished_data())
-            .expect("valid ContractKey flatbuffer");
-        let decoded = ContractKey::try_decode_fbs(&fbs_key).expect("decode ContractKey");
+        let decoded = decode_with_code(Some(&code_bytes)).expect("decode ContractKey");
 
         assert_eq!(
             decoded.code_hash().as_ref(),
             &code_bytes,
             "decoder must pass the code hash through unchanged, not re-hash it"
         );
-        assert_eq!(decoded.id().as_bytes(), &instance_bytes);
+        assert_eq!(decoded.id().as_bytes(), &[7u8; CONTRACT_KEY_SIZE]);
     }
 
     /// Build a `ContractKey` flatbuffer whose `code` vector holds `code_bytes`,
     /// or which omits the optional `code` field entirely when `code_bytes` is
     /// `None`, and run it through the decoder.
     fn decode_with_code(code_bytes: Option<&[u8]>) -> Result<ContractKey, WsApiError> {
+        decode_key(&[7u8; CONTRACT_KEY_SIZE], code_bytes)
+    }
+
+    /// Serialize a `ContractKey` flatbuffer with the given raw field bytes.
+    /// Neither vector is length-checked here on purpose: the point is to feed
+    /// the decoder exactly what a peer could put on the wire.
+    fn encode_key(instance_bytes: &[u8], code_bytes: Option<&[u8]>) -> Vec<u8> {
         let mut builder = flatbuffers::FlatBufferBuilder::new();
-        let instance_data = builder.create_vector(&[7u8; CONTRACT_KEY_SIZE]);
+        let instance_data = builder.create_vector(instance_bytes);
         let instance_offset = FbsContractInstanceId::create(
             &mut builder,
             &ContractInstanceIdArgs {
@@ -394,11 +412,92 @@ mod fbs_tests {
             },
         );
         builder.finish_minimal(key_offset);
+        builder.finished_data().to_vec()
+    }
 
-        let bytes = builder.finished_data().to_vec();
+    fn decode_key(
+        instance_bytes: &[u8],
+        code_bytes: Option<&[u8]>,
+    ) -> Result<ContractKey, WsApiError> {
+        let bytes = encode_key(instance_bytes, code_bytes);
         let fbs_key =
             flatbuffers::root::<FbsContractKey>(&bytes).expect("valid ContractKey flatbuffer");
         ContractKey::try_decode_fbs(&fbs_key)
+    }
+
+    /// FIXED BYTES pinning the `common.ContractKey` vtable layout.
+    ///
+    /// Why a blob when the sibling tests build programmatically: a
+    /// programmatic test encodes with the SAME generated code it then decodes
+    /// with, so a `common.fbs` change that reorders `instance` and `code` moves
+    /// both sides together and the test stays green while real TypeScript
+    /// clients break. Only bytes frozen OUTSIDE the generated code catch that.
+    /// This restores a property the PR briefly lost: after rebuilding the
+    /// update fixture programmatically, nothing decoded a `common.ContractKey`
+    /// from fixed bytes at all (the PUT fixture recomputes its key from
+    /// params+code and never reads the table; GET/SUBSCRIBE read only instance
+    /// bytes). Follows `delegate_interface.rs`'s `*_wire_format_is_stable`.
+    ///
+    /// Distinct from the TypeScript-blob test in `client_api::client_events`,
+    /// which pins the REJECT path. This one must pin a SUCCESSFUL decode.
+    ///
+    /// To regenerate after a deliberate schema change: build the same key with
+    /// `encode_key(&[7; 32], Some(&[42; 32]))` and paste `finished_data()`.
+    /// Changing these bytes is a wire-format break; be sure that is intended.
+    const CONTRACT_KEY_WIRE_FORMAT: &[u8] = &[
+        12, 0, 0, 0, 8, 0, 12, 0, 4, 0, 8, 0, 8, 0, 0, 0, 52, 0, 0, 0, 4, 0, 0, 0, 32, 0, 0, 0, 42,
+        42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
+        42, 42, 42, 42, 42, 42, 42, 42, 0, 0, 6, 0, 8, 0, 4, 0, 6, 0, 0, 0, 4, 0, 0, 0, 32, 0, 0,
+        0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+        7, 7, 7,
+    ];
+
+    #[test]
+    fn contract_key_wire_format_is_stable() {
+        let fbs_key = flatbuffers::root::<FbsContractKey>(CONTRACT_KEY_WIRE_FORMAT)
+            .expect("the pinned ContractKey bytes must still parse");
+        let decoded = ContractKey::try_decode_fbs(&fbs_key)
+            .expect("the pinned ContractKey bytes must still decode");
+        assert_eq!(
+            decoded.id().as_bytes(),
+            &[7u8; CONTRACT_KEY_SIZE],
+            "instance id moved: `common.ContractKey`'s vtable layout changed, \
+             which breaks every already-deployed client"
+        );
+        assert_eq!(
+            decoded.code_hash().as_ref(),
+            &[42u8; CONTRACT_KEY_SIZE],
+            "code hash moved: `common.ContractKey`'s vtable layout changed, \
+             which breaks every already-deployed client"
+        );
+    }
+
+    /// A wrong-length `instance` is rejected, not panicked on.
+    ///
+    /// `instance`/`data` are `(required)` in the schema, but the flatbuffers
+    /// verifier checks PRESENCE, not LENGTH — so `flatbuffers::root` accepts an
+    /// 8-byte instance and the `try_into().unwrap()` this replaced then panicked
+    /// with `TryFromSliceError`. Nothing catches unwind on this path and
+    /// `panic = "abort"` is not set, so it killed the client's connection task:
+    /// a remote, wire-reachable panic reachable from UPDATE, GET and SUBSCRIBE.
+    #[test]
+    fn contract_key_decode_rejects_short_instance_without_panicking() {
+        let err = decode_key(&[1u8; 8], Some(&[42u8; CONTRACT_KEY_SIZE]))
+            .expect_err("a short instance vector must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ContractKey.instance") && msg.contains("got 8 bytes"),
+            "the error must name the field and the observed length, got: {msg}"
+        );
+    }
+
+    /// An over-long `instance` is rejected too — the guard is a length equality,
+    /// not a minimum, so a peer cannot pad its way past it.
+    #[test]
+    fn contract_key_decode_rejects_long_instance() {
+        let err = decode_key(&[1u8; 64], Some(&[42u8; CONTRACT_KEY_SIZE]))
+            .expect_err("an over-long instance vector must be rejected");
+        assert!(err.to_string().contains("got 64 bytes"), "got: {err}");
     }
 
     /// A zero-length `code` is rejected, and the error says what to do about it.

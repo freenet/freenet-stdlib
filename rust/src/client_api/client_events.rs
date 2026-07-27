@@ -503,8 +503,9 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                     // Extract just the instance ID - GET only needs the instance ID,
                     // not the full key (which may not be complete on the client side)
                     let fbs_key = get.key();
-                    let key_bytes: [u8; 32] = fbs_key.instance().data().bytes().try_into().unwrap();
-                    let key = ContractInstanceId::new(key_bytes);
+                    let key = crate::contract_interface::key::instance_id_from_fbs(
+                        fbs_key.instance().data().bytes(),
+                    )?;
                     let fetch_contract = get.fetch_contract();
                     let subscribe = get.subscribe();
                     let blocking_subscribe = get.blocking_subscribe();
@@ -541,8 +542,9 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                     let subscribe = request.contract_request_as_subscribe().unwrap();
                     // Extract just the instance ID for Subscribe
                     let fbs_key = subscribe.key();
-                    let key_bytes: [u8; 32] = fbs_key.instance().data().bytes().try_into().unwrap();
-                    let key = ContractInstanceId::new(key_bytes);
+                    let key = crate::contract_interface::key::instance_id_from_fbs(
+                        fbs_key.instance().data().bytes(),
+                    )?;
                     let summary = subscribe
                         .summary()
                         .map(|summary_data| StateSummary::from(summary_data.bytes()));
@@ -2107,6 +2109,71 @@ mod client_request_test {
         }
 
         Ok(())
+    }
+
+    /// The exact bytes the TypeScript SDK's own test suite asserts as a correct
+    /// `UpdateRequest` — pinned here so the two suites cannot disagree silently.
+    ///
+    /// Copied verbatim from `typescript/tests/websocket-interface.test.ts`
+    /// (`EXPECTED_UPDATE_REQ`). It is byte-for-byte the blob this PR deleted
+    /// from the Rust side, which is exactly how the original double-hash bug
+    /// survived: both suites pinned the same bytes in mirror, and neither ever
+    /// crossed the language boundary, so a shape that no Rust decoder accepted
+    /// stayed "verified" on the TypeScript side.
+    ///
+    /// Its `code` field is present and ZERO-LENGTH, which is what
+    /// `ContractKey.fromInstanceId(...)` emits. After this change the Rust
+    /// decoder hard-errors on it, while `npm test` still asserts it is correct
+    /// and stays green. Both suites run in CI, so this test is the only thing
+    /// that makes that disagreement visible.
+    ///
+    /// **If the TypeScript SDK is fixed** (see freenet/freenet-core#4978 — the
+    /// candidate is making `UpdateRequest` reject a key whose `code` is not 32
+    /// bytes), this test and the TS suite's expected-byte array must be updated
+    /// together. Leaving one behind re-creates the mirror-pinning that hid the
+    /// original bug.
+    const TS_SDK_EXPECTED_UPDATE_REQ: &[u8] = &[
+        4, 0, 0, 0, 220, 255, 255, 255, 8, 0, 0, 0, 0, 0, 0, 1, 232, 255, 255, 255, 8, 0, 0, 0, 0,
+        0, 0, 2, 204, 255, 255, 255, 16, 0, 0, 0, 52, 0, 0, 0, 8, 0, 12, 0, 11, 0, 4, 0, 8, 0, 0,
+        0, 8, 0, 0, 0, 0, 0, 0, 2, 210, 255, 255, 255, 4, 0, 0, 0, 8, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7,
+        8, 8, 0, 12, 0, 8, 0, 4, 0, 8, 0, 0, 0, 8, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 8,
+        0, 4, 0, 6, 0, 0, 0, 4, 0, 0, 0, 32, 0, 0, 0, 85, 111, 11, 171, 40, 85, 240, 177, 207, 81,
+        106, 157, 173, 90, 234, 2, 250, 253, 75, 210, 62, 7, 6, 34, 75, 26, 229, 230, 107, 167, 17,
+        108,
+    ];
+
+    /// The cross-language contract: what the TypeScript SDK emits for an
+    /// instance-id-only UPDATE is rejected here, with the actionable message.
+    ///
+    /// Asserting the MESSAGE and not just the rejection is the point. The
+    /// TypeScript developer whose request this is gets exactly this string
+    /// back over the WebSocket, and it is the only thing telling them the key
+    /// needs both parts. A revert to the bare `try_from` error would leave the
+    /// rejection green while restoring `"invalid data"`.
+    #[test]
+    fn typescript_sdk_instance_only_update_is_rejected_with_guidance() {
+        let client_request = root_as_client_request(TS_SDK_EXPECTED_UPDATE_REQ)
+            .expect("the TS SDK blob must still be a well-formed ClientRequest");
+        let contract_request = client_request
+            .client_request_as_contract_request()
+            .expect("the TS SDK blob must still be a ContractRequest");
+
+        let err = ContractRequest::try_decode_fbs(&contract_request)
+            .expect_err("an instance-id-only UPDATE must be rejected");
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("ContractKey.code") && msg.contains("got 0 bytes"),
+            "the TS SDK's zero-length code must be named explicitly, got: {msg}"
+        );
+        assert!(
+            msg.contains("new ContractKey(instance, code)"),
+            "the error must tell a TypeScript developer how to build the key, got: {msg}"
+        );
+        assert!(
+            msg.contains("4978"),
+            "the error must point at the tracking issue for the real fix, got: {msg}"
+        );
     }
 
     /// The flatbuffers decode path must NOT panic on an unknown

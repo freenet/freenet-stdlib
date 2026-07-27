@@ -10,7 +10,7 @@ mod code;
 mod contract;
 pub mod encoding;
 mod error;
-mod key;
+pub(crate) mod key;
 mod state;
 mod trait_def;
 mod update;

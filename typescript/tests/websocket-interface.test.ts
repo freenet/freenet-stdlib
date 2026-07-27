@@ -337,6 +337,17 @@ describe("Freenet Websocket API - Result Deserialization", () => {
   });
 
   test("should correctly generate a ClientRequest for contract update operation", async () => {
+    // NOTE: the Rust decoder REJECTS these bytes. `ContractKey.fromInstanceId`
+    // leaves `code` present but zero-length, and freenet-stdlib's
+    // `ContractKey::try_decode_fbs` now hard-errors on any `code` that is not
+    // exactly 32 bytes, because an UPDATE addressed by instance id alone has
+    // never been servable (the node gates on already holding the code blob and
+    // probes for it by code hash). This suite therefore asserts an encoding the
+    // node will refuse. The Rust side pins that disagreement explicitly in
+    // `client_api::client_events::typescript_sdk_instance_only_update_is_rejected_with_guidance`
+    // — if this array changes, that test must change with it, and vice versa.
+    // Making `UpdateRequest` require a 32-byte code hash is tracked in
+    // freenet/freenet-core#4978.
     // Define the expected Uint8Array request
     let EXPECTED_UPDATE_REQ = new Uint8Array([
       4, 0, 0, 0, 220, 255, 255, 255, 8, 0, 0, 0, 0, 0, 0, 1, 232, 255, 255,

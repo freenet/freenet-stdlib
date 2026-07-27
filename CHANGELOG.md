@@ -1,5 +1,51 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **`ContractKey::try_decode_fbs` no longer double-hashes the code hash.** The
+  wire `code` field carries the already-computed 32-byte code hash, but the
+  decoder passed it to `CodeHash::from_code` — the *hashing* constructor —
+  producing `BLAKE3(BLAKE3(wasm))`, a key that never matches the store. Every
+  FlatBuffers `UpdateRequest` failed as a result, which the client surfaced as
+  a 30-second timeout rather than an error. GET and SUBSCRIBE were unaffected
+  because their request variants carry only an instance id and never decode
+  `code`. The regression dates to `844880e` (Nov 2023), which changed a
+  pass-through `CodeHash::new` into `from_code`. Blast radius was FlatBuffers
+  clients, the TypeScript SDK's default, so browser apps: the audience least
+  able to diagnose it.
+
+- **A wrong-length `instance` no longer panics the connection task.**
+  `instance`/`data` are `(required)` in the schema, but the flatbuffers
+  verifier checks that a required vector is present, not that it is the right
+  length. An 8-byte instance passed verification and then hit a
+  `try_into().unwrap()`, panicking with `TryFromSliceError`; nothing catches
+  unwind on that path, so a malformed message from any peer killed that
+  client's connection task. Reachable from UPDATE, GET and SUBSCRIBE; all
+  three now reject with an explicit error.
+
+### Compatibility
+- **A `ContractKey` whose `code` field is absent or not exactly 32 bytes is now
+  rejected at decode.** This is a hard rejection of a shape `common.fbs`
+  permits (`code` is not `(required)`) and that the TypeScript SDK actually
+  emits: `ContractKey.fromInstanceId(...)` produces a present-but-zero-length
+  vector, and the SDK's own test suite builds an `UpdateRequest` that way.
+
+  **No working client regresses.** Such an UPDATE has never succeeded. The node
+  gates an UPDATE on already holding the contract's code blob and probes for it
+  by code hash; an UPDATE supplies no contract code, so a zero-length `code`
+  hashed to `BLAKE3("")` and failed at that gate. What changes is *where* and
+  *how* it fails: previously a 30-second timeout or an opaque
+  `"missing contract: <key>"` pointing at the node, now an immediate
+  `ContractKey.code must be the 32-byte contract code hash; got 0 bytes...`
+  naming the field and the remedy.
+
+  The real fix is for the node to resolve the code hash from the instance id,
+  as GET and SUBSCRIBE already do via `code_hash_from_id` — tracked in
+  freenet-core#4978. Until then, build keys with both parts:
+  `new ContractKey(instance, code)` rather than
+  `ContractKey.fromInstanceId(...)`.
+
 ## [0.8.4] - 2026-07-21
 
 ### Added
