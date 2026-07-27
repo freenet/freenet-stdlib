@@ -53,11 +53,27 @@ impl Stream for WebApi {
         }
 
         // Poll regular responses.
-        match self.response_rx.poll_recv(cx) {
+        //
+        // A closed response channel is not terminal on its own:
+        // `request_handler` drops both senders together, so a `WsStreamHandle`
+        // it queued beforehand can still be waiting in `stream_rx`, and
+        // assemblies may still be in flight. Returning `None` here discarded a
+        // complete streamed response. Carry this poll's verdict down to the
+        // stream arm instead, which ends the stream on the full joint
+        // condition.
+        //
+        // The verdict has to come from THIS poll rather than a later
+        // `is_closed()` check: that reports "every sender dropped", not
+        // "drained", so between the two the handler could queue its final
+        // result and drop both senders, and the stream would end with that
+        // result still buffered. `Ready(None)` from `poll_recv` means closed
+        // AND drained, observed atomically, and once closed nothing more can
+        // arrive.
+        let responses_finished = match self.response_rx.poll_recv(cx) {
             Poll::Ready(Some(result)) => return Poll::Ready(Some(result)),
-            Poll::Ready(None) => return Poll::Ready(None),
-            Poll::Pending => {}
-        }
+            Poll::Ready(None) => true,
+            Poll::Pending => false,
+        };
 
         // Poll stream handles and spawn assembly as a pending future.
         match self.stream_rx.poll_recv(cx) {
@@ -75,7 +91,16 @@ impl Stream for WebApi {
                 cx.waker().wake_by_ref();
                 Poll::Pending
             }
-            Poll::Ready(None) if self.pending_streams.is_empty() => Poll::Ready(None),
+            // End the stream only when there is nothing left anywhere: no
+            // queued handle, no assembly in flight, and no more responses
+            // coming. Without the response conjunct a live connection whose
+            // response channel merely happened to be empty would be reported as
+            // ended, which is what the stream arm of `recv()` guards against.
+            // This is the only way the stream can terminate, so every part of
+            // the condition matters.
+            Poll::Ready(None) if self.pending_streams.is_empty() && responses_finished => {
+                Poll::Ready(None)
+            }
             _ => Poll::Pending,
         }
     }
@@ -151,6 +176,24 @@ impl WebApi {
         }
     }
 
+    /// Build a `WebApi` directly over channel halves, so a test can drive
+    /// `recv()` against a chosen channel state without a socket or a live
+    /// request handler.
+    #[cfg(test)]
+    fn from_parts(
+        request_tx: Sender<ClientRequest<'static>>,
+        response_rx: Receiver<HostResult>,
+        stream_rx: Receiver<WsStreamHandle>,
+    ) -> Self {
+        Self {
+            request_tx,
+            response_rx,
+            stream_rx,
+            queue: VecDeque::new(),
+            pending_streams: FuturesUnordered::new(),
+        }
+    }
+
     pub async fn send(&mut self, request: ClientRequest<'static>) -> Result<(), Error> {
         tracing::debug!(?request, "sending request");
         self.request_tx
@@ -175,22 +218,89 @@ impl WebApi {
     /// internal stream channel. Calling both concurrently or alternating between
     /// them may cause responses to be delivered to the wrong consumer. Choose
     /// one consumption pattern per `WebApi` instance.
+    ///
+    /// A closed connection is reported as [`ErrorKind::ChannelClosed`] only once
+    /// nothing is left to deliver. Anything the handler queued before shutting
+    /// down is returned first, so the final error or response is not replaced by
+    /// a generic channel error.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is **not** cancellation-safe. If the returned future is
+    /// dropped while a streamed response is being reassembled, that response is
+    /// lost. Do not use `recv()` directly as a `select!` branch that can be
+    /// cancelled; drive it to completion, or use
+    /// [`recv_stream()`](Self::recv_stream) and own the handle yourself.
     pub async fn recv(&mut self) -> HostResult {
+        // Neither channel closing is terminal on its own. `request_handler`
+        // delivers its final `HostResult` on `response_tx` and only *then*
+        // returns, which drops both senders, so from the caller's side the
+        // buffered response and the closure of the stream channel become ready
+        // at the same instant. Treating whichever arm won as authoritative
+        // discarded the other one's pending value: roughly half the time the
+        // caller got a generic "comm channel between client/host closed"
+        // instead of the real error the handler had just queued. Report a
+        // closed connection only once BOTH channels are exhausted.
+        //
+        // Deliberately NOT `biased`. Prioritising the response arm would starve
+        // the stream arm: `response_tx` has capacity 1, so a busy handler simply
+        // stays one response ahead and the arm is ready on every call, leaving a
+        // queued handle to buffer its whole payload in the unbounded chunk
+        // channel while never being delivered. Both `None` branches below mean
+        // neither polling order can LOSE a value, so ordering is not worth
+        // paying that price for. It does still decide delivery order when both
+        // a response and a handle are ready, which is nondeterministic and
+        // which `recv()` has never promised either way.
+        //
+        // Known residual, pre-existing and not addressed here: if a handle is
+        // queued whose chunk sender already died, it assembles to
+        // `StreamError::Truncated`, and when a real error is buffered at the
+        // same time the random pick surfaces the truncation instead about half
+        // the time. Ordering the arms would trade that narrow case for the
+        // starvation above, which is the worse deal.
+        //
+        // `Stream::poll_next` does return responses first, so the two paths
+        // differ here. That is pre-existing and bounded rather than endorsed:
+        // once `stream_rx` fills, `try_send` falls back to transparent
+        // reassembly, so starved handles cost memory but lose nothing. Worth
+        // revisiting if the two paths are ever unified.
         tokio::select! {
             res = self.response_rx.recv() => {
-                res.ok_or_else(|| ClientError::from(ErrorKind::ChannelClosed))?
+                match res {
+                    Some(res) => res,
+                    None => {
+                        let handle = self
+                            .stream_rx
+                            .recv()
+                            .await
+                            .ok_or_else(|| ClientError::from(ErrorKind::ChannelClosed))?;
+                        Self::assemble_stream(handle).await
+                    }
+                }
             }
             handle = self.stream_rx.recv() => {
-                let handle = handle.ok_or_else(|| ClientError::from(ErrorKind::ChannelClosed))?;
-                let complete = handle
-                    .assemble()
-                    .await
-                    .map_err(|e| ClientError::from(format!("{e}")))?;
-                let inner: HostResult = bincode::deserialize(&complete)
-                    .map_err(|e| ClientError::from(format!("{e}")))?;
-                inner
+                match handle {
+                    Some(handle) => Self::assemble_stream(handle).await,
+                    None => self
+                        .response_rx
+                        .recv()
+                        .await
+                        .ok_or_else(|| ClientError::from(ErrorKind::ChannelClosed))?,
+                }
             }
         }
+    }
+
+    /// Reassemble a streamed response into the complete [`HostResult`] the
+    /// server sent.
+    async fn assemble_stream(handle: WsStreamHandle) -> HostResult {
+        let complete = handle
+            .assemble()
+            .await
+            .map_err(|e| ClientError::from(format!("{e}")))?;
+        let inner: HostResult =
+            bincode::deserialize(&complete).map_err(|e| ClientError::from(format!("{e}")))?;
+        inner
     }
 
     /// Receive the next streamed response as a [`WsStreamHandle`].
@@ -260,6 +370,14 @@ async fn request_handler(
         Error::ConnectionClosed => ErrorKind::Disconnect.into(),
         other => ClientError::from(format!("{other}")),
     };
+    // Both senders are owned by this task and drop when it returns (in reverse
+    // declaration order, so `stream_tx` goes first — close in time, not
+    // atomically; both consumers tolerate either skew because whichever channel
+    // is still open holds a live waker). `recv()` and `poll_next` rely on that
+    // shared lifetime: each treats one channel closing as "check the other", so
+    // a `stream_tx` that outlived `response_tx` would turn a `ChannelClosed`
+    // return into an indefinite wait. Do not move either into a longer-lived
+    // task.
     let _ = response_tx.send(Err(error)).await;
 }
 
@@ -444,6 +562,17 @@ mod test {
     use super::*;
     use std::{net::Ipv4Addr, time::Duration};
     use tokio::net::TcpListener;
+
+    /// Poll a future exactly once, without a runtime waking it.
+    ///
+    /// Lets a test assert that a future is still pending at a chosen point,
+    /// instead of racing a concurrent task and depending on which branch a
+    /// combinator happens to poll first.
+    fn poll_once<F: Future>(fut: Pin<&mut F>) -> Poll<F::Output> {
+        let waker = futures::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        fut.poll(&mut cx)
+    }
 
     /// Bind to an OS-assigned port and return the listener + port.
     async fn bind_free_port() -> (TcpListener, u16) {
@@ -762,6 +891,309 @@ mod test {
         drop(client);
         let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
         Ok(())
+    }
+
+    /// `recv()` must not throw away a delivered response because the *other*
+    /// internal channel closed first.
+    ///
+    /// `request_handler` sends its final `HostResult` on `response_tx` and only
+    /// then returns, dropping both senders. Whenever the caller is scheduled
+    /// after the handler has finished (the normal case on a loaded machine)
+    /// both arms of `recv()`'s `select!` are ready at once. The old code treated
+    /// a closed `stream_rx` as terminal, so `select!`'s random pick discarded
+    /// the real error sitting in `response_rx` about half the time. That is what
+    /// made `test_send_oversized_rejected_before_streaming` fail 6 runs in 25 of
+    /// the full suite under load, reporting "comm channel between client/host
+    /// closed" in place of the guard's own message.
+    ///
+    /// This reproduces that interleaving directly rather than racing for it:
+    /// the response is buffered and both senders are dropped *before* `recv()`
+    /// is called, so the failing state is set up deterministically. The loop
+    /// keeps the pin sharp against a partial revert that restores the random
+    /// pick: one iteration would catch that only half the time, 200 make a
+    /// false pass a 2^-200 event.
+    #[tokio::test]
+    async fn recv_delivers_buffered_response_when_stream_channel_closes_first() {
+        for i in 0..200 {
+            let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
+            let (response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+            let (stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+
+            // Exactly the shutdown ordering `request_handler` performs: deliver
+            // the final result, then drop the senders on task exit.
+            response_tx
+                .send(Err(ClientError::from(
+                    "request exceeds maximum".to_string(),
+                )))
+                .await
+                .expect("buffering the response must succeed");
+            drop(response_tx);
+            drop(stream_tx);
+
+            let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
+            let err = client
+                .recv()
+                .await
+                .expect_err("the buffered error must be delivered");
+            assert!(
+                format!("{err}").contains("request exceeds maximum"),
+                "iteration {i}: recv() discarded the buffered response and reported a closed \
+                 channel instead, got: {err}"
+            );
+        }
+    }
+
+    /// The mirror case: a stream handle queued before shutdown must survive the
+    /// response channel closing and draining first.
+    ///
+    /// This is the other half of the fix, and the more valuable half: what is
+    /// recovered here is a complete streamed *success* response, not just an
+    /// error string. It is also the only test that reaches the response arm's
+    /// `None` branch, since the test above always leaves a response buffered.
+    /// Without it, replacing that branch with the old terminal `ChannelClosed`
+    /// leaves the whole suite green.
+    ///
+    /// Reachable in production: `handle_response_payload` queues a handle on
+    /// `stream_tx` when a `StreamHeader` arrives, and the connection can then
+    /// close before the caller has consumed it.
+    ///
+    /// Looped for the same reason as the test above: both arms are ready here,
+    /// so a single iteration would only take the response arm (the one being
+    /// pinned) about half the time.
+    #[tokio::test]
+    async fn recv_delivers_queued_stream_after_response_channel_closes() {
+        for i in 0..200 {
+            let (handle, sender) = queued_stream("streamed payload");
+            drop(sender);
+
+            let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
+            let (response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+            let (stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+            stream_tx
+                .send(handle)
+                .await
+                .expect("queueing the handle must succeed");
+            // The response channel closes empty while the handle is still queued.
+            drop(response_tx);
+            drop(stream_tx);
+
+            let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
+            let err = client
+                .recv()
+                .await
+                .expect_err("the queued stream must be assembled and delivered");
+            assert!(
+                format!("{err}").contains("streamed payload"),
+                "iteration {i}: recv() discarded the queued stream handle and reported a \
+                 closed channel instead, got: {err}"
+            );
+        }
+    }
+
+    /// Build a complete, ready-to-assemble stream handle carrying `marker`.
+    ///
+    /// Mirrors what `handle_response_payload` produces: a handle from
+    /// `ws_stream_pair` whose chunks encode a `HostResult`. The caller drops the
+    /// returned sender to close the stream.
+    fn queued_stream(
+        marker: &str,
+    ) -> (WsStreamHandle, crate::client_api::streaming::WsStreamSender) {
+        use crate::client_api::client_events::StreamContent;
+        use crate::client_api::streaming::ws_stream_pair;
+
+        let payload: HostResult = Err(ClientError::from(marker.to_string()));
+        let encoded = bincode::serialize(&payload).expect("serialize the streamed HostResult");
+        let (handle, sender) = ws_stream_pair(StreamContent::Raw, encoded.len() as u64);
+        sender
+            .send_chunk(encoded.into())
+            .expect("feeding the stream must succeed");
+        (handle, sender)
+    }
+
+    /// The same precedence, through the other public consumption path.
+    ///
+    /// `WebApi` is also a [`Stream`], and `poll_next` had its own copy of the
+    /// bug: it returned `Poll::Ready(None)` the moment `response_rx` closed,
+    /// without checking whether a handle was still queued in `stream_rx` or an
+    /// assembly was still in flight. There it was deterministic rather than a
+    /// 50/50 race, so it discarded a complete streamed response every time.
+    #[tokio::test]
+    async fn poll_next_delivers_queued_stream_after_response_channel_closes() {
+        let (handle, sender) = queued_stream("streamed payload");
+        drop(sender);
+
+        let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
+        let (response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+        let (stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+        stream_tx
+            .send(handle)
+            .await
+            .expect("queueing the handle must succeed");
+        drop(response_tx);
+        drop(stream_tx);
+
+        let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
+        let item = client
+            .next()
+            .await
+            .expect("the stream must yield the queued response, not end");
+        let err = item.expect_err("the streamed payload is an Err in this fixture");
+        assert!(
+            format!("{err}").contains("streamed payload"),
+            "poll_next ended the stream and discarded the queued handle, got: {err}"
+        );
+    }
+
+    /// A closed stream channel must not end a still-live connection.
+    ///
+    /// This pins the stream arm's `None` branch: "the stream side is finished"
+    /// has to mean "keep waiting for responses", not "report the connection
+    /// closed", because the response channel is still open and about to
+    /// deliver. Reporting `ChannelClosed` here would drop a healthy connection.
+    ///
+    /// The first poll is driven explicitly rather than racing a concurrent
+    /// sender, so the pin does not depend on which branch a `join!` happens to
+    /// poll first: `recv()` must still be pending at a point where the reverted
+    /// code would already have returned.
+    #[tokio::test]
+    async fn recv_keeps_waiting_for_responses_after_the_stream_channel_closes() {
+        let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
+        let (response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+        let (stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+        // The stream side is done; the response side is still open and empty.
+        drop(stream_tx);
+
+        let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
+        let mut receiving = std::pin::pin!(client.recv());
+        assert!(
+            poll_once(receiving.as_mut()).is_pending(),
+            "recv() gave up on a live response channel because the stream channel closed"
+        );
+
+        response_tx
+            .send(Err(ClientError::from("late response".to_string())))
+            .await
+            .expect("sending the late response must succeed");
+
+        // Bounded so a regression that never resolves fails the test instead of
+        // hanging the suite.
+        let err = tokio::time::timeout(Duration::from_secs(5), receiving)
+            .await
+            .expect("recv() must resolve once the response is queued")
+            .expect_err("the late response is an Err in this fixture");
+        assert!(
+            format!("{err}").contains("late response"),
+            "recv() did not deliver the response that arrived after the stream channel \
+             closed, got: {err}"
+        );
+    }
+
+    /// The `Stream` counterpart of the two tests above: `poll_next` must not end
+    /// the stream while the response channel is still live, and must end it once
+    /// nothing is left anywhere.
+    ///
+    /// This pins both halves of `poll_next`'s terminal condition, which the
+    /// fall-through above made the only way the stream can ever finish. Getting
+    /// it wrong in one direction hangs a consumer's `while let Some(_)` loop
+    /// forever; in the other it silently truncates a live connection.
+    #[tokio::test]
+    async fn poll_next_ends_only_when_nothing_is_left_anywhere() {
+        let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
+        let (response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+        let (stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+        drop(stream_tx);
+
+        let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
+        {
+            let mut next = std::pin::pin!(client.next());
+            assert!(
+                poll_once(next.as_mut()).is_pending(),
+                "the stream ended while the response channel was still open"
+            );
+        }
+
+        // Now nothing can arrive from either side. Bounded for the same reason:
+        // the failure mode this guards against is a stream that never ends.
+        drop(response_tx);
+        let ended = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("the stream must end rather than hang");
+        assert!(
+            ended.is_none(),
+            "the stream must end once both channels are closed and drained"
+        );
+    }
+
+    /// An assembly still in flight also keeps the stream alive.
+    ///
+    /// Pins the `pending_streams.is_empty()` half of the terminal condition.
+    /// The other `poll_next` tests all queue a handle whose payload is already
+    /// complete, so their assemblies finish on the first poll and never leave
+    /// anything pending for the guard to see.
+    #[tokio::test]
+    async fn poll_next_waits_for_an_assembly_still_in_flight() {
+        // Keep the chunk sender alive, so the payload is incomplete and the
+        // assembly cannot finish yet.
+        let (handle, sender) = queued_stream("streamed payload");
+
+        let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
+        let (response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+        let (stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+        stream_tx
+            .send(handle)
+            .await
+            .expect("queueing the handle must succeed");
+        drop(response_tx);
+        drop(stream_tx);
+
+        let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
+        {
+            // Two polls: the first moves the handle into `pending_streams`, the
+            // second finds every channel closed with the assembly unfinished.
+            let mut next = std::pin::pin!(client.next());
+            assert!(
+                poll_once(next.as_mut()).is_pending(),
+                "the first poll only moves the handle into pending_streams"
+            );
+            assert!(
+                poll_once(next.as_mut()).is_pending(),
+                "the stream ended while an assembly was still in flight"
+            );
+        }
+
+        // Completing the stream lets it drain normally.
+        drop(sender);
+        let item = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("the stream must resolve once the assembly can finish")
+            .expect("the assembled response must be delivered");
+        let err = item.expect_err("the streamed payload is an Err in this fixture");
+        assert!(
+            format!("{err}").contains("streamed payload"),
+            "the in-flight assembly was dropped instead of delivered, got: {err}"
+        );
+    }
+
+    /// `ChannelClosed` is still what a caller gets once genuinely nothing is
+    /// left to deliver, so the tests above cannot be satisfied by never
+    /// reporting a closed connection at all.
+    #[tokio::test]
+    async fn recv_reports_closed_only_when_both_channels_are_exhausted() {
+        let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
+        let (response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+        let (stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+        drop(response_tx);
+        drop(stream_tx);
+
+        let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
+        let err = client
+            .recv()
+            .await
+            .expect_err("both channels closed and empty must surface as ChannelClosed");
+        assert!(
+            format!("{err}").contains("comm channel between client/host closed"),
+            "expected the channel-closed error once nothing is left to deliver, got: {err}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
