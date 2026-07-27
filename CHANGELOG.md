@@ -3,6 +3,54 @@
 ## [Unreleased]
 
 ### Fixed
+- **Related-contract decoding no longer panics on well-formed requests.**
+  `RelatedStateUpdate.related_to`, `RelatedDeltaUpdate.related_to`,
+  `RelatedStateAndDeltaUpdate.related_to` and `RelatedContract.instance_id`
+  were decoded with `ContractInstanceId::from_bytes(..).unwrap()`. That
+  function is a **base58 string decoder**, and the wire carries the id as 32
+  raw bytes. This was not an edge case: a random 32-byte id essentially never
+  consists solely of base58 characters (the alphabet is 58 of 256 byte values,
+  so the odds are about 2e-21), so *every* FlatBuffers UPDATE carrying a
+  related update, and every PUT carrying a related contract, panicked the
+  client's connection task. The PUT case stayed hidden because the loop body
+  only runs on a non-empty vector and the TypeScript suite's fixture passes an
+  empty one.
+
+- **Four more length-unchecked `(required)` fields no longer panic.**
+  `DelegateKey.key`, `SecretsId.hash`, `RegisterDelegate.cipher` and
+  `RegisterDelegate.nonce` were read with `copy_from_slice` or
+  `try_from(..).unwrap()` into fixed-size arrays. The flatbuffers verifier
+  checks that a `(required)` vector is PRESENT, not that it is the right
+  LENGTH, so any client could send a short one and take down its connection
+  task. `DelegateKey` is on the normal delegate path, and the TypeScript SDK
+  exports it as the raw generated type with no length validation.
+
+- **Four union discriminants no longer hit `unreachable!()`.** `ContractType`,
+  `DelegateType`, `UpdateDataType` and `InboundDelegateMsgType` are decoded
+  with `unreachable!()` on an unrecognized discriminant, but every generated
+  union verifier ends in `_ => Ok(())`, so an unknown discriminant — including
+  `NONE` — reaches the decoder. `NONE` is not hypothetical: the TypeScript
+  SDK's `ContractContainer` and `DelegateContainer` constructors both take it
+  as their default argument. All four now return a per-request error, matching
+  what `ContractRequestType` and `DelegateRequestType` already did.
+
+  A single test now sweeps all 256 discriminants of all seven unions on the
+  decode path, so the next union added to the schema is covered without anyone
+  remembering to write a test for it.
+
+  All of the above are **FlatBuffers-only**. The native (bincode) path decodes
+  the same Rust enums directly and never reaches `try_decode_fbs`, and
+  first-party tooling uses `encodingProtocol=native` — which is why this class
+  went unnoticed and why it lands on third-party and browser clients.
+
+### Deprecated
+- **`ContractInstanceId::from_bytes` is renamed to
+  `ContractInstanceId::from_base58`.** It parses base58 *text*, not raw bytes;
+  the old name and its "build from the binary representation" doc are what
+  caused the four decode sites above to feed it raw wire bytes. `from_bytes`
+  remains as a delegating alias, so the rename is not a breaking change, but it
+  now warns. Use `ContractInstanceId::new` for raw bytes you already hold.
+
 - **`ContractKey::try_decode_fbs` no longer double-hashes the code hash.** The
   wire `code` field carries the already-computed 32-byte code hash, but the
   decoder passed it to `CodeHash::from_code`: the *hashing* constructor -

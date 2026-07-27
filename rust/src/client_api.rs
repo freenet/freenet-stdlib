@@ -53,6 +53,51 @@ pub trait TryFromFbs<T>: Sized {
     fn try_decode_fbs(value: T) -> Result<Self, WsApiError>;
 }
 
+/// Read a fixed-size byte field out of a verified flatbuffer, rejecting a wrong
+/// length instead of panicking.
+///
+/// **Every** fixed-size wire field must go through this. The flatbuffers
+/// verifier checks that a `(required)` vector is PRESENT; it does NOT check its
+/// LENGTH (`Verifiable for Vector<T>` runs `verify_vector_range` and nothing
+/// else). So `flatbuffers::root` happily accepts an 8-byte field declared
+/// `(required)`, and any decoder that then assumes 32 bytes — via
+/// `try_into().unwrap()`, `<[u8; N]>::try_from(..).unwrap()`, or
+/// `copy_from_slice` — panics on it. Nothing catches unwind on the decode path
+/// and `panic = "abort"` is not set, so that unwinds and kills the client's
+/// connection task: a remote, wire-reachable panic.
+///
+/// `field` is the schema path of the offending field (e.g.
+/// `"ContractKey.instance"`), so the error names the exact thing the client got
+/// wrong rather than saying "invalid data".
+pub(crate) fn fixed_size_field<const N: usize>(
+    field: &str,
+    data: &[u8],
+) -> Result<[u8; N], WsApiError> {
+    data.try_into().map_err(|_| {
+        WsApiError::deserialization(format!(
+            "{field} must be exactly {N} bytes; got {} bytes. The flatbuffers verifier only \
+             checks that this required field is present, not that it is the right length, so a \
+             wrong-length value reaches the decoder and must be rejected here.",
+            data.len()
+        ))
+    })
+}
+
+/// Error text for an unknown flatbuffers union discriminant.
+///
+/// Every generated union verifier ends in `_ => Ok(())`, so a discriminant the
+/// schema does not define — including `NONE` (0), which several TypeScript SDK
+/// constructors take as their default argument — passes verification and
+/// reaches the decoder's match. Matching such a value with `unreachable!()`
+/// turns one crafted (or merely mistaken) request into a panic that downs the
+/// connection handler, so every union match returns this instead.
+pub(crate) fn unknown_union_discriminant(union: &str, discriminant: u8) -> WsApiError {
+    WsApiError::deserialization(format!(
+        "unknown {union} discriminant: {discriminant}. The flatbuffers verifier accepts any \
+         discriminant it does not recognize, so this is a client error, not an impossible state."
+    ))
+}
+
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum WsApiError {

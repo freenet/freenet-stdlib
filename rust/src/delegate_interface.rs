@@ -18,7 +18,7 @@ use crate::generated::client_request::{
 
 use crate::common_generated::common::SecretsId as FbsSecretsId;
 
-use crate::client_api::{TryFromFbs, WsApiError};
+use crate::client_api::{fixed_size_field, unknown_union_discriminant, TryFromFbs, WsApiError};
 use crate::contract_interface::{RelatedContracts, UpdateData};
 use crate::prelude::{ContractInstanceId, WrappedState};
 use crate::versioning::ContractContainer;
@@ -278,8 +278,14 @@ impl Display for DelegateKey {
 
 impl<'a> TryFromFbs<&FbsDelegateKey<'a>> for DelegateKey {
     fn try_decode_fbs(key: &FbsDelegateKey<'a>) -> Result<Self, WsApiError> {
-        let mut key_bytes = [0; DELEGATE_HASH_LENGTH];
-        key_bytes.copy_from_slice(key.key().bytes());
+        // Both fields are `(required)` in the schema and BOTH need an explicit
+        // length check, because the verifier only guarantees presence. `key`
+        // used to be a bare `copy_from_slice` into a `[0; 32]`, which panics on
+        // a length mismatch, while `code_hash` one line below was already
+        // length-checked inside `CodeHash::try_from`. Keep them symmetric: a
+        // future field added here needs the same treatment.
+        let key_bytes =
+            fixed_size_field::<DELEGATE_HASH_LENGTH>("DelegateKey.key", key.key().bytes())?;
         let code_hash = CodeHash::try_from(key.code_hash().bytes())
             .map_err(|e| WsApiError::deserialization(e.to_string()))?;
         Ok(DelegateKey {
@@ -360,8 +366,13 @@ impl Display for SecretsId {
 
 impl<'a> TryFromFbs<&FbsSecretsId<'a>> for SecretsId {
     fn try_decode_fbs(key: &FbsSecretsId<'a>) -> Result<Self, WsApiError> {
-        let mut key_hash = [0; 32];
-        key_hash.copy_from_slice(key.hash().bytes().iter().as_ref());
+        // No production caller reaches this decoder today — `common.SecretsId`
+        // appears in no client-request table. It is fixed anyway because the
+        // `copy_from_slice` it replaces is a loaded gun for whoever wires it up:
+        // `hash` is `(required)`, which the verifier reads as "present", not
+        // "32 bytes", so the first client to send a short one would have
+        // panicked the connection task.
+        let key_hash = fixed_size_field::<32>("SecretsId.hash", key.hash().bytes())?;
         Ok(SecretsId {
             key: key.key().bytes().to_vec(),
             hash: key_hash,
@@ -623,7 +634,13 @@ impl<'a> TryFromFbs<&FbsInboundDelegateMsg<'a>> for InboundDelegateMsg<'a> {
                 };
                 Ok(InboundDelegateMsg::UserResponse(user_response))
             }
-            _ => unreachable!("invalid inbound delegate message type"),
+            // Reachable, not `unreachable!()`: the generated verifier for this
+            // union ends in `_ => Ok(())`, so any discriminant a client sets —
+            // including `NONE` — arrives here. See `unknown_union_discriminant`.
+            other => Err(unknown_union_discriminant(
+                "InboundDelegateMsgType",
+                other.0,
+            )),
         }
     }
 }

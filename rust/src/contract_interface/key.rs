@@ -55,13 +55,39 @@ impl ContractInstanceId {
         self.0.as_slice()
     }
 
-    /// Build `ContractId` from the binary representation.
-    pub fn from_bytes(bytes: impl AsRef<[u8]>) -> Result<Self, bs58::decode::Error> {
+    /// Parse a `ContractInstanceId` from its **base58 text** form — the inverse
+    /// of [`Self::encode`].
+    ///
+    /// The input is base58 *characters*, not the id's 32 raw bytes. It takes
+    /// `impl AsRef<[u8]>` only so that `&str`, `String` and `&[u8]` of base58
+    /// text all work; handing it a raw 32-byte id is a bug, and one that does
+    /// not look like a bug at the call site. Use
+    /// [`ContractInstanceId::new`] for raw bytes you already hold, or the
+    /// crate-internal `instance_id_from_fbs` for bytes off the wire.
+    ///
+    /// This was called `from_bytes`, documented as "build from the binary
+    /// representation". That name and doc caused four decode sites to feed it
+    /// raw wire bytes, which panicked on every well-formed request: a random
+    /// 32-byte id essentially never consists solely of base58 characters (the
+    /// alphabet is 58 of 256 byte values, so the odds are about 2e-21).
+    pub fn from_base58(bytes: impl AsRef<[u8]>) -> Result<Self, bs58::decode::Error> {
         let mut spec = [0; CONTRACT_KEY_SIZE];
         bs58::decode(bytes)
             .with_alphabet(bs58::Alphabet::BITCOIN)
             .onto(&mut spec)?;
         Ok(Self(spec))
+    }
+
+    /// Renamed to [`Self::from_base58`], which says what it actually does.
+    ///
+    /// Kept as a delegating alias so the rename is not a breaking change.
+    #[deprecated(
+        since = "0.8.5",
+        note = "renamed to `from_base58`: this parses base58 TEXT, not raw bytes. \
+                For a raw 32-byte id use `ContractInstanceId::new`."
+    )]
+    pub fn from_bytes(bytes: impl AsRef<[u8]>) -> Result<Self, bs58::decode::Error> {
+        Self::from_base58(bytes)
     }
 }
 
@@ -77,7 +103,7 @@ impl FromStr for ContractInstanceId {
     type Err = bs58::decode::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        ContractInstanceId::from_bytes(s)
+        ContractInstanceId::from_base58(s)
     }
 }
 
@@ -85,7 +111,7 @@ impl TryFrom<String> for ContractInstanceId {
     type Error = bs58::decode::Error;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        ContractInstanceId::from_bytes(s)
+        ContractInstanceId::from_base58(s)
     }
 }
 
@@ -269,28 +295,29 @@ fn code_hash_error(observed: Option<usize>) -> String {
 /// Decode a wire `ContractInstanceId`'s bytes, rejecting a wrong length instead
 /// of panicking.
 ///
-/// The flatbuffers verifier checks that a `(required)` vector is PRESENT; it
-/// does not check its LENGTH. So a peer can hand us an 8-byte `instance` that
-/// `flatbuffers::root` happily accepts, and the `try_into().unwrap()` this
-/// replaces then panicked with `TryFromSliceError`. There is no `catch_unwind`
-/// on this path and `panic = "abort"` is not set, so that unwound and killed
-/// the client's connection task: a wire-reachable remote panic.
-pub(crate) fn instance_id_from_fbs(data: &[u8]) -> Result<ContractInstanceId, WsApiError> {
-    let bytes: [u8; CONTRACT_KEY_SIZE] = data.try_into().map_err(|_| {
-        WsApiError::deserialization(format!(
-            "ContractKey.instance must be the {CONTRACT_KEY_SIZE}-byte contract instance id; \
-             got {} bytes. The flatbuffers verifier only checks that this required field is \
-             present, not that it is the right length, so a wrong-length id reaches the \
-             decoder and must be rejected here.",
-            data.len()
-        ))
-    })?;
-    Ok(ContractInstanceId::new(bytes))
+/// **This is the only correct way to turn wire bytes into a
+/// `ContractInstanceId`.** The wire carries the id as 32 RAW bytes — every
+/// encode site writes `key.as_bytes()` and the TypeScript SDK writes
+/// `Array.from(instance)` — so the decode is a length-checked pass-through and
+/// nothing else. In particular do NOT reach for
+/// [`ContractInstanceId::from_base58`]: that is a base58 *string* decoder, and
+/// pointing it at raw bytes is what broke `related_to`/`instance_id` decoding
+/// (it panicked on every well-formed request, because a random 32-byte id
+/// essentially never consists solely of base58 characters).
+///
+/// `field` is the schema path being decoded, so a GET, an UPDATE and a related
+/// contract each name their own field in the error.
+pub(crate) fn instance_id_from_fbs(
+    field: &str,
+    data: &[u8],
+) -> Result<ContractInstanceId, WsApiError> {
+    crate::client_api::fixed_size_field::<CONTRACT_KEY_SIZE>(field, data)
+        .map(ContractInstanceId::new)
 }
 
 impl<'a> TryFromFbs<&FbsContractKey<'a>> for ContractKey {
     fn try_decode_fbs(key: &FbsContractKey<'a>) -> Result<Self, WsApiError> {
-        let instance = instance_id_from_fbs(key.instance().data().bytes())?;
+        let instance = instance_id_from_fbs("ContractKey.instance", key.instance().data().bytes())?;
         // The `code` field carries the already-computed 32-byte code hash
         // (BLAKE3 of the wasm), so pass those bytes straight through. Calling
         // `CodeHash::from_code` here would hash the hash again -
