@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-07-27
+
 ### Fixed
 - **Related-contract decoding no longer panics on well-formed requests.**
   `RelatedStateUpdate.related_to`, `RelatedDeltaUpdate.related_to`,
