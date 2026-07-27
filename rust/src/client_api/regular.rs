@@ -258,6 +258,12 @@ impl WebApi {
         // same time the random pick surfaces the truncation instead about half
         // the time. Ordering the arms would trade that narrow case for the
         // starvation above, which is the worse deal.
+        //
+        // `Stream::poll_next` does return responses first, so the two paths
+        // differ here. That is pre-existing and bounded rather than endorsed:
+        // once `stream_rx` fills, `try_send` falls back to transparent
+        // reassembly, so starved handles cost memory but lose nothing. Worth
+        // revisiting if the two paths are ever unified.
         tokio::select! {
             res = self.response_rx.recv() => {
                 match res {
@@ -364,11 +370,14 @@ async fn request_handler(
         Error::ConnectionClosed => ErrorKind::Disconnect.into(),
         other => ClientError::from(format!("{other}")),
     };
-    // Both senders must die together, here, when this task returns. `recv()`
-    // and `poll_next` rely on it: each treats one channel closing as "check the
-    // other", so a `stream_tx` that outlived `response_tx` would turn a
-    // `ChannelClosed` return into an indefinite wait. Keep both owned by this
-    // task; do not move either into a longer-lived one.
+    // Both senders are owned by this task and drop when it returns (in reverse
+    // declaration order, so `stream_tx` goes first — close in time, not
+    // atomically; both consumers tolerate either skew because whichever channel
+    // is still open holds a live waker). `recv()` and `poll_next` rely on that
+    // shared lifetime: each treats one channel closing as "check the other", so
+    // a `stream_tx` that outlived `response_tx` would turn a `ChannelClosed`
+    // return into an indefinite wait. Do not move either into a longer-lived
+    // task.
     let _ = response_tx.send(Err(error)).await;
 }
 
@@ -1142,7 +1151,10 @@ mod test {
             // Two polls: the first moves the handle into `pending_streams`, the
             // second finds every channel closed with the assembly unfinished.
             let mut next = std::pin::pin!(client.next());
-            assert!(poll_once(next.as_mut()).is_pending());
+            assert!(
+                poll_once(next.as_mut()).is_pending(),
+                "the first poll only moves the handle into pending_streams"
+            );
             assert!(
                 poll_once(next.as_mut()).is_pending(),
                 "the stream ended while an assembly was still in flight"
@@ -1168,10 +1180,10 @@ mod test {
     #[tokio::test]
     async fn recv_reports_closed_only_when_both_channels_are_exhausted() {
         let (request_tx, _request_rx) = mpsc::channel::<ClientRequest<'static>>(1);
-        let (_response_tx, response_rx) = mpsc::channel::<HostResult>(1);
-        let (_stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
-        drop(_response_tx);
-        drop(_stream_tx);
+        let (response_tx, response_rx) = mpsc::channel::<HostResult>(1);
+        let (stream_tx, stream_rx) = mpsc::channel::<WsStreamHandle>(1);
+        drop(response_tx);
+        drop(stream_tx);
 
         let mut client = WebApi::from_parts(request_tx, response_rx, stream_rx);
         let err = client
