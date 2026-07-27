@@ -7,10 +7,11 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::client_api::{TryFromFbs, WsApiError};
+use crate::client_api::{unknown_union_discriminant, TryFromFbs, WsApiError};
 use crate::common_generated::common::{UpdateData as FbsUpdateData, UpdateDataType};
 use crate::generated::client_request::RelatedContracts as FbsRelatedContracts;
 
+use super::key::instance_id_from_fbs;
 use super::{ContractError, ContractInstanceId, State, StateDelta, CONTRACT_KEY_SIZE};
 
 /// An update to a contract state or any required related contracts to update that state.
@@ -136,7 +137,14 @@ impl<'a> TryFromFbs<&FbsRelatedContracts<'a>> for RelatedContracts<'a> {
     fn try_decode_fbs(related_contracts: &FbsRelatedContracts<'a>) -> Result<Self, WsApiError> {
         let mut map = HashMap::with_capacity(related_contracts.contracts().len());
         for related in related_contracts.contracts().iter() {
-            let id = ContractInstanceId::from_bytes(related.instance_id().data().bytes()).unwrap();
+            // Length-checked pass-through of the raw 32 bytes. This used to be
+            // `ContractInstanceId::from_bytes(..).unwrap()`, which base58-DECODED
+            // the raw id and then unwrapped: it panicked on every well-formed
+            // PUT carrying a related contract. See `instance_id_from_fbs`.
+            let id = instance_id_from_fbs(
+                "RelatedContract.instance_id.data",
+                related.instance_id().data().bytes(),
+            )?;
             let state = State::from(related.state().bytes());
             map.insert(id, Some(state));
         }
@@ -317,18 +325,27 @@ impl<'a> TryFromFbs<&FbsUpdateData<'a>> for UpdateData<'a> {
                 let delta = StateDelta::from(update.delta().bytes());
                 Ok(UpdateData::StateAndDelta { state, delta })
             }
+            // The three `related_to` decodes below were
+            // `ContractInstanceId::from_bytes(..).unwrap()`, which base58-DECODED
+            // bytes that are already the final raw id and then unwrapped the
+            // failure. Every well-formed related update panicked; see
+            // `instance_id_from_fbs`.
             UpdateDataType::RelatedStateUpdate => {
                 let update = update_data.update_data_as_related_state_update().unwrap();
                 let state = State::from(update.state().bytes());
-                let related_to =
-                    ContractInstanceId::from_bytes(update.related_to().data().bytes()).unwrap();
+                let related_to = instance_id_from_fbs(
+                    "RelatedStateUpdate.related_to.data",
+                    update.related_to().data().bytes(),
+                )?;
                 Ok(UpdateData::RelatedState { related_to, state })
             }
             UpdateDataType::RelatedDeltaUpdate => {
                 let update = update_data.update_data_as_related_delta_update().unwrap();
                 let delta = StateDelta::from(update.delta().bytes());
-                let related_to =
-                    ContractInstanceId::from_bytes(update.related_to().data().bytes()).unwrap();
+                let related_to = instance_id_from_fbs(
+                    "RelatedDeltaUpdate.related_to.data",
+                    update.related_to().data().bytes(),
+                )?;
                 Ok(UpdateData::RelatedDelta { related_to, delta })
             }
             UpdateDataType::RelatedStateAndDeltaUpdate => {
@@ -337,15 +354,20 @@ impl<'a> TryFromFbs<&FbsUpdateData<'a>> for UpdateData<'a> {
                     .unwrap();
                 let state = State::from(update.state().bytes());
                 let delta = StateDelta::from(update.delta().bytes());
-                let related_to =
-                    ContractInstanceId::from_bytes(update.related_to().data().bytes()).unwrap();
+                let related_to = instance_id_from_fbs(
+                    "RelatedStateAndDeltaUpdate.related_to.data",
+                    update.related_to().data().bytes(),
+                )?;
                 Ok(UpdateData::RelatedStateAndDelta {
                     related_to,
                     state,
                     delta,
                 })
             }
-            _ => unreachable!(),
+            // Reachable, not `unreachable!()`: the generated verifier for this
+            // union ends in `_ => Ok(())`, so any discriminant a client sets —
+            // including `NONE` — arrives here. See `unknown_union_discriminant`.
+            other => Err(unknown_union_discriminant("UpdateDataType", other.0)),
         }
     }
 }

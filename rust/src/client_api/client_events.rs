@@ -384,9 +384,10 @@ impl ClientRequest<'_> {
                             data: Bytes::from(chunk.data().bytes().to_vec()),
                         }
                     }
-                    _ => {
-                        return Err(WsApiError::deserialization(
-                            "unknown client request type".to_string(),
+                    other => {
+                        return Err(crate::client_api::unknown_union_discriminant(
+                            "ClientRequestType",
+                            other.0,
                         ))
                     }
                 },
@@ -504,6 +505,7 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                     // not the full key (which may not be complete on the client side)
                     let fbs_key = get.key();
                     let key = crate::contract_interface::key::instance_id_from_fbs(
+                        "ContractKey.instance.data",
                         fbs_key.instance().data().bytes(),
                     )?;
                     let fetch_contract = get.fetch_contract();
@@ -543,6 +545,7 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                     // Extract just the instance ID for Subscribe
                     let fbs_key = subscribe.key();
                     let key = crate::contract_interface::key::instance_id_from_fbs(
+                        "ContractKey.instance.data",
                         fbs_key.instance().data().bytes(),
                     )?;
                     let summary = subscribe
@@ -557,10 +560,10 @@ impl<'a> TryFromFbs<&FbsContractRequest<'a>> for ContractRequest<'a> {
                 // instead of panicking the connection handler. (Mirrors the same
                 // fix on `DelegateRequest::try_decode_fbs`.)
                 other => {
-                    return Err(WsApiError::deserialization(format!(
-                        "unknown ContractRequestType discriminant: {}",
-                        other.0
-                    )));
+                    return Err(crate::client_api::unknown_union_discriminant(
+                        "ContractRequestType",
+                        other.0,
+                    ));
                 }
             }
         };
@@ -763,11 +766,20 @@ impl<'a> TryFromFbs<&FbsDelegateRequest<'a>> for DelegateRequest<'a> {
                 DelegateRequestType::RegisterDelegate => {
                     let register = request.delegate_request_as_register_delegate().unwrap();
                     let delegate = DelegateContainer::try_decode_fbs(&register.delegate())?;
-                    let cipher =
-                        <[u8; 32]>::try_from(register.cipher().bytes().to_vec().as_slice())
-                            .unwrap();
-                    let nonce =
-                        <[u8; 24]>::try_from(register.nonce().bytes().to_vec().as_slice()).unwrap();
+                    // `cipher` and `nonce` are `(required)`, which the verifier
+                    // reads as "present", not "32 and 24 bytes". The
+                    // `try_from(..).unwrap()` this replaces panicked on any
+                    // other length, killing the connection task. (The
+                    // intermediate `.to_vec()` went with it: `bytes()` is
+                    // already a slice.)
+                    let cipher = crate::client_api::fixed_size_field::<32>(
+                        "RegisterDelegate.cipher",
+                        register.cipher().bytes(),
+                    )?;
+                    let nonce = crate::client_api::fixed_size_field::<24>(
+                        "RegisterDelegate.nonce",
+                        register.nonce().bytes(),
+                    )?;
                     DelegateRequest::RegisterDelegate {
                         delegate,
                         cipher,
@@ -786,10 +798,10 @@ impl<'a> TryFromFbs<&FbsDelegateRequest<'a>> for DelegateRequest<'a> {
                 // here would let a single crafted request take down the connection
                 // handler, so return a per-request error instead.
                 other => {
-                    return Err(WsApiError::deserialization(format!(
-                        "unknown DelegateRequestType discriminant: {}",
-                        other.0
-                    )));
+                    return Err(crate::client_api::unknown_union_discriminant(
+                        "DelegateRequestType",
+                        other.0,
+                    ));
                 }
             }
         };
@@ -1352,8 +1364,13 @@ impl HostResponse {
                         }
                         RelatedState { related_to, state } => {
                             let state_data = builder.create_vector(&state.into_bytes());
-                            let instance_data =
-                                builder.create_vector(related_to.encode().as_bytes());
+                            // RAW 32 bytes, like every other `common.ContractInstanceId`
+                            // producer. This wrote `related_to.encode()` — base58
+                            // TEXT — into a field the schema and the TypeScript
+                            // SDK both read as raw bytes. It is the encode half of
+                            // the decode bug this change fixes: the same field, the
+                            // same wrong transformation, mirrored.
+                            let instance_data = builder.create_vector(related_to.as_bytes());
 
                             let instance_offset = FbsContractInstanceId::create(
                                 &mut builder,
@@ -1379,8 +1396,13 @@ impl HostResponse {
                             )
                         }
                         RelatedDelta { related_to, delta } => {
-                            let instance_data =
-                                builder.create_vector(related_to.encode().as_bytes());
+                            // RAW 32 bytes, like every other `common.ContractInstanceId`
+                            // producer. This wrote `related_to.encode()` — base58
+                            // TEXT — into a field the schema and the TypeScript
+                            // SDK both read as raw bytes. It is the encode half of
+                            // the decode bug this change fixes: the same field, the
+                            // same wrong transformation, mirrored.
+                            let instance_data = builder.create_vector(related_to.as_bytes());
                             let delta_data = builder.create_vector(&delta.into_bytes());
 
                             let instance_offset = FbsContractInstanceId::create(
@@ -1411,8 +1433,13 @@ impl HostResponse {
                             state,
                             delta,
                         } => {
-                            let instance_data =
-                                builder.create_vector(related_to.encode().as_bytes());
+                            // RAW 32 bytes, like every other `common.ContractInstanceId`
+                            // producer. This wrote `related_to.encode()` — base58
+                            // TEXT — into a field the schema and the TypeScript
+                            // SDK both read as raw bytes. It is the encode half of
+                            // the decode bug this change fixes: the same field, the
+                            // same wrong transformation, mirrored.
+                            let instance_data = builder.create_vector(related_to.as_bytes());
                             let state_data = builder.create_vector(&state.into_bytes());
                             let delta_data = builder.create_vector(&delta.into_bytes());
 
@@ -2694,6 +2721,933 @@ mod delegate_request_wire_format {
             decoded.is_err(),
             "an unknown DelegateRequestType discriminant must be a clean \
              per-request error, never a panic that downs the connection handler"
+        );
+    }
+}
+
+/// Hardening pins for the flatbuffers decode boundary.
+///
+/// Every test here exists because a real decode site panicked, or silently
+/// produced a wrong value, on input a client can actually send. The boundary
+/// has exactly one entry point — [`ClientRequest::try_decode_fbs`] over
+/// `root_as_client_request` — so these drive the real entry point rather than
+/// an inner decoder wherever possible.
+///
+/// Two facts about the flatbuffers verifier make this whole class possible, and
+/// both are load-bearing for every test below:
+///
+/// 1. A `(required)` vector is checked for PRESENCE, not LENGTH
+///    (`Verifiable for Vector<T>` runs `verify_vector_range` and stops there).
+/// 2. Every generated union verifier ends in `_ => Ok(())`, so an unknown
+///    discriminant — including `NONE` — reaches the decoder's match.
+#[cfg(test)]
+mod fbs_decode_hardening {
+    use super::{ClientRequest, ContractRequest};
+    use crate::client_api::TryFromFbs;
+    use crate::contract_interface::UpdateData;
+    use crate::generated::client_request::{
+        finish_client_request_buffer, ApplicationMessages, ApplicationMessagesArgs,
+        ClientRequest as FbsClientRequest, ClientRequestArgs, ClientRequestType,
+        ContractRequest as FbsContractRequest, ContractRequestArgs, ContractRequestType,
+        DelegateCode as FbsDelegateCode, DelegateCodeArgs,
+        DelegateContainer as FbsDelegateContainer, DelegateContainerArgs,
+        DelegateKey as FbsDelegateKey, DelegateKeyArgs, DelegateRequest as FbsDelegateRequest,
+        DelegateRequestArgs, DelegateRequestType, DelegateType, Get as FbsGet, GetArgs,
+        InboundDelegateMsg as FbsInboundDelegateMsg, InboundDelegateMsgArgs,
+        InboundDelegateMsgType, Put as FbsPut, PutArgs, RegisterDelegate, RegisterDelegateArgs,
+        RelatedContract, RelatedContractArgs, RelatedContracts as FbsRelatedContracts,
+        RelatedContractsArgs, Update as FbsUpdate, UpdateArgs, WasmDelegateV1, WasmDelegateV1Args,
+    };
+    use crate::generated::common::{
+        ApplicationMessage as FbsApplicationMessage, ApplicationMessageArgs,
+        ContractCode as FbsContractCode, ContractCodeArgs,
+        ContractContainer as FbsContractContainer, ContractContainerArgs,
+        ContractInstanceId as FbsContractInstanceId, ContractInstanceIdArgs,
+        ContractKey as FbsContractKey, ContractKeyArgs, ContractType, RelatedDeltaUpdate,
+        RelatedDeltaUpdateArgs, RelatedStateAndDeltaUpdate, RelatedStateAndDeltaUpdateArgs,
+        RelatedStateUpdate, RelatedStateUpdateArgs, StateUpdate, StateUpdateArgs,
+        UpdateData as FbsUpdateData, UpdateDataArgs, UpdateDataType, WasmContractV1,
+        WasmContractV1Args,
+    };
+
+    type Builder<'a> = flatbuffers::FlatBufferBuilder<'a>;
+
+    /// The instance id the tests round-trip. Deliberately NOT all-ASCII: this is
+    /// what a real 32-byte id looks like, and it is precisely what the old
+    /// base58 decode choked on.
+    const INSTANCE: [u8; 32] = [
+        0x00, 0xff, 0x7a, 0x01, 0x30, 0x4f, 0x49, 0x6c, 0x2b, 0x2f, 0x5c, 0x7f, 0x80, 0xfe, 0x10,
+        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+        0x20, 0x21,
+    ];
+    const CODE_HASH: [u8; 32] = [42u8; 32];
+
+    fn instance_offset<'a>(
+        b: &mut Builder<'a>,
+        bytes: &[u8],
+    ) -> flatbuffers::WIPOffset<FbsContractInstanceId<'a>> {
+        let data = b.create_vector(bytes);
+        FbsContractInstanceId::create(b, &ContractInstanceIdArgs { data: Some(data) })
+    }
+
+    fn key_offset<'a>(
+        b: &mut Builder<'a>,
+        instance: &[u8],
+        code: &[u8],
+    ) -> flatbuffers::WIPOffset<FbsContractKey<'a>> {
+        let instance = instance_offset(b, instance);
+        let code = b.create_vector(code);
+        FbsContractKey::create(
+            b,
+            &ContractKeyArgs {
+                instance: Some(instance),
+                code: Some(code),
+            },
+        )
+    }
+
+    fn delegate_key_offset<'a>(
+        b: &mut Builder<'a>,
+        key: &[u8],
+        code_hash: &[u8],
+    ) -> flatbuffers::WIPOffset<FbsDelegateKey<'a>> {
+        let key = b.create_vector(key);
+        let code_hash = b.create_vector(code_hash);
+        FbsDelegateKey::create(
+            b,
+            &DelegateKeyArgs {
+                key: Some(key),
+                code_hash: Some(code_hash),
+            },
+        )
+    }
+
+    /// Finish a `ContractRequest`-carrying `ClientRequest` and return its bytes.
+    fn finish_contract(
+        b: &mut Builder<'_>,
+        ty: ContractRequestType,
+        req: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>,
+    ) -> Vec<u8> {
+        let contract = FbsContractRequest::create(
+            b,
+            &ContractRequestArgs {
+                contract_request_type: ty,
+                contract_request: Some(req),
+            },
+        );
+        let client = FbsClientRequest::create(
+            b,
+            &ClientRequestArgs {
+                client_request_type: ClientRequestType::ContractRequest,
+                client_request: Some(contract.as_union_value()),
+            },
+        );
+        finish_client_request_buffer(b, client);
+        b.finished_data().to_vec()
+    }
+
+    fn finish_delegate(
+        b: &mut Builder<'_>,
+        ty: DelegateRequestType,
+        req: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>,
+    ) -> Vec<u8> {
+        let delegate = FbsDelegateRequest::create(
+            b,
+            &DelegateRequestArgs {
+                delegate_request_type: ty,
+                delegate_request: Some(req),
+            },
+        );
+        let client = FbsClientRequest::create(
+            b,
+            &ClientRequestArgs {
+                client_request_type: ClientRequestType::DelegateRequest,
+                client_request: Some(delegate.as_union_value()),
+            },
+        );
+        finish_client_request_buffer(b, client);
+        b.finished_data().to_vec()
+    }
+
+    // ---------------------------------------------------------------------
+    // Per-union builders. Each produces a well-formed request whose ONE named
+    // union discriminant is `d`, so a test can sweep `d` while everything else
+    // stays valid.
+    // ---------------------------------------------------------------------
+
+    fn client_request_type(d: u8, force_defaults: bool) -> Vec<u8> {
+        let mut b = Builder::new();
+        b.force_defaults(force_defaults);
+        let key = key_offset(&mut b, &INSTANCE, &CODE_HASH);
+        let get = FbsGet::create(
+            &mut b,
+            &GetArgs {
+                key: Some(key),
+                fetch_contract: false,
+                subscribe: false,
+                blocking_subscribe: false,
+            },
+        );
+        let contract = FbsContractRequest::create(
+            &mut b,
+            &ContractRequestArgs {
+                contract_request_type: ContractRequestType::Get,
+                contract_request: Some(get.as_union_value()),
+            },
+        );
+        let client = FbsClientRequest::create(
+            &mut b,
+            &ClientRequestArgs {
+                client_request_type: ClientRequestType(d),
+                client_request: Some(contract.as_union_value()),
+            },
+        );
+        finish_client_request_buffer(&mut b, client);
+        b.finished_data().to_vec()
+    }
+
+    fn contract_request_type(d: u8, force_defaults: bool) -> Vec<u8> {
+        let mut b = Builder::new();
+        b.force_defaults(force_defaults);
+        let key = key_offset(&mut b, &INSTANCE, &CODE_HASH);
+        let get = FbsGet::create(
+            &mut b,
+            &GetArgs {
+                key: Some(key),
+                fetch_contract: false,
+                subscribe: false,
+                blocking_subscribe: false,
+            },
+        );
+        finish_contract(&mut b, ContractRequestType(d), get.as_union_value())
+    }
+
+    fn delegate_request_type(d: u8, force_defaults: bool) -> Vec<u8> {
+        let mut b = Builder::new();
+        b.force_defaults(force_defaults);
+        let dk = delegate_key_offset(&mut b, &[7u8; 32], &CODE_HASH);
+        let params = b.create_vector(&[1u8, 2, 3]);
+        let payload = b.create_vector(&[9u8; 4]);
+        let context = b.create_vector(&[0u8; 2]);
+        let app = FbsApplicationMessage::create(
+            &mut b,
+            &ApplicationMessageArgs {
+                payload: Some(payload),
+                context: Some(context),
+                processed: false,
+            },
+        );
+        let inbound_msg = FbsInboundDelegateMsg::create(
+            &mut b,
+            &InboundDelegateMsgArgs {
+                inbound_type: InboundDelegateMsgType::common_ApplicationMessage,
+                inbound: Some(app.as_union_value()),
+            },
+        );
+        let inbound = b.create_vector(&[inbound_msg]);
+        let msgs = ApplicationMessages::create(
+            &mut b,
+            &ApplicationMessagesArgs {
+                key: Some(dk),
+                params: Some(params),
+                inbound: Some(inbound),
+            },
+        );
+        finish_delegate(&mut b, DelegateRequestType(d), msgs.as_union_value())
+    }
+
+    /// A PUT whose `common.ContractContainer` union discriminant is `d`.
+    fn contract_type(d: u8, force_defaults: bool) -> Vec<u8> {
+        let mut b = Builder::new();
+        b.force_defaults(force_defaults);
+        let code_data = b.create_vector(&[0u8; 8]);
+        let code_hash = b.create_vector(&CODE_HASH);
+        let code = FbsContractCode::create(
+            &mut b,
+            &ContractCodeArgs {
+                data: Some(code_data),
+                code_hash: Some(code_hash),
+            },
+        );
+        let key = key_offset(&mut b, &INSTANCE, &CODE_HASH);
+        let params = b.create_vector(&[1u8, 2]);
+        let wasm = WasmContractV1::create(
+            &mut b,
+            &WasmContractV1Args {
+                data: Some(code),
+                parameters: Some(params),
+                key: Some(key),
+            },
+        );
+        let container = FbsContractContainer::create(
+            &mut b,
+            &ContractContainerArgs {
+                contract_type: ContractType(d),
+                contract: Some(wasm.as_union_value()),
+            },
+        );
+        let state = b.create_vector(&[3u8; 4]);
+        let empty: Vec<flatbuffers::WIPOffset<RelatedContract>> = vec![];
+        let contracts = b.create_vector(&empty);
+        let related = FbsRelatedContracts::create(
+            &mut b,
+            &RelatedContractsArgs {
+                contracts: Some(contracts),
+            },
+        );
+        let put = FbsPut::create(
+            &mut b,
+            &PutArgs {
+                container: Some(container),
+                wrapped_state: Some(state),
+                related_contracts: Some(related),
+                subscribe: false,
+                blocking_subscribe: false,
+            },
+        );
+        finish_contract(&mut b, ContractRequestType::Put, put.as_union_value())
+    }
+
+    /// A RegisterDelegate whose `DelegateContainer` union discriminant is `d`.
+    fn delegate_type(d: u8, force_defaults: bool) -> Vec<u8> {
+        let mut b = Builder::new();
+        b.force_defaults(force_defaults);
+        let code_data = b.create_vector(&[0u8; 8]);
+        let code_hash = b.create_vector(&CODE_HASH);
+        let code = FbsDelegateCode::create(
+            &mut b,
+            &DelegateCodeArgs {
+                data: Some(code_data),
+                code_hash: Some(code_hash),
+            },
+        );
+        let dk = delegate_key_offset(&mut b, &[7u8; 32], &CODE_HASH);
+        let params = b.create_vector(&[1u8, 2]);
+        let wasm = WasmDelegateV1::create(
+            &mut b,
+            &WasmDelegateV1Args {
+                parameters: Some(params),
+                data: Some(code),
+                key: Some(dk),
+            },
+        );
+        let container = FbsDelegateContainer::create(
+            &mut b,
+            &DelegateContainerArgs {
+                delegate_type: DelegateType(d),
+                delegate: Some(wasm.as_union_value()),
+            },
+        );
+        let cipher = b.create_vector(&[1u8; 32]);
+        let nonce = b.create_vector(&[2u8; 24]);
+        let register = RegisterDelegate::create(
+            &mut b,
+            &RegisterDelegateArgs {
+                delegate: Some(container),
+                cipher: Some(cipher),
+                nonce: Some(nonce),
+            },
+        );
+        finish_delegate(
+            &mut b,
+            DelegateRequestType::RegisterDelegate,
+            register.as_union_value(),
+        )
+    }
+
+    /// An UPDATE whose `common.UpdateData` union discriminant is `d`.
+    fn update_data_type(d: u8, force_defaults: bool) -> Vec<u8> {
+        let mut b = Builder::new();
+        b.force_defaults(force_defaults);
+        let state = b.create_vector(&[5u8; 4]);
+        let state_update = StateUpdate::create(&mut b, &StateUpdateArgs { state: Some(state) });
+        let data = FbsUpdateData::create(
+            &mut b,
+            &UpdateDataArgs {
+                update_data_type: UpdateDataType(d),
+                update_data: Some(state_update.as_union_value()),
+            },
+        );
+        let key = key_offset(&mut b, &INSTANCE, &CODE_HASH);
+        let update = FbsUpdate::create(
+            &mut b,
+            &UpdateArgs {
+                key: Some(key),
+                data: Some(data),
+            },
+        );
+        finish_contract(&mut b, ContractRequestType::Update, update.as_union_value())
+    }
+
+    /// An ApplicationMessages whose `InboundDelegateMsg` union discriminant is `d`.
+    fn inbound_delegate_msg_type(d: u8, force_defaults: bool) -> Vec<u8> {
+        let mut b = Builder::new();
+        b.force_defaults(force_defaults);
+        let payload = b.create_vector(&[9u8; 4]);
+        let context = b.create_vector(&[0u8; 2]);
+        let app = FbsApplicationMessage::create(
+            &mut b,
+            &ApplicationMessageArgs {
+                payload: Some(payload),
+                context: Some(context),
+                processed: false,
+            },
+        );
+        let inbound_msg = FbsInboundDelegateMsg::create(
+            &mut b,
+            &InboundDelegateMsgArgs {
+                inbound_type: InboundDelegateMsgType(d),
+                inbound: Some(app.as_union_value()),
+            },
+        );
+        let inbound = b.create_vector(&[inbound_msg]);
+        let dk = delegate_key_offset(&mut b, &[7u8; 32], &CODE_HASH);
+        let params = b.create_vector(&[1u8, 2, 3]);
+        let msgs = ApplicationMessages::create(
+            &mut b,
+            &ApplicationMessagesArgs {
+                key: Some(dk),
+                params: Some(params),
+                inbound: Some(inbound),
+            },
+        );
+        finish_delegate(
+            &mut b,
+            DelegateRequestType::ApplicationMessages,
+            msgs.as_union_value(),
+        )
+    }
+
+    /// `(union name, builder, the union's real discriminant)`.
+    type UnionCase = (&'static str, fn(u8, bool) -> Vec<u8>, u8);
+
+    /// **No union discriminant, for any of the seven unions on the decode path,
+    /// may panic the decoder.**
+    ///
+    /// One sweep covering every union at once. Four of the seven were
+    /// `unreachable!()` before this change, and all four are reachable: the
+    /// generated verifiers end in `_ => Ok(())`, so an unrecognized discriminant
+    /// passes verification and lands in the decoder's match.
+    ///
+    /// Scope, stated honestly: this covers a new *variant* on an existing union
+    /// for free, but NOT a new *union* — `cases` and its builders are written by
+    /// hand. `union_matches_never_use_unreachable` is the guard for that case.
+    ///
+    /// Four properties are pinned per union, and the third is the one that keeps
+    /// the other three honest:
+    ///
+    /// - The 0..=255 sweep RETURNS. A panic anywhere inside fails the test.
+    /// - An out-of-range discriminant is a clean error.
+    /// - That error came from the DECODER, not the verifier. Without this the
+    ///   sweep silently degrades to zero decoder coverage the moment a schema or
+    ///   builder change makes verification fail earlier — which is exactly what
+    ///   had happened to the NONE case below.
+    /// - The real discriminant still decodes, so the guard did not break the
+    ///   happy path.
+    #[test]
+    fn no_union_discriminant_panics_the_decoder() {
+        let cases: [UnionCase; 7] = [
+            ("ClientRequestType", client_request_type, 1),
+            ("ContractRequestType", contract_request_type, 3),
+            ("DelegateRequestType", delegate_request_type, 1),
+            ("ContractType", contract_type, 1),
+            ("DelegateType", delegate_type, 1),
+            ("UpdateDataType", update_data_type, 1),
+            (
+                "InboundDelegateMsgType",
+                inbound_delegate_msg_type,
+                InboundDelegateMsgType::common_ApplicationMessage.0,
+            ),
+        ];
+
+        for (union, build, valid) in cases {
+            for d in 0..=u8::MAX {
+                // Must return, never panic. A mismatched-but-known discriminant
+                // may be rejected by the verifier rather than the decoder;
+                // either is a clean error and both are acceptable here.
+                let bytes = build(d, false);
+                let _ = ClientRequest::try_decode_fbs(&bytes);
+            }
+
+            // An out-of-range discriminant must be rejected BY THE DECODER.
+            // Asserting only `is_err()` would also pass on a verifier
+            // rejection, which reaches none of the code this change touches.
+            let out_of_range = build(200, false);
+            let err = ClientRequest::try_decode_fbs(&out_of_range)
+                .expect_err("{union}: an out-of-range discriminant must be a clean error");
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Failed decoding message from client request: unknown {union} \
+                     discriminant: 200"
+                ),
+                "{union}: the error must come from the decoder's union arm, not \
+                 from the verifier — otherwise this sweep pins nothing"
+            );
+
+            // `NONE` needs `force_defaults`: both builders elide a field equal
+            // to its default, so an ordinary `NONE` is written as ABSENT and
+            // `visit_union` rejects the present-value/absent-type pair before
+            // any decoder runs. Forcing defaults writes the zero explicitly,
+            // which is the shape a non-flatc encoder can put on the wire and
+            // the only one that actually reaches the match arm.
+            let none = build(0, true);
+            let err = ClientRequest::try_decode_fbs(&none)
+                .expect_err("{union}: a NONE discriminant must be a clean error");
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Failed decoding message from client request: unknown {union} \
+                     discriminant: 0"
+                ),
+                "{union}: an explicit NONE must reach the decoder's union arm"
+            );
+
+            let good = build(valid, false);
+            assert!(
+                ClientRequest::try_decode_fbs(&good).is_ok(),
+                "{union}: the real discriminant must still decode; the guard \
+                 must not break the happy path"
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Per-site pins. Each of these fails if its own decode site is reverted,
+    // so a partial revert cannot leave the suite green — the failure mode #85
+    // shipped with, where the fix reached three call sites and only one was
+    // pinned.
+    // ---------------------------------------------------------------------
+
+    /// Build an UPDATE carrying one of the three `related_*` update variants,
+    /// with `id` as the raw `related_to` bytes.
+    fn update_with_related(variant: UpdateDataType, id: &[u8]) -> Vec<u8> {
+        let mut b = Builder::new();
+        let related_to = instance_offset(&mut b, id);
+        let payload = b.create_vector(&[5u8; 4]);
+        let data_offset = match variant {
+            UpdateDataType::RelatedStateUpdate => RelatedStateUpdate::create(
+                &mut b,
+                &RelatedStateUpdateArgs {
+                    related_to: Some(related_to),
+                    state: Some(payload),
+                },
+            )
+            .as_union_value(),
+            UpdateDataType::RelatedDeltaUpdate => RelatedDeltaUpdate::create(
+                &mut b,
+                &RelatedDeltaUpdateArgs {
+                    related_to: Some(related_to),
+                    delta: Some(payload),
+                },
+            )
+            .as_union_value(),
+            UpdateDataType::RelatedStateAndDeltaUpdate => {
+                let delta = b.create_vector(&[6u8; 4]);
+                RelatedStateAndDeltaUpdate::create(
+                    &mut b,
+                    &RelatedStateAndDeltaUpdateArgs {
+                        related_to: Some(related_to),
+                        state: Some(payload),
+                        delta: Some(delta),
+                    },
+                )
+                .as_union_value()
+            }
+            other => panic!("not a related update variant: {}", other.0),
+        };
+        let data = FbsUpdateData::create(
+            &mut b,
+            &UpdateDataArgs {
+                update_data_type: variant,
+                update_data: Some(data_offset),
+            },
+        );
+        let key = key_offset(&mut b, &INSTANCE, &CODE_HASH);
+        let update = FbsUpdate::create(
+            &mut b,
+            &UpdateArgs {
+                key: Some(key),
+                data: Some(data),
+            },
+        );
+        finish_contract(&mut b, ContractRequestType::Update, update.as_union_value())
+    }
+
+    fn decoded_related_to(bytes: &[u8]) -> [u8; 32] {
+        let req = ClientRequest::try_decode_fbs(bytes)
+            .expect("a well-formed related update must decode, not panic");
+        let ClientRequest::ContractOp(ContractRequest::Update { data, .. }) = req else {
+            panic!("expected an UPDATE, got {req:?}");
+        };
+        match data {
+            UpdateData::RelatedState { related_to, .. }
+            | UpdateData::RelatedDelta { related_to, .. }
+            | UpdateData::RelatedStateAndDelta { related_to, .. } => *related_to,
+            other => panic!("expected a related update, got {other:?}"),
+        }
+    }
+
+    /// `related_to` is 32 RAW bytes and must round-trip byte-for-byte.
+    ///
+    /// This decode used to be `ContractInstanceId::from_bytes(..).unwrap()` —
+    /// a base58 *string* decoder pointed at bytes that are already the final
+    /// id. It did not merely mishandle malformed input: a random 32-byte id
+    /// essentially never consists solely of base58 characters, so EVERY
+    /// well-formed related update panicked the connection task. `INSTANCE`
+    /// contains `0x00`, `0xff` and the base58-excluded `0`/`O`/`I`/`l`
+    /// characters precisely so a revert cannot pass by luck.
+    #[test]
+    fn related_state_update_round_trips_the_raw_instance_id() {
+        let bytes = update_with_related(UpdateDataType::RelatedStateUpdate, &INSTANCE);
+        assert_eq!(decoded_related_to(&bytes), INSTANCE);
+    }
+
+    #[test]
+    fn related_delta_update_round_trips_the_raw_instance_id() {
+        let bytes = update_with_related(UpdateDataType::RelatedDeltaUpdate, &INSTANCE);
+        assert_eq!(decoded_related_to(&bytes), INSTANCE);
+    }
+
+    #[test]
+    fn related_state_and_delta_update_round_trips_the_raw_instance_id() {
+        let bytes = update_with_related(UpdateDataType::RelatedStateAndDeltaUpdate, &INSTANCE);
+        assert_eq!(decoded_related_to(&bytes), INSTANCE);
+    }
+
+    /// A wrong-length `related_to` is a clean error naming the field, not a
+    /// panic and not a silently truncated id.
+    ///
+    /// Parameterized over all three variants: with one case, copy-pasting the
+    /// wrong variant's field name into the other two arms would fail nothing.
+    #[test]
+    fn related_to_wrong_length_is_rejected() {
+        for (variant, field) in [
+            (
+                UpdateDataType::RelatedStateUpdate,
+                "RelatedStateUpdate.related_to.data",
+            ),
+            (
+                UpdateDataType::RelatedDeltaUpdate,
+                "RelatedDeltaUpdate.related_to.data",
+            ),
+            (
+                UpdateDataType::RelatedStateAndDeltaUpdate,
+                "RelatedStateAndDeltaUpdate.related_to.data",
+            ),
+        ] {
+            let bytes = update_with_related(variant, &[1u8; 8]);
+            let err = ClientRequest::try_decode_fbs(&bytes)
+                .expect_err("an 8-byte related_to must be rejected");
+            let msg = err.to_string();
+            assert!(
+                msg.contains(field) && msg.contains("got 8 bytes"),
+                "the error must name {field} and the observed length, got: {msg}"
+            );
+        }
+    }
+
+    fn put_with_related_contract(id: &[u8]) -> Vec<u8> {
+        let mut b = Builder::new();
+        let code_data = b.create_vector(&[0u8; 8]);
+        let code_hash = b.create_vector(&CODE_HASH);
+        let code = FbsContractCode::create(
+            &mut b,
+            &ContractCodeArgs {
+                data: Some(code_data),
+                code_hash: Some(code_hash),
+            },
+        );
+        let key = key_offset(&mut b, &INSTANCE, &CODE_HASH);
+        let params = b.create_vector(&[1u8, 2]);
+        let wasm = WasmContractV1::create(
+            &mut b,
+            &WasmContractV1Args {
+                data: Some(code),
+                parameters: Some(params),
+                key: Some(key),
+            },
+        );
+        let container = FbsContractContainer::create(
+            &mut b,
+            &ContractContainerArgs {
+                contract_type: ContractType::WasmContractV1,
+                contract: Some(wasm.as_union_value()),
+            },
+        );
+        let related_id = instance_offset(&mut b, id);
+        let related_state = b.create_vector(&[8u8; 3]);
+        let related_contract = RelatedContract::create(
+            &mut b,
+            &RelatedContractArgs {
+                instance_id: Some(related_id),
+                state: Some(related_state),
+            },
+        );
+        let contracts = b.create_vector(&[related_contract]);
+        let related = FbsRelatedContracts::create(
+            &mut b,
+            &RelatedContractsArgs {
+                contracts: Some(contracts),
+            },
+        );
+        let state = b.create_vector(&[3u8; 4]);
+        let put = FbsPut::create(
+            &mut b,
+            &PutArgs {
+                container: Some(container),
+                wrapped_state: Some(state),
+                related_contracts: Some(related),
+                subscribe: false,
+                blocking_subscribe: false,
+            },
+        );
+        finish_contract(&mut b, ContractRequestType::Put, put.as_union_value())
+    }
+
+    /// The same base58 bug lived on the PUT path, in `RelatedContracts`. It went
+    /// unnoticed because the loop body only runs when the vector is NON-empty,
+    /// and the TypeScript suite's PUT fixture passes `new RelatedContractsT([])`.
+    #[test]
+    fn put_related_contract_round_trips_the_raw_instance_id() {
+        let bytes = put_with_related_contract(&INSTANCE);
+        let req = ClientRequest::try_decode_fbs(&bytes)
+            .expect("a PUT carrying a related contract must decode, not panic");
+        let ClientRequest::ContractOp(ContractRequest::Put {
+            related_contracts, ..
+        }) = req
+        else {
+            panic!("expected a PUT, got {req:?}");
+        };
+        let ids: Vec<[u8; 32]> = related_contracts
+            .into_owned()
+            .states()
+            .map(|(id, _)| **id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec![INSTANCE],
+            "the related contract id must round-trip"
+        );
+    }
+
+    #[test]
+    fn put_related_contract_wrong_length_id_is_rejected() {
+        let bytes = put_with_related_contract(&[1u8; 8]);
+        let err = ClientRequest::try_decode_fbs(&bytes)
+            .expect_err("an 8-byte related contract id must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("RelatedContract.instance_id") && msg.contains("got 8 bytes"),
+            "got: {msg}"
+        );
+    }
+
+    fn unregister_delegate(key_len: usize) -> Vec<u8> {
+        use crate::generated::client_request::{UnregisterDelegate, UnregisterDelegateArgs};
+        let mut b = Builder::new();
+        let dk = delegate_key_offset(&mut b, &vec![7u8; key_len], &CODE_HASH);
+        let unregister =
+            UnregisterDelegate::create(&mut b, &UnregisterDelegateArgs { key: Some(dk) });
+        finish_delegate(
+            &mut b,
+            DelegateRequestType::UnregisterDelegate,
+            unregister.as_union_value(),
+        )
+    }
+
+    /// `DelegateKey.key` is `(required)` but length-unchecked by the verifier,
+    /// and the decoder used to `copy_from_slice` it into a `[0; 32]` — which
+    /// panics on a mismatch. This is the normal delegate path, and the
+    /// TypeScript SDK exports `DelegateKey` as the raw generated type with no
+    /// length validation (unlike `ContractKey`, which throws a `TypeError`).
+    #[test]
+    fn delegate_key_wrong_length_is_rejected_not_panicking() {
+        let short = unregister_delegate(8);
+        let err = ClientRequest::try_decode_fbs(&short)
+            .expect_err("an 8-byte delegate key must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("DelegateKey.key") && msg.contains("got 8 bytes"),
+            "got: {msg}"
+        );
+
+        let long = unregister_delegate(64);
+        let err = ClientRequest::try_decode_fbs(&long)
+            .expect_err("a 64-byte delegate key must be rejected");
+        assert!(err.to_string().contains("got 64 bytes"), "got: {err}");
+
+        let good = unregister_delegate(32);
+        assert!(
+            ClientRequest::try_decode_fbs(&good).is_ok(),
+            "a 32-byte delegate key must still decode"
+        );
+    }
+
+    fn register_delegate(cipher_len: usize, nonce_len: usize) -> Vec<u8> {
+        let mut b = Builder::new();
+        let code_data = b.create_vector(&[0u8; 8]);
+        let code_hash = b.create_vector(&CODE_HASH);
+        let code = FbsDelegateCode::create(
+            &mut b,
+            &DelegateCodeArgs {
+                data: Some(code_data),
+                code_hash: Some(code_hash),
+            },
+        );
+        let dk = delegate_key_offset(&mut b, &[7u8; 32], &CODE_HASH);
+        let params = b.create_vector(&[1u8, 2]);
+        let wasm = WasmDelegateV1::create(
+            &mut b,
+            &WasmDelegateV1Args {
+                parameters: Some(params),
+                data: Some(code),
+                key: Some(dk),
+            },
+        );
+        let container = FbsDelegateContainer::create(
+            &mut b,
+            &DelegateContainerArgs {
+                delegate_type: DelegateType::WasmDelegateV1,
+                delegate: Some(wasm.as_union_value()),
+            },
+        );
+        let cipher = b.create_vector(&vec![1u8; cipher_len]);
+        let nonce = b.create_vector(&vec![2u8; nonce_len]);
+        let register = RegisterDelegate::create(
+            &mut b,
+            &RegisterDelegateArgs {
+                delegate: Some(container),
+                cipher: Some(cipher),
+                nonce: Some(nonce),
+            },
+        );
+        finish_delegate(
+            &mut b,
+            DelegateRequestType::RegisterDelegate,
+            register.as_union_value(),
+        )
+    }
+
+    /// `cipher` (32) and `nonce` (24) are the same shape: `(required)`, so the
+    /// verifier guarantees presence and nothing about length, and the decoder
+    /// used to `try_from(..).unwrap()` them.
+    #[test]
+    fn register_delegate_wrong_length_cipher_or_nonce_is_rejected() {
+        let err = ClientRequest::try_decode_fbs(&register_delegate(16, 24))
+            .expect_err("a 16-byte cipher must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("RegisterDelegate.cipher") && msg.contains("got 16 bytes"),
+            "got: {msg}"
+        );
+
+        let err = ClientRequest::try_decode_fbs(&register_delegate(32, 8))
+            .expect_err("an 8-byte nonce must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("RegisterDelegate.nonce") && msg.contains("got 8 bytes"),
+            "got: {msg}"
+        );
+
+        assert!(
+            ClientRequest::try_decode_fbs(&register_delegate(32, 24)).is_ok(),
+            "correct cipher/nonce lengths must still decode"
+        );
+    }
+
+    /// The ENCODE half of the same bug: `HostResponse`'s three related-update
+    /// variants wrote `related_to.encode()` — base58 TEXT — into
+    /// `common.ContractInstanceId.data`, a field every other producer and every
+    /// consumer treats as 32 raw bytes.
+    ///
+    /// It survived because Rust only encodes host responses and only TypeScript
+    /// decodes them, so no Rust round-trip test ever crossed it, and the
+    /// TypeScript SDK has no test that reads `relatedTo` back out of a
+    /// notification. Pinned here by decoding the encoder's own output, which is
+    /// the cheapest thing that would have caught it.
+    #[test]
+    fn host_response_encodes_related_to_as_raw_bytes() {
+        use crate::client_api::{ContractResponse, HostResponse};
+        use crate::contract_interface::{ContractInstanceId, ContractKey, State};
+        use crate::generated::host_response::{root_as_host_response, ContractResponseType};
+
+        let related = ContractInstanceId::new(INSTANCE);
+        let key = ContractKey::from_params_and_code(
+            crate::parameters::Parameters::from(vec![1u8, 2]),
+            crate::contract_interface::ContractCode::from(vec![0u8; 8]),
+        );
+        let response = HostResponse::ContractResponse(ContractResponse::UpdateNotification {
+            key,
+            update: UpdateData::RelatedState {
+                related_to: related,
+                state: State::from(vec![9u8; 4]),
+            },
+        });
+
+        let bytes = response.into_fbs_bytes().expect("encoding must succeed");
+        let host = root_as_host_response(&bytes).expect("the encoder must emit a valid buffer");
+        let contract = host
+            .response_as_contract_response()
+            .expect("a ContractResponse");
+        assert_eq!(
+            contract.contract_response_type(),
+            ContractResponseType::UpdateNotification
+        );
+        let notification = contract
+            .contract_response_as_update_notification()
+            .expect("an UpdateNotification");
+        let related_update = notification
+            .update()
+            .update_data_as_related_state_update()
+            .expect("a RelatedStateUpdate");
+
+        assert_eq!(
+            related_update.related_to().data().bytes(),
+            &INSTANCE,
+            "related_to must be the 32 RAW id bytes. Encoding it as base58 text \
+             puts ~44 ASCII bytes in a field the TypeScript SDK reads as a raw \
+             Uint8Array, and that our own decoder now rejects."
+        );
+    }
+
+    /// `SecretsId::try_decode_fbs` has no production caller today, so it is
+    /// pinned directly rather than through a request. Fixing it now means the
+    /// first client to reach it does not find a panic waiting.
+    #[test]
+    fn secrets_id_wrong_length_hash_is_rejected_not_panicking() {
+        use crate::delegate_interface::SecretsId;
+        use crate::generated::common::{SecretsId as FbsSecretsId, SecretsIdArgs};
+
+        let build = |hash_len: usize| {
+            let mut b = Builder::new();
+            let key = b.create_vector(&[1u8, 2, 3]);
+            let hash = b.create_vector(&vec![4u8; hash_len]);
+            let id = FbsSecretsId::create(
+                &mut b,
+                &SecretsIdArgs {
+                    key: Some(key),
+                    hash: Some(hash),
+                },
+            );
+            b.finish_minimal(id);
+            b.finished_data().to_vec()
+        };
+
+        let bytes = build(8);
+        let fbs = flatbuffers::root::<FbsSecretsId>(&bytes)
+            .expect("the verifier accepts a short required vector");
+        let err = SecretsId::try_decode_fbs(&fbs).expect_err("an 8-byte hash must be rejected");
+        assert!(
+            err.to_string().contains("SecretsId.hash") && err.to_string().contains("got 8 bytes"),
+            "got: {err}"
+        );
+
+        let bytes = build(32);
+        let fbs = flatbuffers::root::<FbsSecretsId>(&bytes).expect("well-formed");
+        assert!(
+            SecretsId::try_decode_fbs(&fbs).is_ok(),
+            "a 32-byte hash must still decode"
         );
     }
 }

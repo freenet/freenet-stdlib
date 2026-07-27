@@ -3,6 +3,60 @@
 ## [Unreleased]
 
 ### Fixed
+- **Related-contract decoding no longer panics on well-formed requests.**
+  `RelatedStateUpdate.related_to`, `RelatedDeltaUpdate.related_to`,
+  `RelatedStateAndDeltaUpdate.related_to` and `RelatedContract.instance_id`
+  were decoded with `ContractInstanceId::from_bytes(..).unwrap()`. That
+  function is a **base58 string decoder**, and the wire carries the id as 32
+  raw bytes. This was not an edge case: a random 32-byte id essentially never
+  consists solely of base58 characters (the alphabet is 58 of 256 byte values,
+  so the odds are about 2e-21), so *every* FlatBuffers UPDATE carrying a
+  related update, and every PUT carrying a related contract, panicked the
+  client's connection task. The PUT case stayed hidden because the loop body
+  only runs on a non-empty vector and the TypeScript suite's fixture passes an
+  empty one.
+
+  Stated plainly, because it is not purely a panic fix: those four fields are
+  now **raw-bytes-only**. The old decoder did accept base58 *text* there (that
+  is the one input base58 decoding handles), so a client that worked around the
+  panic by sending text at exactly those fields is rejected now. Raw bytes is
+  what the schema type carries everywhere else, including `ContractKey.instance`
+  in the same request.
+
+- **Four more length-unchecked `(required)` fields no longer panic.**
+  `DelegateKey.key`, `SecretsId.hash`, `RegisterDelegate.cipher` and
+  `RegisterDelegate.nonce` were read with `copy_from_slice` or
+  `try_from(..).unwrap()` into fixed-size arrays. The flatbuffers verifier
+  checks that a `(required)` vector is PRESENT, not that it is the right
+  LENGTH, so any client could send a short one and take down its connection
+  task. `DelegateKey` is on the normal delegate path, and the TypeScript SDK
+  exports it as the raw generated type with no length validation.
+
+- **Four union discriminants no longer hit `unreachable!()`.** `ContractType`,
+  `DelegateType`, `UpdateDataType` and `InboundDelegateMsgType` were decoded
+  with `unreachable!()` on an unrecognized discriminant, but every generated
+  union verifier ends in `_ => Ok(())`, so any discriminant a client sets
+  reaches the decoder's match. All four now return a per-request error,
+  matching what `ContractRequestType` and `DelegateRequestType` already did;
+  those two, plus `ClientRequestType`, now share the same error shape and all
+  report the offending value.
+
+  A single test sweeps all 256 discriminants of all seven unions currently on
+  the decode path, and a source-scrape test fails CI if a new decoder
+  reintroduces either shape.
+
+- **`HostResponse`'s three related-update variants now encode `related_to` as
+  raw bytes.** They wrote `related_to.encode()` - base58 *text* - into
+  `common.ContractInstanceId.data`, which every other producer and every
+  consumer treats as 32 raw bytes. This is the encode half of the same bug, and
+  it survived because Rust only encodes host responses while only TypeScript
+  decodes them, so no round-trip test ever crossed it.
+
+Every item above is **FlatBuffers-only**. The native (bincode) path decodes the
+same Rust enums directly and never reaches `try_decode_fbs`, and first-party
+tooling uses `encodingProtocol=native` — which is why this class went unnoticed
+and why it lands on third-party and browser clients.
+
 - **`ContractKey::try_decode_fbs` no longer double-hashes the code hash.** The
   wire `code` field carries the already-computed 32-byte code hash, but the
   decoder passed it to `CodeHash::from_code`: the *hashing* constructor -
@@ -24,11 +78,17 @@
   client's connection task. The `ContractKey.instance` field is now
   length-checked at all three sites that decode it (UPDATE, GET, SUBSCRIBE).
 
-  Note the narrow scope: this covers the `ContractKey` fields only. The same
-  unchecked-`unwrap` class survives elsewhere on the same UPDATE request -
-  `UpdateData`'s `Related*` variants apply base58 decoding to bytes already in
-  final form and then unwrap: so an FBS UPDATE carrying one of those variants
-  still panics. Tracked in freenet-core#4996.
+  That entry covered the `ContractKey` fields only; the rest of the same class
+  elsewhere on the decode path - including `UpdateData`'s `Related*` variants -
+  is fixed by the entries above, closing freenet-core#4996.
+
+### Deprecated
+- **`ContractInstanceId::from_bytes` is renamed to
+  `ContractInstanceId::from_base58`.** It parses base58 *text*, not raw bytes;
+  the old name and its "build from the binary representation" doc are what
+  caused the four decode sites above to feed it raw wire bytes. `from_bytes`
+  remains as a delegating alias, so the rename is not a breaking change, but it
+  now warns. Use `ContractInstanceId::new` for raw bytes you already hold.
 
 ### Compatibility
 - **A `ContractKey` whose `code` field is absent or not exactly 32 bytes is now

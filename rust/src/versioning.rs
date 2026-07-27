@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    client_api::{TryFromFbs, WsApiError},
+    client_api::{unknown_union_discriminant, TryFromFbs, WsApiError},
     common_generated::common::{ContractContainer as FbsContractContainer, ContractType},
     contract_interface::{ContractInstanceId, ContractKey},
     generated::client_request::{DelegateContainer as FbsDelegateContainer, DelegateType},
@@ -114,7 +114,12 @@ impl<'a> TryFromFbs<&FbsDelegateContainer<'a>> for DelegateContainer {
                     Delegate::from((&data, &params)),
                 )))
             }
-            _ => unreachable!(),
+            // Reachable, not `unreachable!()`: the generated verifier for this
+            // union ends in `_ => Ok(())`, and the TypeScript SDK's
+            // `DelegateContainer` constructor takes `DelegateType.NONE` as its
+            // default argument, so NONE is a value first-party client code can
+            // realistically send. See `unknown_union_discriminant`.
+            other => Err(unknown_union_discriminant("DelegateType", other.0)),
         }
     }
 }
@@ -429,7 +434,12 @@ impl<'a> TryFromFbs<&FbsContractContainer<'a>> for ContractContainer {
                     key,
                 })))
             }
-            _ => unreachable!(),
+            // Reachable, not `unreachable!()`: the generated verifier for this
+            // union ends in `_ => Ok(())`, and the TypeScript SDK's
+            // `ContractContainer` constructor takes `ContractType.NONE` as its
+            // default argument, so NONE is a value first-party client code can
+            // realistically send on a PUT. See `unknown_union_discriminant`.
+            other => Err(unknown_union_discriminant("ContractType", other.0)),
         }
     }
 }
