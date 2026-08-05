@@ -594,6 +594,14 @@ pub enum DelegateRequest<'a> {
         nonce: [u8; 24],
     },
     UnregisterDelegate(DelegateKey),
+    // Do NOT re-add a `RegisterDelegateWithPredecessors`-shaped variant
+    // (predecessor keys + node-side secret copy-forward) without first
+    // designing a non-forgeable way to attest which web-app is driving the
+    // registration. The 0.8.4 version of this variant trusted the caller's
+    // `origin_contract`, which turned out to be mintable by any HTTP client
+    // for an arbitrary contract id — see freenet-core#5198 for the exploit
+    // chain and freenet-core#5199 for the fix (disabling the node-side
+    // handler) that predates this variant's removal here in 0.9.0.
 }
 
 impl DelegateRequest<'_> {
@@ -2368,11 +2376,14 @@ mod client_request_test {
 /// wire-format pin at all — a reorder would have shipped undetected.
 ///
 /// A fourth variant, `RegisterDelegateWithPredecessors` (tag 3), was added in
-/// 0.8.4 and removed in a later release (freenet-core#5198 — its
-/// `origin_contract` authorization gate was forgeable by any HTTP client, and
-/// it had no adopters). It was appended last specifically so removing it
-/// leaves tags 0-2 unaffected; the three variants below are exactly what
-/// shipped from the start, still pinned to their complete byte encodings.
+/// 0.8.4 and removed here in 0.9.0 (freenet-core#5199, tracking issue
+/// freenet-core#5198 — its `origin_contract` authorization gate was forgeable
+/// by any HTTP client, and no client ever constructed or sent it on the
+/// wire). It was appended last specifically so removing it leaves tags 0-2
+/// unaffected; the three variants below are exactly what shipped from the
+/// start, still pinned to their complete byte encodings. Tag 3 is free to
+/// reuse for a future variant: since nothing ever spoke it on the wire,
+/// nothing can misinterpret it.
 #[cfg(test)]
 mod delegate_request_wire_format {
     use super::DelegateRequest;
@@ -2491,6 +2502,26 @@ mod delegate_request_wire_format {
             bincode::deserialize::<DelegateRequest>(UNREGISTER).unwrap(),
             DelegateRequest::UnregisterDelegate(_)
         ));
+    }
+
+    /// `key()` dispatches correctly for every remaining variant: the
+    /// `ApplicationMessages`/`UnregisterDelegate` key field directly, and
+    /// `RegisterDelegate` via the contained delegate's own key.
+    #[test]
+    fn key_dispatches_for_every_variant() {
+        let app_key = DelegateKey::new([0x11; 32], CodeHash::new([0x22; 32]));
+        assert_eq!(sample_app_messages().key(), &app_key);
+
+        let register = sample_register();
+        match &register {
+            DelegateRequest::RegisterDelegate { delegate, .. } => {
+                assert_eq!(register.key(), delegate.key());
+            }
+            other => panic!("sample_register() must build a RegisterDelegate, got {other:?}"),
+        }
+
+        let unregister_key = DelegateKey::new([0x11; 32], CodeHash::new([0x22; 32]));
+        assert_eq!(sample_unregister().key(), &unregister_key);
     }
 
     /// The flatbuffers decode path must NOT panic on an unknown
