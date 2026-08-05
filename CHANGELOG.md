@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Removed
+- **`DelegateRequest::RegisterDelegateWithPredecessors`** (added in 0.8.4).
+  freenet-core's node-side handler for this request has been disabled
+  (freenet-core#5198): its `origin_contract` authorization gate — meant to
+  confirm the registering web-app actually owns the predecessor delegate
+  before copying its secrets — is forgeable by any HTTP client, letting an
+  attacker who knows a target app's public contract id register a delegate
+  that names the target's real delegate as predecessor and receive its
+  `Local`-scope secrets. The request variant had no adopters (River,
+  ghostkeys, and Atlas each carry their own client-driven secret/state
+  continuity mechanism instead), so removing it here has no migration
+  impact. It was appended as the last variant of `DelegateRequest`
+  specifically so this removal doesn't reassign any other variant's bincode
+  tag — `ApplicationMessages` (0), `RegisterDelegate` (1), and
+  `UnregisterDelegate` (2) are unaffected.
+
 ## [0.8.5] - 2026-07-27
 
 ### Fixed
