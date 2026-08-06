@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### Breaking (next release must be 0.9.0, not a patch)
+- **`DelegateRequest::RegisterDelegateWithPredecessors`** removed (added in
+  0.8.4). freenet-core's node-side handler for this request was disabled in
+  freenet-core#5199 (tracking issue freenet-core#5198): its `origin_contract`
+  authorization gate — meant to confirm the registering web-app actually owns
+  the predecessor delegate before copying its secrets — is forgeable by any
+  HTTP client, letting an attacker who knows a target app's public contract id
+  register a delegate that names the target's real delegate as predecessor
+  and receive its `Local`-scope secrets.
+
+  No known client ever constructed or sent this variant on the wire — River,
+  ghostkeys, and Atlas each carry their own client-driven secret/state
+  continuity mechanism instead — so removing it changes no deployed runtime
+  behavior. It IS still referenced by name in freenet-core's own source
+  (match arms plus the #5198 regression tests, which construct the variant
+  directly to prove the vulnerability is closed); those references, and what
+  replaces the regression coverage, must be addressed together when
+  freenet-core's `freenet-stdlib` dependency is next bumped past this
+  version — tracked in freenet-core#5201. Removing a public enum variant is
+  source-breaking for any external code that names or constructs it (even
+  though the enum is `#[non_exhaustive]`, which only protects an exhaustive
+  *match*, not a constructor), so this requires a semver-minor release
+  (0.9.0), not a patch — a plain `0.8.6` would surprise anyone whose
+  `Cargo.toml` pins `"0.8"` and picks it up via `cargo update`.
+
+  It was appended as the last variant of `DelegateRequest` specifically so
+  this removal doesn't reassign any other variant's bincode tag —
+  `ApplicationMessages` (0), `RegisterDelegate` (1), and
+  `UnregisterDelegate` (2) are unaffected.
+
 ## [0.8.5] - 2026-07-27
 
 ### Fixed

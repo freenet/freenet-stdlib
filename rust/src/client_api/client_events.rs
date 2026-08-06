@@ -594,35 +594,14 @@ pub enum DelegateRequest<'a> {
         nonce: [u8; 24],
     },
     UnregisterDelegate(DelegateKey),
-    /// Registers a delegate AND requests a one-shot, node-side copy-forward of
-    /// the LOCAL-scope secrets belonging to `predecessors` into the newly
-    /// registered delegate's own secret namespace.
-    ///
-    /// `predecessors` are the delegate keys of retired generations of this
-    /// delegate. It is a **list** because a user may skip one or more
-    /// generations between the version they last ran and the current one, so
-    /// several prior namespaces can need forwarding in a single registration.
-    /// The copy-forward is:
-    ///   - **consent-gated on the client side** — the node performs NO
-    ///     execution of any old delegate WASM; it only copies the
-    ///     already-sealed LOCAL-scope secret bytes it holds for a predecessor
-    ///     into the successor's namespace,
-    ///   - **best-effort over unknown predecessors** — the server silently
-    ///     ignores any predecessor key it does not hold, and
-    ///   - **idempotent per `(predecessor -> successor)` pair** —
-    ///     re-registering with the same predecessors copies nothing new.
-    ///
-    /// `cipher` and `nonce` mirror [`DelegateRequest::RegisterDelegate`] purely
-    /// for field-shape parity. The node has ignored both since
-    /// freenet-core#4140 (secrets are sealed client-side), so they carry no
-    /// behavior here either; they exist only so the two registration variants
-    /// stay structurally identical.
-    RegisterDelegateWithPredecessors {
-        delegate: DelegateContainer,
-        cipher: [u8; 32],
-        nonce: [u8; 24],
-        predecessors: Vec<DelegateKey>,
-    },
+    // Do NOT re-add a `RegisterDelegateWithPredecessors`-shaped variant
+    // (predecessor keys + node-side secret copy-forward) without first
+    // designing a non-forgeable way to attest which web-app is driving the
+    // registration. The 0.8.4 version of this variant trusted the caller's
+    // `origin_contract`, which turned out to be mintable by any HTTP client
+    // for an arbitrary contract id — see freenet-core#5198 for the exploit
+    // chain and freenet-core#5199 for the fix (disabling the node-side
+    // handler) that predates this variant's removal here in 0.9.0.
 }
 
 impl DelegateRequest<'_> {
@@ -647,17 +626,6 @@ impl DelegateRequest<'_> {
                 nonce,
             },
             DelegateRequest::UnregisterDelegate(key) => DelegateRequest::UnregisterDelegate(key),
-            DelegateRequest::RegisterDelegateWithPredecessors {
-                delegate,
-                cipher,
-                nonce,
-                predecessors,
-            } => DelegateRequest::RegisterDelegateWithPredecessors {
-                delegate,
-                cipher,
-                nonce,
-                predecessors,
-            },
         }
     }
 
@@ -666,7 +634,6 @@ impl DelegateRequest<'_> {
             DelegateRequest::ApplicationMessages { key, .. } => key,
             DelegateRequest::RegisterDelegate { delegate, .. } => delegate.key(),
             DelegateRequest::UnregisterDelegate(key) => key,
-            DelegateRequest::RegisterDelegateWithPredecessors { delegate, .. } => delegate.key(),
         }
     }
 }
@@ -715,18 +682,6 @@ impl Display for ClientRequest<'_> {
                 }
                 DelegateRequest::UnregisterDelegate(key) => {
                     write!(f, "DelegateRequest::UnregisterDelegate for key `{key}`")
-                }
-                DelegateRequest::RegisterDelegateWithPredecessors {
-                    delegate,
-                    predecessors,
-                    ..
-                } => {
-                    write!(
-                        f,
-                        "DelegateRequest::RegisterDelegateWithPredecessors for delegate.key()=`{}` with {} predecessor(s)",
-                        delegate.key(),
-                        predecessors.len()
-                    )
                 }
             },
             ClientRequest::Disconnect { .. } => write!(f, "client disconnected"),
@@ -2417,10 +2372,18 @@ mod client_request_test {
 /// every following tag and breaks already-deployed clients (the v0.2.11
 /// break class).
 ///
-/// `RegisterDelegateWithPredecessors` was appended as the LAST variant
-/// precisely so the three pre-existing tags stay byte-identical. These tests
-/// exist because, before this module, `DelegateRequest` had NO wire-format
-/// pin at all — a reorder would have shipped undetected.
+/// These tests exist because, before this module, `DelegateRequest` had NO
+/// wire-format pin at all — a reorder would have shipped undetected.
+///
+/// A fourth variant, `RegisterDelegateWithPredecessors` (tag 3), was added in
+/// 0.8.4 and removed here in 0.9.0 (freenet-core#5199, tracking issue
+/// freenet-core#5198 — its `origin_contract` authorization gate was forgeable
+/// by any HTTP client, and no client ever constructed or sent it on the
+/// wire). It was appended last specifically so removing it leaves tags 0-2
+/// unaffected; the three variants below are exactly what shipped from the
+/// start, still pinned to their complete byte encodings. Tag 3 is free to
+/// reuse for a future variant: since nothing ever spoke it on the wire,
+/// nothing can misinterpret it.
 #[cfg(test)]
 mod delegate_request_wire_format {
     use super::DelegateRequest;
@@ -2434,10 +2397,6 @@ mod delegate_request_wire_format {
         let code = DelegateCode::from(vec![1u8, 2, 3, 4]);
         let params = Parameters::from(vec![9u8, 8, 7]);
         DelegateContainer::Wasm(DelegateWasmAPIVersion::V1(Delegate::from((&code, &params))))
-    }
-
-    fn sample_key(fill: u8) -> DelegateKey {
-        DelegateKey::new([fill; 32], CodeHash::new([fill.wrapping_add(1); 32]))
     }
 
     // The four sample values whose complete bincode encodings are frozen in
@@ -2466,28 +2425,17 @@ mod delegate_request_wire_format {
         DelegateRequest::UnregisterDelegate(DelegateKey::new([0x11; 32], CodeHash::new([0x22; 32])))
     }
 
-    fn sample_register_with_predecessors() -> DelegateRequest<'static> {
-        DelegateRequest::RegisterDelegateWithPredecessors {
-            delegate: sample_container(),
-            cipher: [0x33; 32],
-            nonce: [0x44; 24],
-            predecessors: vec![sample_key(0xA0), sample_key(0xB0), sample_key(0xC0)],
-        }
-    }
-
-    /// Complete-byte wire-format freeze for all four variants.
+    /// Complete-byte wire-format freeze for all three variants.
     ///
-    /// The three pre-existing variants (`ApplicationMessages`,
-    /// `RegisterDelegate`, `UnregisterDelegate`) are pinned to their FULL
-    /// expected byte vectors — not just the 4-byte tag — so a field reorder or
-    /// a change to a nested type's encoding (e.g. `DelegateContainer`,
-    /// `DelegateKey`, `ApplicationMessage`) is caught, not only a variant
-    /// reorder. Those three vectors were generated from **origin/main @
-    /// 8b53702** (the shipped format) via a throwaway generator and confirmed
-    /// byte-identical to this branch's output, so the pin anchors to what old
-    /// clients actually speak. The fourth vector
-    /// (`RegisterDelegateWithPredecessors`, multi-predecessor list) was
-    /// generated from THIS branch.
+    /// Each variant (`ApplicationMessages`, `RegisterDelegate`,
+    /// `UnregisterDelegate`) is pinned to its FULL expected byte vector — not
+    /// just the 4-byte tag — so a field reorder or a change to a nested
+    /// type's encoding (e.g. `DelegateContainer`, `DelegateKey`,
+    /// `ApplicationMessage`) is caught, not only a variant reorder. These
+    /// vectors were generated from **origin/main @ 8b53702** (the shipped
+    /// format) via a throwaway generator and confirmed byte-identical to this
+    /// branch's output, so the pin anchors to what old clients actually
+    /// speak.
     ///
     /// The test also DESERIALIZES each frozen vector, proving an old-format
     /// byte stream still decodes into the expected variant on this build.
@@ -2518,31 +2466,6 @@ mod delegate_request_wire_format {
             34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34,
             34,
         ];
-        // --- this branch (the new variant) ---
-        const REGISTER_WITH_PREDECESSORS: &[u8] = &[
-            3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 9, 8, 7, 4, 0, 0, 0, 0, 0,
-            0, 0, 1, 2, 3, 4, 99, 120, 29, 23, 20, 37, 163, 99, 18, 250, 5, 141, 135, 18, 213, 208,
-            81, 53, 169, 145, 236, 32, 53, 28, 233, 214, 92, 219, 25, 160, 84, 50, 88, 111, 44, 39,
-            24, 219, 97, 92, 222, 20, 205, 248, 149, 154, 214, 38, 193, 144, 31, 141, 32, 222, 49,
-            197, 66, 237, 16, 98, 165, 72, 6, 11, 99, 120, 29, 23, 20, 37, 163, 99, 18, 250, 5,
-            141, 135, 18, 213, 208, 81, 53, 169, 145, 236, 32, 53, 28, 233, 214, 92, 219, 25, 160,
-            84, 50, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
-            51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68,
-            68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 3, 0, 0, 0, 0, 0, 0, 0, 160,
-            160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160,
-            160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 161, 161, 161,
-            161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161,
-            161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 176, 176, 176, 176, 176,
-            176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 176,
-            176, 176, 176, 176, 176, 176, 176, 176, 176, 176, 177, 177, 177, 177, 177, 177, 177,
-            177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177, 177,
-            177, 177, 177, 177, 177, 177, 177, 177, 192, 192, 192, 192, 192, 192, 192, 192, 192,
-            192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192, 192,
-            192, 192, 192, 192, 192, 192, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193,
-            193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193,
-            193, 193, 193, 193,
-        ];
-
         // 1. Serialization is byte-stable for every variant.
         assert_eq!(
             bincode::serialize(&sample_app_messages()).unwrap(),
@@ -2559,18 +2482,11 @@ mod delegate_request_wire_format {
             UNREGISTER,
             "UnregisterDelegate (tag 2) encoding changed"
         );
-        assert_eq!(
-            bincode::serialize(&sample_register_with_predecessors()).unwrap(),
-            REGISTER_WITH_PREDECESSORS,
-            "RegisterDelegateWithPredecessors (tag 3) encoding changed"
-        );
 
-        // 2. The four variant tags are exactly 0,1,2,3 — appending the new
-        //    variant did not shift the pre-existing three.
+        // 2. The three variant tags are exactly 0,1,2.
         assert_eq!(APP_MESSAGES[..4], 0u32.to_le_bytes());
         assert_eq!(REGISTER[..4], 1u32.to_le_bytes());
         assert_eq!(UNREGISTER[..4], 2u32.to_le_bytes());
-        assert_eq!(REGISTER_WITH_PREDECESSORS[..4], 3u32.to_le_bytes());
 
         // 3. Each frozen (old-format) byte stream still DECODES into its
         //    variant on this build — an old client's bytes remain readable.
@@ -2586,80 +2502,26 @@ mod delegate_request_wire_format {
             bincode::deserialize::<DelegateRequest>(UNREGISTER).unwrap(),
             DelegateRequest::UnregisterDelegate(_)
         ));
-        assert!(matches!(
-            bincode::deserialize::<DelegateRequest>(REGISTER_WITH_PREDECESSORS).unwrap(),
-            DelegateRequest::RegisterDelegateWithPredecessors { .. }
-        ));
     }
 
-    /// The new variant's tag is exactly `3u32` little-endian — a direct,
-    /// self-documenting assertion that it was appended one past
-    /// `UnregisterDelegate` (tag 2).
+    /// `key()` dispatches correctly for every remaining variant: the
+    /// `ApplicationMessages`/`UnregisterDelegate` key field directly, and
+    /// `RegisterDelegate` via the contained delegate's own key.
     #[test]
-    fn register_with_predecessors_tag_is_three() {
-        let req = DelegateRequest::RegisterDelegateWithPredecessors {
-            delegate: sample_container(),
-            cipher: [0; 32],
-            nonce: [0; 24],
-            predecessors: vec![],
-        };
-        assert_eq!(
-            bincode::serialize(&req).unwrap()[..4],
-            3u32.to_le_bytes(),
-            "RegisterDelegateWithPredecessors must be the 4th variant (tag 3)"
-        );
-    }
+    fn key_dispatches_for_every_variant() {
+        let app_key = DelegateKey::new([0x11; 32], CodeHash::new([0x22; 32]));
+        assert_eq!(sample_app_messages().key(), &app_key);
 
-    /// The new variant round-trips through bincode, including a multi-element
-    /// `predecessors` list (the skip-generations case the variant exists for).
-    #[test]
-    fn register_with_predecessors_round_trips() {
-        let predecessors = vec![sample_key(0xA0), sample_key(0xB0), sample_key(0xC0)];
-        let delegate = sample_container();
-        let expected_key = delegate.key().clone();
-
-        let req = DelegateRequest::RegisterDelegateWithPredecessors {
-            delegate,
-            cipher: [0x33; 32],
-            nonce: [0x44; 24],
-            predecessors: predecessors.clone(),
-        };
-
-        let bytes = bincode::serialize(&req).unwrap();
-        let decoded: DelegateRequest = bincode::deserialize(&bytes).unwrap();
-
-        match decoded {
-            DelegateRequest::RegisterDelegateWithPredecessors {
-                delegate,
-                cipher,
-                nonce,
-                predecessors: got,
-            } => {
-                assert_eq!(delegate.key(), &expected_key, "delegate preserved");
-                assert_eq!(cipher, [0x33; 32], "cipher preserved");
-                assert_eq!(nonce, [0x44; 24], "nonce preserved");
-                assert_eq!(
-                    got, predecessors,
-                    "full predecessor list preserved in order"
-                );
+        let register = sample_register();
+        match &register {
+            DelegateRequest::RegisterDelegate { delegate, .. } => {
+                assert_eq!(register.key(), delegate.key());
             }
-            other => panic!("round-trip produced the wrong variant: {other:?}"),
+            other => panic!("sample_register() must build a RegisterDelegate, got {other:?}"),
         }
-    }
 
-    /// `key()` returns the newly-registered delegate's key (not a
-    /// predecessor's), matching `RegisterDelegate`'s behavior.
-    #[test]
-    fn key_returns_the_new_delegate() {
-        let delegate = sample_container();
-        let expected_key = delegate.key().clone();
-        let req = DelegateRequest::RegisterDelegateWithPredecessors {
-            delegate,
-            cipher: [0; 32],
-            nonce: [0; 24],
-            predecessors: vec![sample_key(0xA0)],
-        };
-        assert_eq!(req.key(), &expected_key);
+        let unregister_key = DelegateKey::new([0x11; 32], CodeHash::new([0x22; 32]));
+        assert_eq!(sample_unregister().key(), &unregister_key);
     }
 
     /// The flatbuffers decode path must NOT panic on an unknown
