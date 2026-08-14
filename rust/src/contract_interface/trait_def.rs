@@ -59,18 +59,21 @@ use super::{
 /// # ContractInterface
 ///
 /// This trait defines the core functionality for managing and updating a contract's state.
-/// Implementations must ensure that state delta updates are *commutative*. In other words,
-/// when applying multiple delta updates to a state, the order in which these updates are
-/// applied should not affect the final state. Once all deltas are applied, the resulting
-/// state should be the same, regardless of the order in which the deltas were applied.
+/// Implementations must ensure that the state merge operation is *associative*, *commutative*,
+/// and *idempotent* — i.e. state forms an idempotent commutative monoid (a join-semilattice),
+/// the same algebraic structure used by state-based CRDTs. In other words, when applying
+/// multiple delta updates to a state, the order in which these updates are applied should not
+/// affect the final state, and applying the same update more than once must not change the
+/// result beyond its first application. Once all deltas are applied, the resulting state
+/// should be the same, regardless of the order or repetition of application.
 ///
 /// Implementations must also keep the delta negligible when the requesting peer's summary
 /// shows it already holds this state: the delta must not contain that state, or approach
 /// its size. See [`Self::get_state_delta`].
 ///
-/// Noncompliant behavior, such as failing to obey the commutativity rule or returning a
-/// state-sized delta to a peer that is already up to date, may result in the contract
-/// being deprioritized or removed from the p2p network.
+/// Noncompliant behavior, such as failing to obey the associativity, commutativity, or
+/// idempotence rules, or returning a state-sized delta to a peer that is already up to date,
+/// may result in the contract being deprioritized or removed from the p2p network.
 pub trait ContractInterface {
     /// Verify that the state is valid, given the parameters.
     fn validate_state(
