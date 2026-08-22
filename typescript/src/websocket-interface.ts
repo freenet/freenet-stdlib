@@ -837,6 +837,16 @@ export class FreenetWsApi {
             // silent data mix-up this correlation exists to prevent — as it
             // also would be once any put has given up without an answer, which
             // is what `disarmLoneFallback` watches for.
+            //
+            // Known candidate for removal. This tier only earns its keep if the
+            // host's recomputed key really can differ from the container key a
+            // client sends; every consumer looked at so far derives that key
+            // correctly, and the test covering the divergence is synthetic, so
+            // there is no evidence either way yet. If someone establishes that
+            // divergence does not happen in practice, deleting the tier is a
+            // clean simplification — it removes this hazard by construction
+            // rather than fencing it. That is its own change with its own
+            // evidence, not a fold-in.
             this.resolveMatching(
               this.pendingPuts,
               put_response.key.encode(),
