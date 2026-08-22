@@ -657,8 +657,68 @@ function resolveWebSocket(): typeof WebSocket {
   }
 }
 
+interface PendingRequest<T> {
+  resolve: (value: T) => void;
+  reject: (reason: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  /**
+   * base58 contract instance id this request is correlated on, or `null` when
+   * the request did not carry a usable key. See {@link takeMatching}.
+   */
+  key: string | null;
+}
+
+/** Default timeout for awaiting a response (30 seconds). */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 /**
- * The `FreenetWsApi` provides the API to manage the connection to the host, handle responses, and send requests.
+ * base58-encodes a contract instance id, or returns `null` when the id is
+ * missing or not 32 bytes (so a malformed key degrades to "uncorrelated"
+ * rather than throwing on the response path).
+ */
+function encodeInstanceId(
+  data: number[] | Uint8Array | null | undefined
+): string | null {
+  if (!data) return null;
+  const bytes = data instanceof Uint8Array ? data : Uint8Array.from(data);
+  if (bytes.length !== 32) return null;
+  return base58.encode(bytes);
+}
+
+/** base58 instance id of a wire `ContractKey`, or `null` when unusable. */
+function instanceIdOf(key: ContractKeyT | null | undefined): string | null {
+  return encodeInstanceId(key?.instance?.data);
+}
+
+/**
+ * base58 instance id a `Put` request expects back.
+ *
+ * The node recomputes a put's key from the contract code and parameters
+ * (`ContractKey::from_params_and_code`), so the key embedded in the container
+ * is what the *client* believes it is putting. It is the only correlation
+ * material a put carries; {@link FreenetWsApi.handleResponse} falls back to the
+ * lone in-flight put when the host disagrees.
+ */
+function putRequestKey(put: PutT): string | null {
+  return instanceIdOf(put.container?.contract?.key);
+}
+
+/**
+ * The `FreenetWsApi` provides the API to manage the connection to the host,
+ * handle responses, and send requests.
+ *
+ * Two APIs coexist and both fire for every response. The `ResponseHandler`
+ * callbacks see everything the host sends, including update notifications and
+ * responses nothing is waiting on. The promise-returning methods ({@link get},
+ * {@link put}, {@link update}, {@link subscribe}) additionally settle the one
+ * request a response belongs to.
+ *
+ * Responses are matched to requests **by contract key**, not by arrival order.
+ * The node drives each contract operation on its own task and publishes results
+ * as they complete, so a request issued first can be answered second; matching
+ * by position would hand one request's answer to another. See
+ * {@link takeMatching} for the rule and its fall-backs.
+ *
  * @example
  * Here's a simple example:
  * ```
@@ -666,15 +726,6 @@ function resolveWebSocket(): typeof WebSocket {
  * const freenetApi = new FreenetWsApi(API_URL, handler);
  * ```
  */
-interface PendingRequest<T> {
-  resolve: (value: T) => void;
-  reject: (reason: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-/** Default timeout for awaiting a response (30 seconds). */
-const REQUEST_TIMEOUT_MS = 30_000;
-
 export class FreenetWsApi {
   private ws: WebSocket;
   private responseHandler: ResponseHandler;
@@ -683,6 +734,7 @@ export class FreenetWsApi {
   private pendingGets: PendingRequest<GetResponse>[] = [];
   private pendingPuts: PendingRequest<PutResponse>[] = [];
   private pendingUpdates: PendingRequest<UpdateResponse>[] = [];
+  private pendingSubscribes: PendingRequest<void>[] = [];
 
   /**
    * @constructor
@@ -737,21 +789,39 @@ export class FreenetWsApi {
               host_resp.contractResponse as PutResponseT
             );
             this.responseHandler.onContractPut(put_response);
-            this.resolveNext(this.pendingPuts, put_response);
+            // `allowLoneFallback`: the host's key is authoritative and may
+            // differ from the container key the client supplied, so a single
+            // in-flight put still claims the response. With two or more in
+            // flight the answer would be a guess, and a guess here is the
+            // silent data mix-up this correlation exists to prevent.
+            this.resolveMatching(
+              this.pendingPuts,
+              put_response.key.encode(),
+              put_response,
+              true
+            );
             break;
           case ContractResponseType.GetResponse:
             const get_response = GetResponse.fromGetResponseT(
               host_resp.contractResponse as GetResponseT
             );
             this.responseHandler.onContractGet(get_response);
-            this.resolveNext(this.pendingGets, get_response);
+            this.resolveMatching(
+              this.pendingGets,
+              get_response.key.encode(),
+              get_response
+            );
             break;
           case ContractResponseType.UpdateResponse:
             const update_response = UpdateResponse.fromUpdateResponseT(
               host_resp.contractResponse as UpdateResponseT
             );
             this.responseHandler.onContractUpdate(update_response);
-            this.resolveNext(this.pendingUpdates, update_response);
+            this.resolveMatching(
+              this.pendingUpdates,
+              update_response.key.encode(),
+              update_response
+            );
             break;
           case ContractResponseType.UpdateNotification:
             const update_notification =
@@ -766,7 +836,13 @@ export class FreenetWsApi {
             const not_found = host_resp.contractResponse as NotFoundT;
             const not_found_id = new Uint8Array(not_found.instanceId?.data ?? []);
             this.responseHandler.onContractNotFound(not_found_id);
-            this.rejectNext(this.pendingGets, new Error("Contract not found"));
+            // `NotFound` carries only the instance id (host_response.fbs), which
+            // is exactly what requests are correlated on.
+            this.rejectMatching(
+              this.pendingGets,
+              encodeInstanceId(not_found_id),
+              new Error("Contract not found")
+            );
             break;
           case ContractResponseType.SubscribeResponse:
             const sub_resp = host_resp.contractResponse as SubscribeResponseT;
@@ -776,6 +852,21 @@ export class FreenetWsApi {
               : undefined;
             const sub_key = new ContractKey(sub_instance, sub_code);
             this.responseHandler.onSubscribeResponse?.(sub_key, sub_resp.subscribed);
+            if (sub_resp.subscribed) {
+              this.resolveMatching(
+                this.pendingSubscribes,
+                sub_key.encode(),
+                undefined
+              );
+            } else {
+              this.rejectMatching(
+                this.pendingSubscribes,
+                sub_key.encode(),
+                new Error(
+                  `Host reported contract ${sub_key.encode()} as not subscribed`
+                )
+              );
+            }
             break;
           default:
             const cause = "Contract response type not implemented";
@@ -803,7 +894,7 @@ export class FreenetWsApi {
             : "unknown error";
         const host_error: HostError = { cause: error_cause };
         this.responseHandler.onErr(host_error);
-        this.rejectAllPending(new Error(error_cause));
+        this.rejectForError(error_cause);
         break;
       case HostResponseType.StreamChunk: {
         const streamChunk = response.response as StreamChunkT;
@@ -882,44 +973,125 @@ export class FreenetWsApi {
    * Enqueues a pending response and returns a promise that resolves
    * when the matching response arrives, or rejects on timeout.
    */
-  private awaitResponse<T>(queue: PendingRequest<T>[]): Promise<T> {
+  private awaitResponse<T>(
+    queue: PendingRequest<T>[],
+    key: string | null
+  ): Promise<T> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const idx = queue.findIndex((p) => p.timer === timer);
         if (idx !== -1) queue.splice(idx, 1);
         reject(new Error("Request timeout"));
       }, REQUEST_TIMEOUT_MS);
-      queue.push({ resolve, reject, timer });
+      queue.push({ resolve, reject, timer, key });
     });
   }
 
-  /**
-   * Resolves the oldest pending request in a queue.
-   */
-  private resolveNext<T>(queue: PendingRequest<T>[], value: T): void {
-    const pending = queue.shift();
-    if (pending) {
-      clearTimeout(pending.timer);
-      pending.resolve(value);
-    }
+  /** Every queue of awaited responses, for connection-wide failures. */
+  private get allPendingQueues(): PendingRequest<any>[][] {
+    return [
+      this.pendingGets,
+      this.pendingPuts,
+      this.pendingUpdates,
+      this.pendingSubscribes,
+    ];
   }
 
   /**
-   * Rejects the oldest pending request in a queue.
+   * Removes and returns the pending request a response belongs to.
+   *
+   * Contract operations carry no request id on the wire — the only identifying
+   * field a response has is the contract key (`ContractResponse` in
+   * host_response.fbs), so that is what requests are correlated on. Responses
+   * arrive in completion order, not request order, because the node drives each
+   * operation on its own task, so matching by position would hand one request's
+   * answer to another.
+   *
+   * In order:
+   * 1. the oldest request awaiting this exact key (so same-key concurrency stays
+   *    FIFO among itself);
+   * 2. the oldest request whose key could not be determined when it was sent;
+   * 3. only when `allowLoneFallback` is set and exactly one request is in
+   *    flight, that request — see the put call site for why;
+   * 4. otherwise nothing: an unmatched response is dropped rather than
+   *    mis-delivered, and the requests keep waiting for their own answer (or
+   *    for REQUEST_TIMEOUT_MS).
    */
-  private rejectNext<T>(queue: PendingRequest<T>[], error: Error): void {
-    const pending = queue.shift();
-    if (pending) {
-      clearTimeout(pending.timer);
-      pending.reject(error);
+  private takeMatching<T>(
+    queue: PendingRequest<T>[],
+    key: string | null,
+    allowLoneFallback = false
+  ): PendingRequest<T> | undefined {
+    let idx = key === null ? -1 : queue.findIndex((p) => p.key === key);
+    if (idx === -1) idx = queue.findIndex((p) => p.key === null);
+    if (idx === -1 && allowLoneFallback && queue.length === 1) idx = 0;
+    if (idx === -1) return undefined;
+    const [pending] = queue.splice(idx, 1);
+    clearTimeout(pending.timer);
+    return pending;
+  }
+
+  /**
+   * Resolves the pending request this response belongs to, if any.
+   */
+  private resolveMatching<T>(
+    queue: PendingRequest<T>[],
+    key: string | null,
+    value: T,
+    allowLoneFallback = false
+  ): void {
+    this.takeMatching(queue, key, allowLoneFallback)?.resolve(value);
+  }
+
+  /**
+   * Rejects the pending request this response belongs to, if any.
+   */
+  private rejectMatching<T>(
+    queue: PendingRequest<T>[],
+    key: string | null,
+    error: Error
+  ): void {
+    this.takeMatching(queue, key)?.reject(error);
+  }
+
+  /**
+   * Fails the requests a host `Error` response refers to.
+   *
+   * The wire `Error` carries only a message (host_response.fbs), so there is
+   * nothing to correlate on directly. freenet-stdlib renders the contract key
+   * into that message (`ContractError`'s `Display`, as base58 of the instance
+   * id), so this scans the message for the keys of the requests *we* are
+   * waiting on. Matching on our own keys rather than parsing the host's
+   * sentence means a change to the message wording degrades to the fall-back
+   * below instead of mis-attributing the failure.
+   *
+   * When no pending key appears in the message the error cannot be attributed —
+   * it may be connection-wide — so every pending request is failed, as before.
+   * That keeps a genuinely fatal error from leaving callers hanging for the
+   * full timeout.
+   *
+   * Residual imprecision, deliberately accepted: if a get and an update for the
+   * same contract are both in flight, an error naming that contract fails both.
+   * Bounding the blast radius to one contract is the point; the host does not
+   * say which operation failed.
+   */
+  private rejectForError(cause: string): void {
+    const error = new Error(cause);
+    let matched = false;
+    for (const queue of this.allPendingQueues) {
+      const key = queue.find((p) => p.key !== null && cause.includes(p.key))?.key;
+      if (key === undefined) continue;
+      matched = true;
+      this.rejectMatching(queue, key, error);
     }
+    if (!matched) this.rejectAllPending(error);
   }
 
   /**
    * Rejects all pending requests across all queues.
    */
   private rejectAllPending(error: Error): void {
-    for (const queue of [this.pendingGets, this.pendingPuts, this.pendingUpdates]) {
+    for (const queue of this.allPendingQueues) {
       while (queue.length > 0) {
         const pending = queue.shift()!;
         clearTimeout(pending.timer);
@@ -937,7 +1109,7 @@ export class FreenetWsApi {
       ClientRequestType.ContractRequest,
       new ContractRequestT(ContractRequestType.Put, put)
     ));
-    return this.awaitResponse(this.pendingPuts);
+    return this.awaitResponse(this.pendingPuts, putRequestKey(put));
   }
 
   /**
@@ -949,7 +1121,7 @@ export class FreenetWsApi {
       ClientRequestType.ContractRequest,
       new ContractRequestT(ContractRequestType.Update, update)
     ));
-    return this.awaitResponse(this.pendingUpdates);
+    return this.awaitResponse(this.pendingUpdates, instanceIdOf(update.key));
   }
 
   /**
@@ -961,11 +1133,18 @@ export class FreenetWsApi {
       ClientRequestType.ContractRequest,
       new ContractRequestT(ContractRequestType.Get, get)
     ));
-    return this.awaitResponse(this.pendingGets);
+    return this.awaitResponse(this.pendingGets, instanceIdOf(get.key));
   }
 
   /**
-   * Sends a subscribe request to the host through websocket
+   * Sends a subscribe request and waits for the host to confirm it.
+   *
+   * Resolves once the host answers with `SubscribeResponse { subscribed: true }`
+   * for this contract. Rejects if the host answers `subscribed: false` (for
+   * instance when a subscriber limit is reached), reports an error naming the
+   * contract, closes the connection, or does not answer within
+   * REQUEST_TIMEOUT_MS.
+   *
    * @param subscribe - The `SubscribeRequest` object
    */
   async subscribe(subscribe: SubscribeRequest): Promise<void> {
@@ -973,6 +1152,10 @@ export class FreenetWsApi {
       ClientRequestType.ContractRequest,
       new ContractRequestT(ContractRequestType.Subscribe, subscribe)
     ));
+    return this.awaitResponse(
+      this.pendingSubscribes,
+      instanceIdOf(subscribe.key)
+    );
   }
 
   /**
