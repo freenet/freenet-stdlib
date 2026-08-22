@@ -365,16 +365,49 @@ describe("request/response correlation", () => {
     expect(await statusOf(getA)).toEqual("pending");
   });
 
+  test("a subscriber-limit error rejects only that subscribe", async () => {
+    await connect();
+
+    const subA = api
+      .subscribe(new SubscribeRequest(new ContractKey(KEY_A)))
+      .catch((e: Error) => e);
+    const getB = api.get(new GetRequest(new ContractKey(KEY_B), false));
+
+    // freenet-core builds this error with a synthetic ContractKey whose code
+    // hash is zeroed (`subscriber_limit_error` in
+    // contract/executor/runtime.rs). Correlation keys on the instance id, which
+    // is the real one, so the synthetic code hash does not defeat the match.
+    send(
+      errorResponse(
+        `failed to subscribe for contract ${ENCODED_A}, reason: too many subscribers`
+      )
+    );
+
+    const a = await subA;
+    expect(a).toBeInstanceOf(Error);
+    expect((a as Error).message).toMatch(/too many subscribers/);
+    expect(await statusOf(getB)).toEqual("pending");
+  });
+
   test("an error naming no known contract still fails every pending request", async () => {
     await connect();
 
-    const getA = api.get(new GetRequest(new ContractKey(KEY_A), false));
-    const getB = api.get(new GetRequest(new ContractKey(KEY_B), false));
+    // Settled through `.catch` rather than left bare: if this assertion ever
+    // fails, an un-awaited rejection would surface inside a later test's
+    // teardown and report the failure against the wrong test.
+    const getA = api
+      .get(new GetRequest(new ContractKey(KEY_A), false))
+      .catch((e: Error) => e);
+    const getB = api
+      .get(new GetRequest(new ContractKey(KEY_B), false))
+      .catch((e: Error) => e);
 
     send(errorResponse("internal node error"));
 
-    await expect(getA).rejects.toThrow("internal node error");
-    await expect(getB).rejects.toThrow("internal node error");
+    for (const settled of [await getA, await getB]) {
+      expect(settled).toBeInstanceOf(Error);
+      expect((settled as Error).message).toEqual("internal node error");
+    }
   });
 
   test("connection close still rejects every pending request", async () => {
