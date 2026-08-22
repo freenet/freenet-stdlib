@@ -678,6 +678,33 @@ interface PendingRequest<T> {
 /** Default timeout for awaiting a response (30 seconds). */
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** How many abandoned request keys to remember. See `rememberAbandoned`. */
+const ABANDONED_KEY_MEMORY = 64;
+
+/** The base58 alphabet, as a single-character test. */
+const BASE58_CHAR = /[1-9A-HJ-NP-Za-km-z]/;
+
+/**
+ * Whether `message` names `key` as a whole base58 token.
+ *
+ * A plain substring test is not an identity test here. Base58 encodes each
+ * leading zero byte of an instance id as a leading `'1'`, so ids with a long
+ * run of leading zeros produce short, `'1'`-heavy strings, and one key's full
+ * encoding can be a literal prefix of another's. Requiring that the match is
+ * not butted up against another base58 character makes a prefix relationship
+ * stop counting as a mention.
+ */
+function mentionsKey(message: string, key: string): boolean {
+  for (let from = 0; ; from += 1) {
+    const at = message.indexOf(key, from);
+    if (at === -1) return false;
+    const before = at === 0 ? "" : message[at - 1];
+    const after = message[at + key.length] ?? "";
+    if (!BASE58_CHAR.test(before) && !BASE58_CHAR.test(after)) return true;
+    from = at;
+  }
+}
+
 /**
  * base58-encodes a contract instance id, or returns `null` when the id is
  * missing or not 32 bytes (so a malformed key degrades to "uncorrelated"
@@ -743,6 +770,14 @@ export class FreenetWsApi {
   private pendingPuts: PendingRequest<PutResponse>[] = [];
   private pendingUpdates: PendingRequest<UpdateResponse>[] = [];
   private pendingSubscribes: PendingRequest<void>[] = [];
+  /**
+   * Keys of requests that left a queue without ever getting their own answer —
+   * timed out, or failed by a connection-wide error. A late response for one of
+   * these must never be handed to a different request. See
+   * {@link rememberAbandoned} and the lone-put fall-back in
+   * {@link takeMatching}.
+   */
+  private abandonedKeys: string[] = [];
 
   /**
    * @constructor
@@ -996,6 +1031,7 @@ export class FreenetWsApi {
       const timer = setTimeout(() => {
         const idx = queue.findIndex((p) => p.timer === timer);
         if (idx !== -1) queue.splice(idx, 1);
+        this.rememberAbandoned(key);
         reject(new Error("Request timeout"));
       }, REQUEST_TIMEOUT_MS);
       queue.push({ resolve, reject, timer, key });
@@ -1024,8 +1060,10 @@ export class FreenetWsApi {
    *
    * In order:
    * 1. every request awaiting this exact key;
-   * 2. only when `allowLoneFallback` is set and exactly one request is in
-   *    flight, that request — see the put call site for why;
+   * 2. only when `allowLoneFallback` is set, exactly one request is in flight,
+   *    and this key is not one we have abandoned — that request; see the put
+   *    call site for why the tier exists and {@link rememberAbandoned} for why
+   *    it is fenced;
    * 3. otherwise nothing: an unmatched response is dropped rather than
    *    mis-delivered, and the requests keep waiting for their own answer (or
    *    for REQUEST_TIMEOUT_MS).
@@ -1051,11 +1089,43 @@ export class FreenetWsApi {
       taken = queue.filter((p) => p.key === key);
       for (const pending of taken) queue.splice(queue.indexOf(pending), 1);
     }
-    if (taken.length === 0 && allowLoneFallback && queue.length === 1) {
+    if (
+      taken.length === 0 &&
+      allowLoneFallback &&
+      queue.length === 1 &&
+      !(key !== null && this.abandonedKeys.includes(key))
+    ) {
       taken = queue.splice(0, 1);
     }
     for (const pending of taken) clearTimeout(pending.timer);
     return taken;
+  }
+
+  /**
+   * Remembers that a request for `key` left a queue without ever getting its
+   * own answer, so a late response for it can never be handed to some other
+   * request by the lone-put fall-back.
+   *
+   * Without this, the fall-back cannot tell "the key differs because the host
+   * recomputed it" — the case it exists for — from "the key differs because
+   * this answer belongs to a request that is already gone". Put A times out and
+   * is spliced out, the caller retries as put B, A's late answer arrives, and B
+   * resolves with A's response while B's real answer is later dropped against
+   * an empty queue. The conditions that cause a timeout are the same ones that
+   * make a late arrival likely, so this is not a remote corner.
+   *
+   * A bounded FIFO rather than an expiring record: nothing here needs to be
+   * exact, and a timer per entry would be another thing to leak. Sixty-four is
+   * far more abandonments than a healthy connection produces, and an entry
+   * ageing out only restores the previous behaviour for an answer that is by
+   * then extremely late.
+   */
+  private rememberAbandoned(key: string | null): void {
+    if (key === null || this.abandonedKeys.includes(key)) return;
+    this.abandonedKeys.push(key);
+    if (this.abandonedKeys.length > ABANDONED_KEY_MEMORY) {
+      this.abandonedKeys.shift();
+    }
   }
 
   /**
@@ -1090,9 +1160,10 @@ export class FreenetWsApi {
    * nothing to correlate on directly. freenet-stdlib renders the contract key
    * into that message (`ContractError`'s `Display`, as base58 of the instance
    * id), so this scans the message for the keys of the requests *we* are
-   * waiting on. Matching on our own keys rather than parsing the host's
-   * sentence means a change to the message wording degrades to the fall-back
-   * below instead of mis-attributing the failure.
+   * waiting on, as whole base58 tokens ({@link mentionsKey}). Matching on our
+   * own keys rather than parsing the host's sentence means a change to the
+   * message wording degrades to the fall-back below instead of mis-attributing
+   * the failure.
    *
    * When no pending key appears in the message the error cannot be attributed —
    * it may be connection-wide — so every pending request is failed, as before.
@@ -1110,7 +1181,9 @@ export class FreenetWsApi {
     const error = new Error(cause);
     let matched = false;
     for (const queue of this.allPendingQueues) {
-      const key = queue.find((p) => p.key !== null && cause.includes(p.key))?.key;
+      const key = queue.find(
+        (p) => p.key !== null && mentionsKey(cause, p.key)
+      )?.key;
       if (key === undefined) continue;
       matched = true;
       this.rejectMatching(queue, key, error);
@@ -1126,6 +1199,9 @@ export class FreenetWsApi {
       while (queue.length > 0) {
         const pending = queue.shift()!;
         clearTimeout(pending.timer);
+        // Same reasoning as the timeout path: these never got their own answer,
+        // so a late one must not be handed to a later request.
+        this.rememberAbandoned(pending.key);
         pending.reject(error);
       }
     }

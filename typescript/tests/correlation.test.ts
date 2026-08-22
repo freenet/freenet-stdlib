@@ -480,6 +480,57 @@ describe("request/response correlation", () => {
     expect(await statusOf(getB)).toEqual("pending");
   });
 
+  test("an error naming one contract fails every operation on it", async () => {
+    await connect();
+
+    // Pins the imprecision `rejectForError` documents as accepted: the host
+    // says which contract failed, never which operation, so a get and an update
+    // on that contract both fail. Locking it in means a future change cannot
+    // quietly widen it past one contract.
+    const getA = api
+      .get(new GetRequest(new ContractKey(KEY_A), false))
+      .catch((e: Error) => e);
+    const updA = api.update(updateRequestFor(KEY_A)).catch((e: Error) => e);
+    const getB = api.get(new GetRequest(new ContractKey(KEY_B), false));
+
+    send(errorResponse(`failed to get contract ${ENCODED_A}, reason: timeout`));
+
+    for (const settled of [await getA, await updA]) {
+      expect(settled).toBeInstanceOf(Error);
+      expect((settled as Error).message).toMatch(/timeout/);
+    }
+    expect(await statusOf(getB)).toEqual("pending");
+  });
+
+  test("a key that is a base58 prefix of another is not mistaken for it", async () => {
+    await connect();
+
+    // Base58 renders each leading zero byte as a leading '1', so ids with a long
+    // run of leading zeros give short '1'-heavy strings and one key's whole
+    // encoding can be a literal prefix of another's. A raw substring test would
+    // read the error below as naming SHORT and fail the wrong request.
+    const short = new Uint8Array(32);
+    short[31] = 1; // -> "1"*31 + "2"
+    const long = new Uint8Array(32);
+    long[31] = 58; // -> "1"*31 + "21"
+    expect(base58.encode(long).startsWith(base58.encode(short))).toBe(true);
+
+    // Queued first, so a substring match would find it before the real target.
+    const getShort = api.get(new GetRequest(new ContractKey(short), false));
+    const getLong = api
+      .get(new GetRequest(new ContractKey(long), false))
+      .catch((e: Error) => e);
+
+    send(
+      errorResponse(
+        `failed to get contract ${base58.encode(long)}, reason: timeout`
+      )
+    );
+
+    expect(await getLong).toBeInstanceOf(Error);
+    expect(await statusOf(getShort)).toEqual("pending");
+  });
+
   test("an error naming no known contract still fails every pending request", async () => {
     await connect();
 
@@ -501,6 +552,24 @@ describe("request/response correlation", () => {
     }
   });
 
+  test("a connection-wide error also fences the lone-put fall-back", async () => {
+    await connect();
+
+    // Same hazard as the timeout path, reached without fake timers: put A is
+    // failed by an untargeted error, the caller retries as put B, and A's late
+    // answer must not be handed to B.
+    const putA = api.put(putRequestFor(KEY_A)).catch((e: Error) => e);
+    send(errorResponse("internal node error"));
+    expect(await putA).toBeInstanceOf(Error);
+
+    const putB = api.put(putRequestFor(KEY_B));
+    send(putResponseFor(KEY_A)); // A's answer, arriving after A gave up
+    expect(await statusOf(putB)).toEqual("pending");
+
+    send(putResponseFor(KEY_B));
+    expect((await putB).key.encode()).toEqual(ENCODED_B);
+  });
+
   test("connection close still rejects every pending request", async () => {
     await connect();
 
@@ -516,5 +585,55 @@ describe("request/response correlation", () => {
     expect(await getA).toBeInstanceOf(Error);
     expect(((await getA) as Error).message).toMatch(/Connection closed/);
     expect(await sub).toBeInstanceOf(Error);
+  });
+});
+
+/**
+ * Drives the REQUEST_TIMEOUT_MS path, which nothing else in the suite exercises.
+ *
+ * mock-socket cannot complete a handshake under fake timers (the socket stays in
+ * CONNECTING), so the connection is established on real timers first and the
+ * clock is only faked around the timeout itself.
+ */
+describe("request timeout", () => {
+  const TIMEOUT_WS_URL = "ws://localhost:1241/contract/command/";
+  let server: Server;
+
+  beforeEach(() => {
+    server = new Server(TIMEOUT_WS_URL);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    server.clients().forEach((c) => c.close());
+    server.close();
+  });
+
+  test("a late answer to a timed-out put does not hijack the next put", async () => {
+    const api = new FreenetWsApi(new URL(TIMEOUT_WS_URL), makeHandler());
+    await settle();
+
+    jest.useFakeTimers();
+    // Queued under the fake clock, so its REQUEST_TIMEOUT_MS timer is fake too.
+    const putA = api.put(putRequestFor(KEY_A)).catch((e: Error) => e);
+    jest.advanceTimersByTime(31_000);
+    const timedOut = await putA;
+    expect(timedOut).toBeInstanceOf(Error);
+    expect((timedOut as Error).message).toEqual("Request timeout");
+
+    // The caller retries. B is now the sole pending put, which is exactly the
+    // condition the lone-put fall-back keys on.
+    const putB = api.put(putRequestFor(KEY_B));
+    jest.useRealTimers();
+
+    // A's answer finally arrives. Without the abandoned-key fence it has no
+    // exact match, the queue holds exactly one put, and B resolves with A's
+    // response — the mis-delivery this whole change exists to remove.
+    server.clients().forEach((c) => c.send(putResponseFor(KEY_A)));
+    expect(await statusOf(putB)).toEqual("pending");
+
+    // B still gets its own answer.
+    server.clients().forEach((c) => c.send(putResponseFor(KEY_B)));
+    expect((await putB).key.encode()).toEqual(ENCODED_B);
   });
 });
