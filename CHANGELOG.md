@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+### TypeScript SDK — Breaking (npm package `@freenetorg/freenet-stdlib`; next release must be 0.4.0, not a patch)
+
+The npm package is versioned separately from the Rust crate. This release
+changes runtime behavior for existing callers, so on a 0.x line it takes a
+minor bump: **0.3.0 -> 0.4.0**, not 0.3.1.
+
+- **Host responses are now correlated to requests by contract key.**
+  `FreenetWsApi` previously resolved the *oldest* pending request of a type
+  with whatever response arrived, with no correlation at all. Two concurrent
+  `get()`s for different contracts whose answers came back out of order
+  therefore resolved into each other's promises — one contract's state
+  delivered to the other's caller, silently. This is reachable in practice, not
+  theoretical: freenet-core drives each contract operation on its own task and
+  publishes results as they complete, so responses arrive in completion order,
+  not request order.
+
+  Every `ContractResponse` carries the contract key (or, for `NotFound`, the
+  instance id), so requests now record the key they expect back and are matched
+  on it. A response that matches no pending request is dropped rather than
+  mis-delivered; the `ResponseHandler` callbacks still see it, so the legacy
+  callback API is unchanged.
+
+  One response settles *every* pending request for its key. Concurrent requests
+  for one contract are indistinguishable — the wire carries no request id — and
+  the node coalesces byte-identical concurrent UPDATEs into a single
+  transaction, emitting one result for both, so settling only the oldest would
+  strand the rest until the 30s timeout.
+
+- **`subscribe()` now waits for the host's confirmation.** It previously
+  returned a `Promise<void>` that resolved as soon as the request was *sent*,
+  and could never reject — a refused subscription (a subscriber-limit rejection,
+  for instance) left the awaited promise silently resolved. It now resolves on
+  `SubscribeResponse { subscribed: true }` and rejects on `subscribed: false`,
+  on a host error naming the contract, on connection close, or after
+  `REQUEST_TIMEOUT_MS`. **Callers who `await subscribe()` see behavior change**:
+  the call now blocks until the host answers, and can throw where it previously
+  could not. Fire-and-forget callers should add a rejection handler.
+
+- **A host error no longer fails every in-flight request.** Any single error
+  previously rejected every pending get, put and update across all contracts.
+  Errors are now scoped to the requests whose contract key the error message
+  names. An error naming no pending contract still fails everything, since it
+  may be connection-wide and must not leave callers waiting out the timeout.
+
 ### Breaking (next release must be 0.9.0, not a patch)
 - **`DelegateRequest::RegisterDelegateWithPredecessors`** removed (added in
   0.8.4). freenet-core's node-side handler for this request was disabled in

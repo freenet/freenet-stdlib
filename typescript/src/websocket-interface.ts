@@ -662,8 +662,15 @@ interface PendingRequest<T> {
   reject: (reason: Error) => void;
   timer: ReturnType<typeof setTimeout>;
   /**
-   * base58 contract instance id this request is correlated on, or `null` when
-   * the request did not carry a usable key. See {@link takeMatching}.
+   * base58 contract instance id this request is correlated on. See
+   * {@link takeMatching}.
+   *
+   * `null` only if the key could not be read off the outgoing request, which
+   * the schema makes unreachable through the typed API: `key` is `(required)`
+   * on `Get`, `Update`, `Subscribe` and `WasmContractV1` (client_request.fbs,
+   * common.fbs), so `sendRequest` throws while packing before the request is
+   * ever queued. A `null`-key entry therefore matches nothing and would settle
+   * by timeout; there is deliberately no fall-back tier for it.
    */
   key: string | null;
 }
@@ -716,8 +723,9 @@ function putRequestKey(put: PutT): string | null {
  * Responses are matched to requests **by contract key**, not by arrival order.
  * The node drives each contract operation on its own task and publishes results
  * as they complete, so a request issued first can be answered second; matching
- * by position would hand one request's answer to another. See
- * {@link takeMatching} for the rule and its fall-backs.
+ * by position would hand one request's answer to another. One response settles
+ * every pending request for its key, since concurrent requests for one contract
+ * are indistinguishable on the wire. See {@link takeMatching}.
  *
  * @example
  * Here's a simple example:
@@ -1005,7 +1013,7 @@ export class FreenetWsApi {
   }
 
   /**
-   * Removes and returns the pending request a response belongs to.
+   * Removes and returns every pending request a response settles.
    *
    * Contract operations carry no request id on the wire — the only identifying
    * field a response has is the contract key (`ContractResponse` in
@@ -1015,31 +1023,43 @@ export class FreenetWsApi {
    * answer to another.
    *
    * In order:
-   * 1. the oldest request awaiting this exact key (so same-key concurrency stays
-   *    FIFO among itself);
-   * 2. the oldest request whose key could not be determined when it was sent;
-   * 3. only when `allowLoneFallback` is set and exactly one request is in
+   * 1. every request awaiting this exact key;
+   * 2. only when `allowLoneFallback` is set and exactly one request is in
    *    flight, that request — see the put call site for why;
-   * 4. otherwise nothing: an unmatched response is dropped rather than
+   * 3. otherwise nothing: an unmatched response is dropped rather than
    *    mis-delivered, and the requests keep waiting for their own answer (or
    *    for REQUEST_TIMEOUT_MS).
+   *
+   * Tier 1 settles *all* same-key requests, not just the oldest, because the
+   * client cannot tell them apart — the wire has no request id, and freenet-core
+   * drops its internal `RequestId` before `ClientEventsProxy::send`. Settling
+   * one and leaving the rest queued is not a safe default: the node coalesces
+   * byte-identical concurrent UPDATEs into a single transaction (its
+   * `RequestRouter` dedup) and emits one result for both, so the extra callers
+   * would wait out REQUEST_TIMEOUT_MS for an answer that is never coming twice.
+   * The cost is that two same-key requests with genuinely different outcomes
+   * both take the first outcome; with no id on the wire there is nothing better
+   * available, and asking one question twice deserves one answer.
    */
   private takeMatching<T>(
     queue: PendingRequest<T>[],
     key: string | null,
     allowLoneFallback = false
-  ): PendingRequest<T> | undefined {
-    let idx = key === null ? -1 : queue.findIndex((p) => p.key === key);
-    if (idx === -1) idx = queue.findIndex((p) => p.key === null);
-    if (idx === -1 && allowLoneFallback && queue.length === 1) idx = 0;
-    if (idx === -1) return undefined;
-    const [pending] = queue.splice(idx, 1);
-    clearTimeout(pending.timer);
-    return pending;
+  ): PendingRequest<T>[] {
+    let taken: PendingRequest<T>[] = [];
+    if (key !== null) {
+      taken = queue.filter((p) => p.key === key);
+      for (const pending of taken) queue.splice(queue.indexOf(pending), 1);
+    }
+    if (taken.length === 0 && allowLoneFallback && queue.length === 1) {
+      taken = queue.splice(0, 1);
+    }
+    for (const pending of taken) clearTimeout(pending.timer);
+    return taken;
   }
 
   /**
-   * Resolves the pending request this response belongs to, if any.
+   * Resolves every pending request this response settles.
    */
   private resolveMatching<T>(
     queue: PendingRequest<T>[],
@@ -1047,18 +1067,20 @@ export class FreenetWsApi {
     value: T,
     allowLoneFallback = false
   ): void {
-    this.takeMatching(queue, key, allowLoneFallback)?.resolve(value);
+    for (const pending of this.takeMatching(queue, key, allowLoneFallback)) {
+      pending.resolve(value);
+    }
   }
 
   /**
-   * Rejects the pending request this response belongs to, if any.
+   * Rejects every pending request this response settles.
    */
   private rejectMatching<T>(
     queue: PendingRequest<T>[],
     key: string | null,
     error: Error
   ): void {
-    this.takeMatching(queue, key)?.reject(error);
+    for (const pending of this.takeMatching(queue, key)) pending.reject(error);
   }
 
   /**
@@ -1077,10 +1099,12 @@ export class FreenetWsApi {
    * That keeps a genuinely fatal error from leaving callers hanging for the
    * full timeout.
    *
-   * Residual imprecision, deliberately accepted: if a get and an update for the
-   * same contract are both in flight, an error naming that contract fails both.
-   * Bounding the blast radius to one contract is the point; the host does not
-   * say which operation failed.
+   * Residual imprecision, deliberately accepted: every in-flight request naming
+   * that contract fails, across operations (a get and an update on the same
+   * contract both fail) and across duplicates (two concurrent gets on it both
+   * fail). Bounding the blast radius to one contract is the point; the host says
+   * neither which operation failed nor which of two identical requests, so
+   * failing all of them beats stranding the ones that are not the oldest.
    */
   private rejectForError(cause: string): void {
     const error = new Error(cause);

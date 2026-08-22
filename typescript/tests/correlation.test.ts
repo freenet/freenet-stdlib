@@ -282,6 +282,70 @@ describe("request/response correlation", () => {
     expect(b.key.encode()).toEqual(ENCODED_A);
   });
 
+  // Two concurrent requests for one contract are indistinguishable to the
+  // client: the wire carries no request id, and freenet-core drops its internal
+  // RequestId before `ClientEventsProxy::send`. So one answer has to settle all
+  // of them. Leaving the extras queued is not a safe default — the node
+  // coalesces byte-identical concurrent UPDATEs into a single transaction and
+  // emits one result for both, so a per-response settle would strand the second
+  // caller for the full REQUEST_TIMEOUT_MS.
+  test("one GetResponse settles every pending get for that key", async () => {
+    await connect();
+
+    const first = api.get(new GetRequest(new ContractKey(KEY_A), false));
+    const second = api.get(new GetRequest(new ContractKey(KEY_A), false));
+
+    send(getResponseFor(KEY_A, [0xaa])); // one response, two waiters
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.state).toEqual([0xaa]);
+    expect(b.state).toEqual([0xaa]);
+  });
+
+  test("one error settles every pending request for that key", async () => {
+    await connect();
+
+    const first = api
+      .get(new GetRequest(new ContractKey(KEY_A), false))
+      .catch((e: Error) => e);
+    const second = api
+      .get(new GetRequest(new ContractKey(KEY_A), false))
+      .catch((e: Error) => e);
+    const other = api.get(new GetRequest(new ContractKey(KEY_B), false));
+
+    send(errorResponse(`failed to get contract ${ENCODED_A}, reason: timeout`));
+
+    for (const settled of [await first, await second]) {
+      expect(settled).toBeInstanceOf(Error);
+      expect((settled as Error).message).toMatch(/timeout/);
+    }
+    // Scoping still holds: the other contract is untouched.
+    expect(await statusOf(other)).toEqual("pending");
+  });
+
+  test("one NotFound settles every pending get for that key", async () => {
+    await connect();
+
+    const first = api
+      .get(new GetRequest(new ContractKey(KEY_A), false))
+      .catch((e: Error) => e);
+    const second = api
+      .get(new GetRequest(new ContractKey(KEY_A), false))
+      .catch((e: Error) => e);
+
+    send(
+      contractResponse(
+        ContractResponseType.NotFound,
+        new NotFoundT(new ContractInstanceIdT(Array.from(KEY_A)))
+      )
+    );
+
+    for (const settled of [await first, await second]) {
+      expect(settled).toBeInstanceOf(Error);
+      expect((settled as Error).message).toEqual("Contract not found");
+    }
+  });
+
   test("a response for an unknown key is ignored, not mis-delivered", async () => {
     let handlerCalls = 0;
     await connect(makeHandler({ onContractGet: () => (handlerCalls += 1) }));
