@@ -2587,6 +2587,386 @@ mod delegate_request_wire_format {
     }
 }
 
+/// Wire-format pins for [`ContractRequest`].
+///
+/// Same rationale as `delegate_request_wire_format` above: `ContractRequest`
+/// crosses the client<->node boundary as bincode (the `EncodingProtocol::Native`
+/// path; `browser.rs` and `regular.rs` both `bincode::serialize` their
+/// requests), which encodes an enum's variant as a 4-byte little-endian `u32`
+/// discriminant. The *declaration order* of the variants is therefore part of
+/// the wire contract: reordering or inserting a variant anywhere but the end
+/// silently reassigns every following tag and breaks already-deployed clients
+/// (the v0.2.11 break class). `ContractRequest` had no such pin before this
+/// module, and a new `Unsubscribe` variant is about to be appended — this
+/// closes the gap first.
+///
+/// Each variant (`Put`, `Update`, `Get`, `Subscribe`) is pinned to its FULL
+/// expected byte vector, not just the 4-byte tag, so a field reorder or a
+/// change to a nested type's encoding (`ContractContainer`, `ContractKey`,
+/// `UpdateData`, ...) is caught too. Unlike the `DelegateRequest` freeze,
+/// there is no earlier shipped commit to anchor these bytes to — this module
+/// establishes the frozen baseline from the current encoding; from here on,
+/// any change to these bytes must be deliberate and version-gated.
+///
+/// Also pinned: the flatbuffers `ContractRequestType` union discriminants
+/// (`schemas/flatbuffers/client_request.fbs`). Those are fixed by the
+/// schema's declaration order the same way bincode's are fixed by the Rust
+/// enum's declaration order, so a schema reorder is just as much a wire
+/// break for flatbuffers/browser clients as a Rust reorder is for native
+/// ones.
+#[cfg(test)]
+mod contract_request_wire_format {
+    use super::ContractRequest;
+    use crate::code_hash::CodeHash;
+    use crate::generated::client_request::ContractRequestType;
+    use crate::prelude::{
+        ContractCode, ContractContainer, ContractInstanceId, ContractKey, ContractWasmAPIVersion,
+        Parameters, RelatedContracts, State, StateSummary, UpdateData, WrappedContract,
+        WrappedState,
+    };
+    use std::sync::Arc;
+
+    fn sample_key() -> ContractKey {
+        ContractKey::from_id_and_code(
+            ContractInstanceId::new([0x11; 32]),
+            CodeHash::new([0x22; 32]),
+        )
+    }
+
+    fn sample_container() -> ContractContainer {
+        let code = Arc::new(ContractCode::from(vec![1u8, 2, 3]));
+        let params = Parameters::from(vec![9u8, 8, 7]);
+        ContractContainer::Wasm(ContractWasmAPIVersion::V1(WrappedContract::new(
+            code, params,
+        )))
+    }
+
+    // The four sample values whose complete bincode encodings are frozen in
+    // `wire_format_is_frozen`. Kept byte-for-byte identical to the throwaway
+    // generator that produced the frozen vectors, so the freeze is
+    // reproducible: construct the value, `bincode::serialize`, compare.
+    fn sample_put() -> ContractRequest<'static> {
+        ContractRequest::Put {
+            contract: sample_container(),
+            state: WrappedState::new(vec![0x44, 0x55, 0x66]),
+            related_contracts: RelatedContracts::new(),
+            subscribe: true,
+            blocking_subscribe: false,
+        }
+    }
+
+    fn sample_update() -> ContractRequest<'static> {
+        ContractRequest::Update {
+            key: sample_key(),
+            data: UpdateData::State(State::from(vec![0x77, 0x88])),
+        }
+    }
+
+    fn sample_get() -> ContractRequest<'static> {
+        ContractRequest::Get {
+            key: ContractInstanceId::new([0x33; 32]),
+            return_contract_code: true,
+            subscribe: false,
+            blocking_subscribe: false,
+        }
+    }
+
+    fn sample_subscribe() -> ContractRequest<'static> {
+        ContractRequest::Subscribe {
+            key: ContractInstanceId::new([0x33; 32]),
+            summary: Some(StateSummary::from(vec![0x99, 0xAA])),
+        }
+    }
+
+    /// Complete-byte wire-format freeze for all four variants.
+    ///
+    /// The test also DESERIALIZES each frozen vector, proving the byte
+    /// stream still decodes into the expected variant on this build.
+    #[test]
+    fn wire_format_is_frozen() {
+        const PUT: &[u8] = &[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 177, 119, 236, 27,
+            242, 109, 251, 59, 112, 16, 212, 115, 230, 212, 71, 19, 178, 155, 118, 91, 153, 198,
+            230, 14, 203, 250, 231, 66, 222, 73, 101, 67, 3, 0, 0, 0, 0, 0, 0, 0, 9, 8, 7, 68, 0,
+            48, 164, 43, 234, 3, 4, 34, 33, 221, 91, 193, 53, 159, 47, 206, 127, 237, 159, 116, 81,
+            44, 75, 126, 103, 73, 141, 96, 191, 52, 206, 177, 119, 236, 27, 242, 109, 251, 59, 112,
+            16, 212, 115, 230, 212, 71, 19, 178, 155, 118, 91, 153, 198, 230, 14, 203, 250, 231,
+            66, 222, 73, 101, 67, 3, 0, 0, 0, 0, 0, 0, 0, 68, 85, 102, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            0,
+        ];
+        const UPDATE: &[u8] = &[
+            1, 0, 0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+            17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 34, 34, 34, 34, 34, 34, 34, 34, 34,
+            34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34,
+            34, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 119, 136,
+        ];
+        const GET: &[u8] = &[
+            2, 0, 0, 0, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
+            51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 1, 0, 0,
+        ];
+        const SUBSCRIBE: &[u8] = &[
+            3, 0, 0, 0, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
+            51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 1, 2, 0, 0, 0, 0, 0, 0, 0, 153,
+            170,
+        ];
+
+        // 1. Serialization is byte-stable for every variant.
+        assert_eq!(
+            bincode::serialize(&sample_put()).unwrap(),
+            PUT,
+            "Put (tag 0) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_update()).unwrap(),
+            UPDATE,
+            "Update (tag 1) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_get()).unwrap(),
+            GET,
+            "Get (tag 2) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_subscribe()).unwrap(),
+            SUBSCRIBE,
+            "Subscribe (tag 3) encoding changed"
+        );
+
+        // 2. The four variant tags are exactly 0,1,2,3.
+        assert_eq!(PUT[..4], 0u32.to_le_bytes());
+        assert_eq!(UPDATE[..4], 1u32.to_le_bytes());
+        assert_eq!(GET[..4], 2u32.to_le_bytes());
+        assert_eq!(SUBSCRIBE[..4], 3u32.to_le_bytes());
+
+        // 3. Each frozen byte stream still DECODES into its variant on this
+        //    build.
+        assert!(matches!(
+            bincode::deserialize::<ContractRequest>(PUT).unwrap(),
+            ContractRequest::Put { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ContractRequest>(UPDATE).unwrap(),
+            ContractRequest::Update { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ContractRequest>(GET).unwrap(),
+            ContractRequest::Get { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ContractRequest>(SUBSCRIBE).unwrap(),
+            ContractRequest::Subscribe { .. }
+        ));
+    }
+
+    /// The flatbuffers union discriminants are fixed by
+    /// `schemas/flatbuffers/client_request.fbs`'s declaration order for the
+    /// `ContractRequestType` union (`Put, Update, Get, Subscribe` -> 1..4;
+    /// `0` is the union's implicit `NONE`). Reordering that schema silently
+    /// reassigns these the same way reordering the Rust enum reassigns the
+    /// bincode tags above.
+    #[test]
+    fn fbs_discriminants_match_declaration_order() {
+        assert_eq!(ContractRequestType::Put.0, 1);
+        assert_eq!(ContractRequestType::Update.0, 2);
+        assert_eq!(ContractRequestType::Get.0, 3);
+        assert_eq!(ContractRequestType::Subscribe.0, 4);
+    }
+}
+
+/// Wire-format pins for [`ClientRequest`].
+///
+/// Same rationale as `contract_request_wire_format` and
+/// `delegate_request_wire_format` above. `ClientRequest` is the outermost
+/// enum on the client<->node boundary: every one of its seven variants
+/// (`DelegateOp`, `ContractOp`, `Disconnect`, `Authenticate`, `NodeQueries`,
+/// `Close`, `StreamChunk`) is pinned to its FULL expected bincode byte
+/// vector, which also transitively pins the nested `DelegateRequest` /
+/// `ContractRequest` encodings for the two variants that wrap them. There
+/// was no wire-format pin for `ClientRequest` before this module; this
+/// establishes the frozen baseline from the current encoding.
+///
+/// Only 5 of the 7 variants exist on the flatbuffers wire path — the
+/// `ClientRequestType` union in `client_request.fbs` declares
+/// `ContractRequest, DelegateRequest, Disconnect, Authenticate, StreamChunk`
+/// only; `NodeQueries` and `Close` are native-bincode-only (no fbs/browser
+/// client constructs or sends them). Those five discriminants are pinned
+/// too, for the same reason as `ContractRequestType` above.
+#[cfg(test)]
+mod client_request_wire_format {
+    use super::{ClientRequest, ContractRequest, DelegateRequest, NodeQuery};
+    use crate::code_hash::CodeHash;
+    use crate::generated::client_request::ClientRequestType;
+    use crate::prelude::{ContractInstanceId, DelegateKey};
+    use bytes::Bytes;
+    use std::borrow::Cow;
+
+    // The seven sample values whose complete bincode encodings are frozen in
+    // `wire_format_is_frozen`. Kept byte-for-byte identical to the throwaway
+    // generator that produced the frozen vectors, so the freeze is
+    // reproducible: construct the value, `bincode::serialize`, compare.
+    fn sample_delegate_op() -> ClientRequest<'static> {
+        ClientRequest::DelegateOp(DelegateRequest::UnregisterDelegate(DelegateKey::new(
+            [0x11; 32],
+            CodeHash::new([0x22; 32]),
+        )))
+    }
+
+    fn sample_contract_op() -> ClientRequest<'static> {
+        ClientRequest::ContractOp(ContractRequest::Subscribe {
+            key: ContractInstanceId::new([0x33; 32]),
+            summary: None,
+        })
+    }
+
+    fn sample_disconnect() -> ClientRequest<'static> {
+        ClientRequest::Disconnect {
+            cause: Some(Cow::Borrowed("bye")),
+        }
+    }
+
+    fn sample_authenticate() -> ClientRequest<'static> {
+        ClientRequest::Authenticate {
+            token: "tok".to_string(),
+        }
+    }
+
+    fn sample_node_queries() -> ClientRequest<'static> {
+        ClientRequest::NodeQueries(NodeQuery::ConnectedPeers)
+    }
+
+    fn sample_close() -> ClientRequest<'static> {
+        ClientRequest::Close
+    }
+
+    fn sample_stream_chunk() -> ClientRequest<'static> {
+        ClientRequest::StreamChunk {
+            stream_id: 1,
+            index: 2,
+            total: 3,
+            data: Bytes::from_static(&[9, 9, 9]),
+        }
+    }
+
+    /// Complete-byte wire-format freeze for all seven variants.
+    ///
+    /// The test also DESERIALIZES each frozen vector, proving the byte
+    /// stream still decodes into the expected variant on this build.
+    #[test]
+    fn wire_format_is_frozen() {
+        const DELEGATE_OP: &[u8] = &[
+            0, 0, 0, 0, 2, 0, 0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+            17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 34, 34, 34, 34, 34, 34,
+            34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34,
+            34, 34, 34, 34,
+        ];
+        const CONTRACT_OP: &[u8] = &[
+            1, 0, 0, 0, 3, 0, 0, 0, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
+            51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 0,
+        ];
+        const DISCONNECT: &[u8] = &[2, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 98, 121, 101];
+        const AUTHENTICATE: &[u8] = &[3, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 116, 111, 107];
+        const NODE_QUERIES: &[u8] = &[4, 0, 0, 0, 0, 0, 0, 0];
+        const CLOSE: &[u8] = &[5, 0, 0, 0];
+        const STREAM_CHUNK: &[u8] = &[
+            6, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 9, 9, 9,
+        ];
+
+        // 1. Serialization is byte-stable for every variant.
+        assert_eq!(
+            bincode::serialize(&sample_delegate_op()).unwrap(),
+            DELEGATE_OP,
+            "DelegateOp (tag 0) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_contract_op()).unwrap(),
+            CONTRACT_OP,
+            "ContractOp (tag 1) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_disconnect()).unwrap(),
+            DISCONNECT,
+            "Disconnect (tag 2) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_authenticate()).unwrap(),
+            AUTHENTICATE,
+            "Authenticate (tag 3) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_node_queries()).unwrap(),
+            NODE_QUERIES,
+            "NodeQueries (tag 4) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_close()).unwrap(),
+            CLOSE,
+            "Close (tag 5) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_stream_chunk()).unwrap(),
+            STREAM_CHUNK,
+            "StreamChunk (tag 6) encoding changed"
+        );
+
+        // 2. The seven variant tags are exactly 0,1,2,3,4,5,6.
+        assert_eq!(DELEGATE_OP[..4], 0u32.to_le_bytes());
+        assert_eq!(CONTRACT_OP[..4], 1u32.to_le_bytes());
+        assert_eq!(DISCONNECT[..4], 2u32.to_le_bytes());
+        assert_eq!(AUTHENTICATE[..4], 3u32.to_le_bytes());
+        assert_eq!(NODE_QUERIES[..4], 4u32.to_le_bytes());
+        assert_eq!(CLOSE[..4], 5u32.to_le_bytes());
+        assert_eq!(STREAM_CHUNK[..4], 6u32.to_le_bytes());
+
+        // 3. Each frozen byte stream still DECODES into its variant on this
+        //    build.
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(DELEGATE_OP).unwrap(),
+            ClientRequest::DelegateOp(_)
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(CONTRACT_OP).unwrap(),
+            ClientRequest::ContractOp(_)
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(DISCONNECT).unwrap(),
+            ClientRequest::Disconnect { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(AUTHENTICATE).unwrap(),
+            ClientRequest::Authenticate { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(NODE_QUERIES).unwrap(),
+            ClientRequest::NodeQueries(_)
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(CLOSE).unwrap(),
+            ClientRequest::Close
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(STREAM_CHUNK).unwrap(),
+            ClientRequest::StreamChunk { .. }
+        ));
+    }
+
+    /// The flatbuffers union discriminants are fixed by
+    /// `schemas/flatbuffers/client_request.fbs`'s declaration order for the
+    /// `ClientRequestType` union (`ContractRequest, DelegateRequest,
+    /// Disconnect, Authenticate, StreamChunk` -> 1..5; `0` is the union's
+    /// implicit `NONE`). Note the schema's `ContractRequest`/`DelegateRequest`
+    /// ordering is the OPPOSITE of the Rust enum's `DelegateOp`/`ContractOp`
+    /// ordering above -- the two encodings are independent wire contracts,
+    /// each pinned to its own declaration order.
+    #[test]
+    fn fbs_discriminants_match_declaration_order() {
+        assert_eq!(ClientRequestType::ContractRequest.0, 1);
+        assert_eq!(ClientRequestType::DelegateRequest.0, 2);
+        assert_eq!(ClientRequestType::Disconnect.0, 3);
+        assert_eq!(ClientRequestType::Authenticate.0, 4);
+        assert_eq!(ClientRequestType::StreamChunk.0, 5);
+    }
+}
+
 /// Hardening pins for the flatbuffers decode boundary.
 ///
 /// Every test here exists because a real decode site panicked, or silently
