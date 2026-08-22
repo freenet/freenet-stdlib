@@ -838,6 +838,13 @@ export class FreenetWsApi {
             this.responseHandler.onContractNotFound(not_found_id);
             // `NotFound` carries only the instance id (host_response.fbs), which
             // is exactly what requests are correlated on.
+            //
+            // Only `pendingGets` is failed. A pending `subscribe()` for the same
+            // contract is deliberately left alone: the host answers a subscribe
+            // for a missing contract with an `Error` naming the contract, which
+            // `rejectForError` attributes, so the caller still fails fast rather
+            // than waiting out REQUEST_TIMEOUT_MS. If that ever stops holding,
+            // fail `pendingSubscribes` here too.
             this.rejectMatching(
               this.pendingGets,
               encodeInstanceId(not_found_id),
