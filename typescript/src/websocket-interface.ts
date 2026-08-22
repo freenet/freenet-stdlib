@@ -1075,9 +1075,16 @@ export class FreenetWsApi {
    * byte-identical concurrent UPDATEs into a single transaction (its
    * `RequestRouter` dedup) and emits one result for both, so the extra callers
    * would wait out REQUEST_TIMEOUT_MS for an answer that is never coming twice.
-   * The cost is that two same-key requests with genuinely different outcomes
-   * both take the first outcome; with no id on the wire there is nothing better
-   * available, and asking one question twice deserves one answer.
+   * This is a trade, not a free win. Two same-key requests with genuinely
+   * different outcomes both take the first outcome, and what that costs depends
+   * on the operation. For a get it is benign — same contract, same answer
+   * either way. For an update it is what the node's own coalescing already
+   * does. For a **put it is a real mis-report**: two concurrent puts of
+   * different state to one key mean the second caller is told its put succeeded
+   * when in fact the first one's did. It is still the better trade — the wire
+   * carries no request id, so there is nothing to tell the two apart, and a 30s
+   * hang on a legitimate call is worse than an ambiguous success — but a reader
+   * changing this should know the cost is real and lands on put.
    */
   private takeMatching<T>(
     queue: PendingRequest<T>[],
