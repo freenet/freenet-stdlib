@@ -591,7 +591,10 @@ describe("request/response correlation", () => {
     expect(await statusOf(putB)).toEqual("pending");
   });
 
-  test("a timed-out put fences a later recomputed-key answer", async () => {
+  // Named for the mechanism it actually drives: this reaches the fence through
+  // rejectAllPending, not through the timeout. The timeout path has its own test
+  // in the "request timeout" block below.
+  test("a connection-wide error fences a later recomputed-key answer", async () => {
     await connect();
 
     const putA = api.put(putRequestFor(KEY_A)).catch((e: Error) => e);

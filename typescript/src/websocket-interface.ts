@@ -763,10 +763,16 @@ export class FreenetWsApi {
   private responseHandler: ResponseHandler;
   private reassembly: ReassemblyBuffer = new ReassemblyBuffer();
   private nextStreamId = 0;
-  private pendingGets: PendingRequest<GetResponse>[] = [];
-  private pendingPuts: PendingRequest<PutResponse>[] = [];
-  private pendingUpdates: PendingRequest<UpdateResponse>[] = [];
-  private pendingSubscribes: PendingRequest<void>[] = [];
+  // `readonly` is load-bearing, not decoration: `disarmLoneFallback` identifies
+  // the put queue by reference (`queue === this.pendingPuts`), so reassigning
+  // one of these — say `this.pendingPuts = this.pendingPuts.filter(...)` in some
+  // later cleanup — would silently turn that check into a permanent no-op, with
+  // no compiler error and no failing test. Every mutation goes through
+  // splice/shift/push instead.
+  private readonly pendingGets: PendingRequest<GetResponse>[] = [];
+  private readonly pendingPuts: PendingRequest<PutResponse>[] = [];
+  private readonly pendingUpdates: PendingRequest<UpdateResponse>[] = [];
+  private readonly pendingSubscribes: PendingRequest<void>[] = [];
   /**
    * Whether the lone-put fall-back in {@link takeMatching} may still fire.
    *
