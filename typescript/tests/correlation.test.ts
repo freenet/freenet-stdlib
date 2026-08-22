@@ -363,6 +363,33 @@ describe("request/response correlation", () => {
     expect(handlerCalls).toBe(2);
   });
 
+  test("a request with no usable key fails at send, never reaching the queue", async () => {
+    await connect();
+
+    // Pins the assumption `takeMatching` relies on for having no fall-back tier
+    // for uncorrelatable requests: `key` is `(required)` on Get, Update,
+    // Subscribe and WasmContractV1, so flatbuffers refuses to pack a request
+    // without one and `sendRequest` throws before anything is queued. If the
+    // schema ever loses `required`, this goes green-to-red and the reader knows
+    // the no-fall-back assumption needs revisiting.
+    const keyless = api.update(
+      new UpdateRequest(
+        null,
+        new UpdateData(UpdateDataType.StateUpdate, new StateUpdate([1]))
+      )
+    );
+    // Asserting the reason, not merely that something threw: a bare
+    // `.rejects.toThrow()` would stay green if the call started failing for an
+    // unrelated cause, and the pin would quietly stop testing the schema.
+    await expect(keyless).rejects.toThrow(/FlatBuffers: field \d+ must be set/);
+
+    // Nothing was queued, so a later response for another contract is not
+    // absorbed by a stranded entry.
+    const getA = api.get(new GetRequest(new ContractKey(KEY_A), false));
+    send(getResponseFor(KEY_A, [0xaa]));
+    expect((await getA).state).toEqual([0xaa]);
+  });
+
   test("a lone put still resolves when the host's key differs from the container's", async () => {
     await connect();
 
