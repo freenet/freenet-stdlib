@@ -570,6 +570,39 @@ describe("request/response correlation", () => {
     expect((await putB).key.encode()).toEqual(ENCODED_B);
   });
 
+  // The two tests above answer with the same key the departed put was queued
+  // under. That is the easy half. The fall-back exists precisely because a put's
+  // answer can arrive under a key the client never sent — the host recomputes it
+  // — so the fence has to hold when the late answer bears an unfamiliar key too.
+  // A fence that compared contract keys would pass the two above and fail these.
+  test("a late answer under a recomputed key does not hijack the next put", async () => {
+    await connect();
+
+    const putA = api.put(putRequestFor(KEY_A)).catch((e: Error) => e);
+    // Targeted error: A departs through the exact-match branch of
+    // rejectForError, which is a third departure path.
+    send(errorResponse(`put error for contract ${ENCODED_A}, reason: refused`));
+    expect(await putA).toBeInstanceOf(Error);
+
+    const putB = api.put(putRequestFor(KEY_B));
+    // A's real answer, under the key the host computed — never a container key,
+    // so nothing the client could have recorded from A's request would match it.
+    send(putResponseFor(KEY_C));
+    expect(await statusOf(putB)).toEqual("pending");
+  });
+
+  test("a timed-out put fences a later recomputed-key answer", async () => {
+    await connect();
+
+    const putA = api.put(putRequestFor(KEY_A)).catch((e: Error) => e);
+    send(errorResponse("internal node error"));
+    expect(await putA).toBeInstanceOf(Error);
+
+    const putB = api.put(putRequestFor(KEY_B));
+    send(putResponseFor(KEY_C)); // divergent key, unrelated to either container
+    expect(await statusOf(putB)).toEqual("pending");
+  });
+
   test("connection close still rejects every pending request", async () => {
     await connect();
 

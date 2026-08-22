@@ -678,9 +678,6 @@ interface PendingRequest<T> {
 /** Default timeout for awaiting a response (30 seconds). */
 const REQUEST_TIMEOUT_MS = 30_000;
 
-/** How many abandoned request keys to remember. See `rememberAbandoned`. */
-const ABANDONED_KEY_MEMORY = 64;
-
 /** The base58 alphabet, as a single-character test. */
 const BASE58_CHAR = /[1-9A-HJ-NP-Za-km-z]/;
 
@@ -771,13 +768,14 @@ export class FreenetWsApi {
   private pendingUpdates: PendingRequest<UpdateResponse>[] = [];
   private pendingSubscribes: PendingRequest<void>[] = [];
   /**
-   * Keys of requests that left a queue without ever getting their own answer —
-   * timed out, or failed by a connection-wide error. A late response for one of
-   * these must never be handed to a different request. See
-   * {@link rememberAbandoned} and the lone-put fall-back in
-   * {@link takeMatching}.
+   * Whether the lone-put fall-back in {@link takeMatching} may still fire.
+   *
+   * Cleared for good once any put leaves the queue without a `PutResponse` of
+   * its own, because from then on an unmatched put answer might belong to that
+   * departed request rather than to the survivor. See
+   * {@link disarmLoneFallback}.
    */
-  private abandonedKeys: string[] = [];
+  private loneFallbackArmed = true;
 
   /**
    * @constructor
@@ -836,7 +834,9 @@ export class FreenetWsApi {
             // differ from the container key the client supplied, so a single
             // in-flight put still claims the response. With two or more in
             // flight the answer would be a guess, and a guess here is the
-            // silent data mix-up this correlation exists to prevent.
+            // silent data mix-up this correlation exists to prevent — as it
+            // also would be once any put has given up without an answer, which
+            // is what `disarmLoneFallback` watches for.
             this.resolveMatching(
               this.pendingPuts,
               put_response.key.encode(),
@@ -1031,7 +1031,7 @@ export class FreenetWsApi {
       const timer = setTimeout(() => {
         const idx = queue.findIndex((p) => p.timer === timer);
         if (idx !== -1) queue.splice(idx, 1);
-        this.rememberAbandoned(key);
+        this.disarmLoneFallback(queue);
         reject(new Error("Request timeout"));
       }, REQUEST_TIMEOUT_MS);
       queue.push({ resolve, reject, timer, key });
@@ -1060,10 +1060,10 @@ export class FreenetWsApi {
    *
    * In order:
    * 1. every request awaiting this exact key;
-   * 2. only when `allowLoneFallback` is set, exactly one request is in flight,
-   *    and this key is not one we have abandoned — that request; see the put
-   *    call site for why the tier exists and {@link rememberAbandoned} for why
-   *    it is fenced;
+   * 2. only when `allowLoneFallback` is set, no put has yet given up without an
+   *    answer, and exactly one request is in flight — that request; see the put
+   *    call site for why the tier exists and {@link disarmLoneFallback} for why
+   *    it is fenced, and why the fence cannot be keyed on the contract key;
    * 3. otherwise nothing: an unmatched response is dropped rather than
    *    mis-delivered, and the requests keep waiting for their own answer (or
    *    for REQUEST_TIMEOUT_MS).
@@ -1099,8 +1099,8 @@ export class FreenetWsApi {
     if (
       taken.length === 0 &&
       allowLoneFallback &&
-      queue.length === 1 &&
-      !(key !== null && this.abandonedKeys.includes(key))
+      this.loneFallbackArmed &&
+      queue.length === 1
     ) {
       taken = queue.splice(0, 1);
     }
@@ -1109,30 +1109,34 @@ export class FreenetWsApi {
   }
 
   /**
-   * Remembers that a request for `key` left a queue without ever getting its
-   * own answer, so a late response for it can never be handed to some other
-   * request by the lone-put fall-back.
+   * Disarms the lone-put fall-back, permanently, once a put has left `queue`
+   * without a `PutResponse` of its own. A no-op for the other queues, since the
+   * fall-back is wired only for puts.
    *
-   * Without this, the fall-back cannot tell "the key differs because the host
-   * recomputed it" — the case it exists for — from "the key differs because
-   * this answer belongs to a request that is already gone". Put A times out and
-   * is spliced out, the caller retries as put B, A's late answer arrives, and B
-   * resolves with A's response while B's real answer is later dropped against
-   * an empty queue. The conditions that cause a timeout are the same ones that
-   * make a late arrival likely, so this is not a remote corner.
+   * The hazard: put A times out and is spliced out, the caller retries as put
+   * B, A's late answer arrives, nothing matches it by key, exactly one put is
+   * queued — and B resolves with A's response, while B's real answer is later
+   * dropped against an empty queue. The conditions that cause the timeout are
+   * the same ones that make a late arrival likely.
    *
-   * A bounded FIFO rather than an expiring record: nothing here needs to be
-   * exact, and a timer per entry would be another thing to leak. Sixty-four is
-   * far more abandonments than a healthy connection produces, and an entry
-   * ageing out only restores the previous behaviour for an answer that is by
-   * then extremely late.
+   * Why this is not keyed on the contract key. An earlier attempt remembered
+   * the keys of abandoned requests and refused to lone-match those. That cannot
+   * work here: the key a put is *queued* under is the client's container key,
+   * while the key its answer *arrives* under is the host's recomputed one, and
+   * those differing is the entire reason this fall-back exists. Comparing them
+   * closes the hazard only when they happen to agree — which is precisely when
+   * an exact match would have handled it anyway.
+   *
+   * So the fence ignores keys and asks a question it can actually answer: has
+   * any put given up without an answer? A single sticky flag rather than a
+   * count-since-queued, because a put abandoned *before* the survivor was
+   * queued can still have an answer in flight — the delta would be zero in
+   * exactly the sequence above and let it through. Sticky costs a divergent-key
+   * put a timeout instead of a resolution once the connection has seen a
+   * timeout, which is the safe direction: a late answer, not a wrong one.
    */
-  private rememberAbandoned(key: string | null): void {
-    if (key === null || this.abandonedKeys.includes(key)) return;
-    this.abandonedKeys.push(key);
-    if (this.abandonedKeys.length > ABANDONED_KEY_MEMORY) {
-      this.abandonedKeys.shift();
-    }
+  private disarmLoneFallback(queue: PendingRequest<any>[]): void {
+    if (queue === this.pendingPuts) this.loneFallbackArmed = false;
   }
 
   /**
@@ -1151,13 +1155,21 @@ export class FreenetWsApi {
 
   /**
    * Rejects every pending request this response settles.
+   *
+   * Every departure through here disarms the lone-put fall-back. A rejection is
+   * never a put's own `PutResponse`: the `NotFound` and refused-`SubscribeResponse`
+   * callers do not touch puts at all, and the one that does — the exact-match
+   * branch of {@link rejectForError} — attributes a failure by finding the key
+   * in a message, which does not stop the real answer arriving afterwards.
    */
   private rejectMatching<T>(
     queue: PendingRequest<T>[],
     key: string | null,
     error: Error
   ): void {
-    for (const pending of this.takeMatching(queue, key)) pending.reject(error);
+    const taken = this.takeMatching(queue, key);
+    if (taken.length > 0) this.disarmLoneFallback(queue);
+    for (const pending of taken) pending.reject(error);
   }
 
   /**
@@ -1208,7 +1220,7 @@ export class FreenetWsApi {
         clearTimeout(pending.timer);
         // Same reasoning as the timeout path: these never got their own answer,
         // so a late one must not be handed to a later request.
-        this.rememberAbandoned(pending.key);
+        this.disarmLoneFallback(queue);
         pending.reject(error);
       }
     }
