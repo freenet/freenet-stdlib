@@ -2671,6 +2671,22 @@ mod contract_request_wire_format {
         }
     }
 
+    /// Complements [`sample_get`], whose three consecutive `bool` fields cannot
+    /// all be pairwise distinguishable in a single sample (three bools always
+    /// share a value somewhere). `sample_get` sets `subscribe` and
+    /// `blocking_subscribe` both false, so a declaration-order swap of those two
+    /// encodes identically and its frozen vector alone cannot catch it. This
+    /// sample differs in exactly that pair, so together the two freeze every
+    /// pairwise field order in `Get`.
+    fn sample_get_subscribe_pair() -> ContractRequest<'static> {
+        ContractRequest::Get {
+            key: ContractInstanceId::new([0x33; 32]),
+            return_contract_code: false,
+            subscribe: true,
+            blocking_subscribe: false,
+        }
+    }
+
     fn sample_subscribe() -> ContractRequest<'static> {
         ContractRequest::Subscribe {
             key: ContractInstanceId::new([0x33; 32]),
@@ -2704,6 +2720,15 @@ mod contract_request_wire_format {
             2, 0, 0, 0, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
             51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 1, 0, 0,
         ];
+        // Complements GET: `sample_get` leaves `subscribe` and
+        // `blocking_subscribe` both false, so a declaration-order swap of that
+        // pair encodes identically and GET alone cannot catch it. Three bools
+        // can never all be pairwise distinct in one sample, so a second vector
+        // differing in exactly that pair is what completes the freeze.
+        const GET_SUBSCRIBE_PAIR: &[u8] = &[
+            2, 0, 0, 0, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
+            51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 0, 1, 0,
+        ];
         const SUBSCRIBE: &[u8] = &[
             3, 0, 0, 0, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
             51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 1, 2, 0, 0, 0, 0, 0, 0, 0, 153,
@@ -2725,6 +2750,11 @@ mod contract_request_wire_format {
             bincode::serialize(&sample_get()).unwrap(),
             GET,
             "Get (tag 2) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_get_subscribe_pair()).unwrap(),
+            GET_SUBSCRIBE_PAIR,
+            "Get (tag 2) encoding changed (subscribe/blocking_subscribe pair)"
         );
         assert_eq!(
             bincode::serialize(&sample_subscribe()).unwrap(),
