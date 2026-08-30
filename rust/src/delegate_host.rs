@@ -686,6 +686,30 @@ impl DelegateCtx {
     ///
     /// Order is unspecified; do not depend on it.
     ///
+    /// # What this list means
+    ///
+    /// It answers **"which contracts will notify me"** — not "which contracts
+    /// am I keeping alive". Those coincide today, and coincide in the common
+    /// case once freenet-core#4669 lands, but they are not the same thing by
+    /// construction.
+    ///
+    /// A delegate subscription is two records on the node: the notification
+    /// hook, and (after #4669) the demand registration that actually pins the
+    /// contract. They are written and torn down together on the ordinary paths,
+    /// but not on all of them — an eviction that sheds a still-in-use contract
+    /// clears the demand and leaves the hook standing, and the delegate is told
+    /// nothing. A list sourced from the hook alone would therefore report a
+    /// contract the delegate is no longer pinning.
+    ///
+    /// That "looks subscribed, is not pinned" state is exactly what
+    /// freenet-core#5467 exists to make visible, so this call must not
+    /// reproduce it in the API meant to reveal it. The host is expected to
+    /// answer from records it can cross-check rather than from the hook alone.
+    /// This documentation deliberately promises the narrower meaning, so
+    /// tightening the host's answer later is a bug fix and not a breaking
+    /// change. Both records become one, with one owner, in #4669 part 3's
+    /// durable delegate-subscription store.
+    ///
     /// # Cost
     ///
     /// The node holds delegate subscriptions keyed contract → delegates, so
