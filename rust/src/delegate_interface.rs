@@ -564,6 +564,9 @@ pub enum InboundDelegateMsg<'a> {
     SubscribeContractResponse(SubscribeContractResponse),
     ContractNotification(ContractNotification),
     DelegateMessage(DelegateMessage),
+    // Appended in 0.9.0 at tag 8. New variants go at the END, never inserted —
+    // see the wire-format note on this enum.
+    UnsubscribeContractResponse(UnsubscribeContractResponse),
 }
 
 impl InboundDelegateMsg<'_> {
@@ -587,6 +590,9 @@ impl InboundDelegateMsg<'_> {
                 InboundDelegateMsg::ContractNotification(r)
             }
             InboundDelegateMsg::DelegateMessage(r) => InboundDelegateMsg::DelegateMessage(r),
+            InboundDelegateMsg::UnsubscribeContractResponse(r) => {
+                InboundDelegateMsg::UnsubscribeContractResponse(r)
+            }
         }
     }
 
@@ -612,6 +618,10 @@ impl InboundDelegateMsg<'_> {
                 Some(context)
             }
             InboundDelegateMsg::DelegateMessage(DelegateMessage { context, .. }) => Some(context),
+            InboundDelegateMsg::UnsubscribeContractResponse(UnsubscribeContractResponse {
+                context,
+                ..
+            }) => Some(context),
             _ => None,
         }
     }
@@ -638,6 +648,10 @@ impl InboundDelegateMsg<'_> {
                 Some(context)
             }
             InboundDelegateMsg::DelegateMessage(DelegateMessage { context, .. }) => Some(context),
+            InboundDelegateMsg::UnsubscribeContractResponse(UnsubscribeContractResponse {
+                context,
+                ..
+            }) => Some(context),
             _ => None,
         }
     }
@@ -823,6 +837,10 @@ pub enum OutboundDelegateMsg {
     UpdateContractRequest(UpdateContractRequest),
     SubscribeContractRequest(SubscribeContractRequest),
     SendDelegateMessage(DelegateMessage),
+    // Appended in 0.9.0 at tag 8. New variants go at the END, never inserted —
+    // see the wire-format note on this enum. freenet-stdlib#82 appends
+    // ScheduleWakeup after this, at tag 9.
+    UnsubscribeContractRequest(UnsubscribeContractRequest),
 }
 
 impl From<ApplicationMessage> for OutboundDelegateMsg {
@@ -855,6 +873,12 @@ impl From<SubscribeContractRequest> for OutboundDelegateMsg {
     }
 }
 
+impl From<UnsubscribeContractRequest> for OutboundDelegateMsg {
+    fn from(req: UnsubscribeContractRequest) -> Self {
+        Self::UnsubscribeContractRequest(req)
+    }
+}
+
 impl From<DelegateMessage> for OutboundDelegateMsg {
     fn from(msg: DelegateMessage) -> Self {
         Self::SendDelegateMessage(msg)
@@ -877,6 +901,7 @@ impl OutboundDelegateMsg {
             OutboundDelegateMsg::PutContractRequest(msg) => msg.processed,
             OutboundDelegateMsg::UpdateContractRequest(msg) => msg.processed,
             OutboundDelegateMsg::SubscribeContractRequest(msg) => msg.processed,
+            OutboundDelegateMsg::UnsubscribeContractRequest(msg) => msg.processed,
             OutboundDelegateMsg::SendDelegateMessage(msg) => msg.processed,
             OutboundDelegateMsg::RequestUserInput(_) => true,
             OutboundDelegateMsg::ContextUpdated(_) => true,
@@ -898,6 +923,10 @@ impl OutboundDelegateMsg {
                 context, ..
             }) => Some(context),
             OutboundDelegateMsg::SubscribeContractRequest(SubscribeContractRequest {
+                context,
+                ..
+            }) => Some(context),
+            OutboundDelegateMsg::UnsubscribeContractRequest(UnsubscribeContractRequest {
                 context,
                 ..
             }) => Some(context),
@@ -923,6 +952,10 @@ impl OutboundDelegateMsg {
                 context, ..
             }) => Some(context),
             OutboundDelegateMsg::SubscribeContractRequest(SubscribeContractRequest {
+                context,
+                ..
+            }) => Some(context),
+            OutboundDelegateMsg::UnsubscribeContractRequest(UnsubscribeContractRequest {
                 context,
                 ..
             }) => Some(context),
@@ -1075,6 +1108,59 @@ pub struct SubscribeContractResponse {
     /// The contract subscribed to.
     pub contract_id: ContractInstanceId,
     /// Success (Ok) or error message (Err).
+    pub result: Result<(), String>,
+    /// Context for the delegate.
+    pub context: DelegateContext,
+}
+
+/// Request to stop receiving a contract's state changes, from within a delegate.
+///
+/// The counterpart of [`SubscribeContractRequest`]. Before 0.9.0 a delegate had
+/// no way to drop a subscription it had taken: the only release path was the
+/// implicit cleanup when the delegate itself was unregistered, so a delegate
+/// that had finished with a contract went on holding interest in it for as long
+/// as the delegate existed. Specified in freenet-core#2830 alongside subscribe;
+/// only subscribe was built.
+///
+/// Answered with [`InboundDelegateMsg::UnsubscribeContractResponse`].
+///
+/// Field order is the wire format. Do not reorder.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UnsubscribeContractRequest {
+    /// The contract to stop receiving notifications for.
+    pub contract_id: ContractInstanceId,
+    /// Context for the delegate.
+    pub context: DelegateContext,
+    /// Whether this request has been processed.
+    pub processed: bool,
+}
+
+impl UnsubscribeContractRequest {
+    pub fn new(contract_id: ContractInstanceId) -> Self {
+        Self {
+            contract_id,
+            context: Default::default(),
+            processed: false,
+        }
+    }
+}
+
+/// Response after attempting to unsubscribe from a contract from a delegate.
+///
+/// **Unsubscribing a contract the delegate is not subscribed to reports
+/// `Ok(())`, not an error.** That is not a convenience: it is what the host
+/// actually does. Teardown goes through the same removal path that a
+/// no-longer-present client id already takes as a no-op, so returning an error
+/// would have the host inventing a failure it did not have. It also matches the
+/// subscribe side, where a repeat subscribe is a set insert.
+///
+/// Field order is the wire format. Do not reorder.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UnsubscribeContractResponse {
+    /// The contract unsubscribed from.
+    pub contract_id: ContractInstanceId,
+    /// Success (Ok) or error message (Err). Unsubscribing a contract the
+    /// delegate was not subscribed to reports `Ok(())`.
     pub result: Result<(), String>,
     /// Context for the delegate.
     pub context: DelegateContext,
@@ -1379,8 +1465,8 @@ mod delegate_wire_compat {
     /// The number of variants each enum has **today**. These are not free
     /// parameters: see `an_unpinned_variant_fails_this_test`, which is what
     /// makes them fail closed rather than drift.
-    const INBOUND_VARIANT_COUNT: u32 = 8;
-    const OUTBOUND_VARIANT_COUNT: u32 = 8;
+    const INBOUND_VARIANT_COUNT: u32 = 9;
+    const OUTBOUND_VARIANT_COUNT: u32 = 9;
 
     fn instance_id() -> ContractInstanceId {
         ContractInstanceId::new([0x5Au8; 32])
@@ -1427,6 +1513,7 @@ mod delegate_wire_compat {
             InboundDelegateMsg::SubscribeContractResponse(_) => 5,
             InboundDelegateMsg::ContractNotification(_) => 6,
             InboundDelegateMsg::DelegateMessage(_) => 7,
+            InboundDelegateMsg::UnsubscribeContractResponse(_) => 8,
         }
     }
 
@@ -1442,6 +1529,7 @@ mod delegate_wire_compat {
             OutboundDelegateMsg::UpdateContractRequest(_) => 5,
             OutboundDelegateMsg::SubscribeContractRequest(_) => 6,
             OutboundDelegateMsg::SendDelegateMessage(_) => 7,
+            OutboundDelegateMsg::UnsubscribeContractRequest(_) => 8,
         }
     }
 
@@ -1486,6 +1574,11 @@ mod delegate_wire_compat {
                 delegate_key(),
                 vec![0xEE],
             )),
+            InboundDelegateMsg::UnsubscribeContractResponse(UnsubscribeContractResponse {
+                contract_id: id,
+                result: Ok(()),
+                context: ctx.clone(),
+            }),
         ]
     }
 
@@ -1521,6 +1614,7 @@ mod delegate_wire_compat {
                 delegate_key(),
                 vec![0xEE],
             )),
+            OutboundDelegateMsg::UnsubscribeContractRequest(UnsubscribeContractRequest::new(id)),
         ]
     }
 
@@ -1733,5 +1827,55 @@ mod delegate_wire_compat {
              if this ever passes, the compatibility rule documented on \
              OutboundDelegateMsg is wrong and delegates are silently misreading messages"
         );
+    }
+
+    /// The unsubscribe pair added in 0.9.0 round-trips, and adding it did not
+    /// disturb any payload that predates it.
+    ///
+    /// The pre-0.9.0 byte string is hand-built rather than produced by this
+    /// crate, so it stands in for bytes from a delegate compiled before the
+    /// pair existed. Both halves matter: the new variant must work, and the old
+    /// ones must be untouched by its arrival.
+    #[test]
+    fn the_unsubscribe_pair_round_trips_and_disturbs_nothing_older() {
+        let id = instance_id();
+
+        let req =
+            OutboundDelegateMsg::UnsubscribeContractRequest(UnsubscribeContractRequest::new(id));
+        let encoded = bincode::serialize(&req).expect("request must serialize");
+        assert_eq!(wire_tag(&encoded), 8, "unsubscribe request is frozen at 8");
+        match bincode::deserialize::<OutboundDelegateMsg>(&encoded).expect("must round-trip") {
+            OutboundDelegateMsg::UnsubscribeContractRequest(r) => {
+                assert_eq!(r.contract_id, id);
+                assert!(!r.processed);
+            }
+            other => panic!("round-tripped into {other:?}"),
+        }
+
+        let resp = InboundDelegateMsg::UnsubscribeContractResponse(UnsubscribeContractResponse {
+            contract_id: id,
+            result: Ok(()),
+            context: DelegateContext::default(),
+        });
+        let encoded = bincode::serialize(&resp).expect("response must serialize");
+        assert_eq!(wire_tag(&encoded), 8, "unsubscribe response is frozen at 8");
+        assert!(matches!(
+            bincode::deserialize::<InboundDelegateMsg<'_>>(&encoded).expect("must round-trip"),
+            InboundDelegateMsg::UnsubscribeContractResponse(_)
+        ));
+
+        // A ContractNotification encoded before 0.9.0 existed: tag 6, the 32
+        // raw id bytes, an empty state and an empty context. Appending at 8
+        // must leave it decoding exactly as it always did.
+        let mut pre_0_9_0 = vec![6u8, 0, 0, 0];
+        pre_0_9_0.extend_from_slice(&[0x5Au8; 32]);
+        pre_0_9_0.extend_from_slice(&0u64.to_le_bytes());
+        pre_0_9_0.extend_from_slice(&0u64.to_le_bytes());
+        match bincode::deserialize::<InboundDelegateMsg<'_>>(&pre_0_9_0)
+            .expect("a pre-0.9.0 payload must still decode")
+        {
+            InboundDelegateMsg::ContractNotification(n) => assert_eq!(n.contract_id, id),
+            other => panic!("a pre-0.9.0 ContractNotification decoded as {other:?}"),
+        }
     }
 }

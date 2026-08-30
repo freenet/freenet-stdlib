@@ -4,6 +4,27 @@
 
 ### Added
 
+- **`OutboundDelegateMsg::UnsubscribeContractRequest` and
+  `InboundDelegateMsg::UnsubscribeContractResponse`**, both appended at bincode
+  **tag 8** of their enum.
+
+  freenet-core#2830 specified subscribe and unsubscribe together; only subscribe
+  was built, and `crates/core/src/contract.rs` has carried the
+  `TODO(#2830)` since. Until now the only way a delegate's subscription was
+  released was the implicit cleanup when the delegate itself was unregistered,
+  so a delegate that had finished with a contract kept holding interest in it
+  for as long as the delegate existed.
+
+  **Unsubscribing a contract the delegate is not subscribed to reports
+  `Ok(())`.** Not a convenience: it is what the host does. Teardown goes through
+  a removal path that is already a no-op for a client id that is not present, so
+  an error return would have the host inventing a failure it did not have.
+
+  **Appended, never inserted** — every existing tag is exactly where it was, so
+  deployed delegate WASM is unaffected. Tag 8 was chosen deliberately in
+  coordination with freenet-stdlib#82, which appends `ScheduleWakeup` /
+  `WakeupFired` and now takes **tag 9**.
+
 - **`DelegateCtx::list_subscriptions`** — a delegate can now ask the node which
   contracts it is subscribed to. Backed by two new V2 host functions in the
   `freenet_delegate_contracts` import namespace,
