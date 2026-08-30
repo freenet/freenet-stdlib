@@ -4179,6 +4179,7 @@ mod struct_field_wire_compat {
         use std::collections::HashMap;
 
         /// `ContractState` as it was before #52 appended `size_bytes`.
+        #[allow(dead_code)] // decoded into, never read — the decode is the test
         #[derive(Serialize, Deserialize, Debug)]
         struct OldContractState {
             subscribers: u32,
