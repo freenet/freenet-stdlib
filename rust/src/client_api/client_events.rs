@@ -3923,3 +3923,227 @@ mod fbs_decode_hardening {
         );
     }
 }
+
+/// Executable evidence for what happens on the bincode wire when a **field** is
+/// appended to a struct.
+///
+/// This is a different question from appending a variant to an enum, and the
+/// answers are not merely different — they break in the **opposite direction**.
+/// Getting that backwards is easy and expensive, so the behaviour is pinned
+/// here rather than reasoned about in a review comment.
+///
+/// Summary of what these tests establish, for `bincode::serialize` /
+/// `bincode::deserialize` as this crate uses them:
+///
+/// | change | old sender to new receiver | new sender to old receiver |
+/// |---|---|---|
+/// | append an **enum variant** | fine (old tags unchanged) | hard error, unknown tag |
+/// | append a **struct field** | **hard error**, unexpected end of input | silently ignored *if the struct is terminal*, **silent corruption** if it is not |
+///
+/// So a struct field is the more dangerous of the two. It has no tag, so there
+/// is nothing for a decoder to skip; bincode is positional and not
+/// self-describing. `#[serde(default)]` does not help — see
+/// `serde_default_does_not_rescue_a_missing_bincode_field`.
+///
+/// The practical rule that follows: **prefer a new enum variant over a new
+/// field on an existing wire struct.** A variant is only seen by a peer that
+/// asked for it; a field changes what every existing peer decodes.
+#[cfg(test)]
+mod struct_field_wire_compat {
+    use super::{HostResponse, NodeDiagnosticsResponse, QueryResponse};
+    use serde::{Deserialize, Serialize};
+
+    /// A wire struct before a field was appended.
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct OldShape {
+        first: u32,
+        second: String,
+    }
+
+    /// The same struct after appending `added`, the way a new node would emit it.
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct NewShape {
+        first: u32,
+        second: String,
+        added: Vec<u8>,
+    }
+
+    /// The same again, but with `#[serde(default)]` on the new field — the
+    /// annotation people reach for expecting it to make the change compatible.
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct NewShapeWithDefault {
+        first: u32,
+        second: String,
+        #[serde(default)]
+        added: Vec<u8>,
+    }
+
+    fn old_value() -> OldShape {
+        OldShape {
+            first: 7,
+            second: "diagnostics".to_string(),
+        }
+    }
+
+    fn new_value() -> NewShape {
+        NewShape {
+            first: 7,
+            second: "diagnostics".to_string(),
+            added: vec![0xDE, 0xAD],
+        }
+    }
+
+    /// **New sender to old receiver, struct terminal: silently succeeds, and
+    /// the new field is dropped.**
+    ///
+    /// `bincode::deserialize` is configured `allow_trailing_bytes()`
+    /// (bincode-1.3.3 `src/lib.rs`), so the appended field's bytes are simply
+    /// left unread. No error, no warning — the old peer just never learns the
+    /// field exists.
+    ///
+    /// This is the benign case, and it is benign *only* because nothing follows
+    /// the struct in the encoding. See
+    /// `an_appended_field_corrupts_whatever_follows_it`.
+    #[test]
+    fn a_new_field_is_silently_ignored_by_an_old_receiver() {
+        let bytes = bincode::serialize(&new_value()).expect("new value must serialize");
+        let decoded: OldShape =
+            bincode::deserialize(&bytes).expect("trailing bytes are allowed, so this succeeds");
+        assert_eq!(decoded, old_value(), "the shared prefix decodes unchanged");
+    }
+
+    /// **Old sender to new receiver: hard decode error.**
+    ///
+    /// This is the direction that bites, and it is the reverse of the enum
+    /// case. A new client reading an old node's response runs off the end of
+    /// the input looking for a field the old node never wrote, and the whole
+    /// message fails — not just the new field.
+    ///
+    /// Concretely: appending a field to a response struct means a freshly-built
+    /// client cannot decode that response from **any** node not yet upgraded.
+    /// During a staged fleet rollout that is most of the fleet, and the tool
+    /// you would use to watch the rollout is the one that breaks.
+    #[test]
+    fn an_old_payload_fails_to_decode_once_a_field_is_appended() {
+        let bytes = bincode::serialize(&old_value()).expect("old value must serialize");
+        let decoded = bincode::deserialize::<NewShape>(&bytes);
+        assert!(
+            decoded.is_err(),
+            "an old payload must NOT decode into a struct with an appended field; \
+             if this ever passes, the compatibility table on this module is wrong"
+        );
+    }
+
+    /// `#[serde(default)]` does **not** rescue the case above.
+    ///
+    /// It is a self-describing-format feature: it fills a field whose *name*
+    /// was absent from the input. bincode carries no names and no field count,
+    /// so there is no "absent" to detect — the decoder just reads past the end
+    /// of the buffer and fails. `#[serde(default)]` on a bincode struct field
+    /// is therefore JSON-only protection, and reading it as wire compatibility
+    /// is a mistake worth naming explicitly.
+    ///
+    /// (`ContractState::size_bytes` in this file carries exactly this
+    /// annotation. It protects the `serde_json` report path, not the bincode
+    /// client path.)
+    #[test]
+    fn serde_default_does_not_rescue_a_missing_bincode_field() {
+        let bytes = bincode::serialize(&old_value()).expect("old value must serialize");
+        assert!(
+            bincode::deserialize::<NewShapeWithDefault>(&bytes).is_err(),
+            "#[serde(default)] must not be mistaken for bincode wire compatibility"
+        );
+
+        // The same annotation genuinely does work for JSON, which is why it is
+        // easy to believe it works everywhere.
+        let json = serde_json::to_string(&old_value()).expect("old value must serialize to JSON");
+        let from_json: NewShapeWithDefault =
+            serde_json::from_str(&json).expect("serde(default) fills the missing field in JSON");
+        assert!(from_json.added.is_empty());
+    }
+
+    /// **The dangerous case: an appended field that is not terminal corrupts
+    /// whatever follows it, silently.**
+    ///
+    /// If the struct has siblings after it in the enclosing encoding, the extra
+    /// bytes are not trailing — they shift every subsequent field. An old
+    /// receiver then reads the new field's bytes *as* the next field and gets a
+    /// plausible, wrong value with no error at all.
+    ///
+    /// This is why "adding a field is fine, we checked" is not a conclusion you
+    /// can carry from one struct to another: whether it is safe depends on
+    /// where the struct sits in the message, not on the struct.
+    #[test]
+    fn an_appended_field_corrupts_whatever_follows_it() {
+        #[derive(Serialize, Deserialize, Debug)]
+        struct OldEnvelope {
+            payload: OldShape,
+            trailer: u32,
+        }
+        #[derive(Serialize, Deserialize, Debug)]
+        struct NewEnvelope {
+            payload: NewShape,
+            trailer: u32,
+        }
+
+        let bytes = bincode::serialize(&NewEnvelope {
+            payload: new_value(),
+            trailer: 0xABCD_EF01,
+        })
+        .expect("new envelope must serialize");
+
+        match bincode::deserialize::<OldEnvelope>(&bytes) {
+            Ok(decoded) => assert_ne!(
+                decoded.trailer, 0xABCD_EF01,
+                "if this ever holds, bincode grew field framing and this whole module \
+                 needs revisiting"
+            ),
+            Err(_) => {
+                // Also an acceptable outcome, and the better one: the shifted
+                // bytes happened not to form a decodable value. The point of
+                // the test is that the field is NOT skipped cleanly, and both
+                // arms show that.
+            }
+        }
+    }
+
+    /// `NodeDiagnosticsResponse` is **terminal** in its enclosing message, and
+    /// this pins that property.
+    ///
+    /// It is the only reason appending a field to it is survivable for old
+    /// clients at all (`a_new_field_is_silently_ignored_by_an_old_receiver`).
+    /// The property is invisible at the definition site — nothing next to
+    /// `NodeDiagnosticsResponse` says "must stay last" — so if a field is ever
+    /// added *after* the payload in `QueryResponse::NodeDiagnostics` or
+    /// `HostResponse::QueryResponse`, this fails and says why.
+    ///
+    /// Note what this does NOT license: appending to `NodeDiagnosticsResponse`
+    /// still breaks a new client talking to an old node, per
+    /// `an_old_payload_fails_to_decode_once_a_field_is_appended`. Terminality
+    /// buys one direction, not both.
+    #[test]
+    fn node_diagnostics_response_is_terminal_in_its_message() {
+        let response = NodeDiagnosticsResponse {
+            node_info: None,
+            network_info: None,
+            subscriptions: vec![],
+            contract_states: Default::default(),
+            system_metrics: None,
+            connected_peers_detailed: vec![],
+        };
+
+        let inner = bincode::serialize(&response).expect("response must serialize");
+        let whole = bincode::serialize(&HostResponse::<Vec<u8>>::QueryResponse(
+            QueryResponse::NodeDiagnostics(response),
+        ))
+        .expect("host response must serialize");
+
+        assert!(
+            whole.ends_with(&inner),
+            "NodeDiagnosticsResponse must remain the LAST thing in its encoding. \
+             Something now follows it, so appending a field to it would no longer be \
+             trailing-byte-safe for older clients — it would silently corrupt whatever \
+             was added after it."
+        );
+    }
+}
