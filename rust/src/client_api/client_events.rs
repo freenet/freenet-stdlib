@@ -4147,4 +4147,103 @@ mod struct_field_wire_compat {
              was added after it."
         );
     }
+
+    /// The rule above, in code that has already shipped.
+    ///
+    /// `ContractState::size_bytes` was appended in #52 (2026-02-18, crate
+    /// version 0.1.36) and is present in every released tag from `rust-v0.8.0`
+    /// onward. `ContractState` is a `HashMap` **value** inside
+    /// `NodeDiagnosticsResponse`, and two more fields follow the map — so the
+    /// appended `u64` is not trailing. It shifts everything after it.
+    ///
+    /// A client built before that commit, querying a node built after it, does
+    /// not get a diagnostics response with one field missing. It gets **no
+    /// diagnostics response at all**: the decoder reads the appended `u64` as
+    /// the next value in sequence and fails, or worse, does not.
+    ///
+    /// This test isolates that single variable — it uses today's `String` map
+    /// key, so it measures the effect of the appended field and not of the
+    /// later key change in #70.
+    ///
+    /// Nothing here is fixable after the fact; the released bytes are the
+    /// released bytes. It is pinned as the concrete instance of why the table
+    /// on this module matters, and because a rule with a real example attached
+    /// is the one people believe.
+    #[test]
+    fn the_shipped_size_bytes_append_is_an_instance_of_this() {
+        use super::{
+            ConnectedPeerInfo, ContractState, NetworkInfo, NodeInfo, SubscriptionInfo,
+            SystemMetrics,
+        };
+        use crate::contract_interface::ContractInstanceId;
+        use std::collections::HashMap;
+
+        /// `ContractState` as it was before #52 appended `size_bytes`.
+        #[derive(Serialize, Deserialize, Debug)]
+        struct OldContractState {
+            subscribers: u32,
+            subscriber_peer_ids: Vec<String>,
+        }
+
+        /// `NodeDiagnosticsResponse` as an older client sees it: identical in
+        /// every respect except the map's value type.
+        #[allow(dead_code)]
+        #[derive(Serialize, Deserialize, Debug)]
+        struct OldNodeDiagnosticsResponse {
+            node_info: Option<NodeInfo>,
+            network_info: Option<NetworkInfo>,
+            subscriptions: Vec<SubscriptionInfo>,
+            contract_states: HashMap<String, OldContractState>,
+            system_metrics: Option<SystemMetrics>,
+            connected_peers_detailed: Vec<ConnectedPeerInfo>,
+        }
+
+        let mut contract_states = HashMap::new();
+        contract_states.insert(
+            "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9".to_string(),
+            ContractState {
+                subscribers: 3,
+                subscriber_peer_ids: vec!["peer-a".to_string()],
+                size_bytes: 1024,
+            },
+        );
+
+        let new_node_response = NodeDiagnosticsResponse {
+            node_info: None,
+            network_info: None,
+            subscriptions: vec![SubscriptionInfo {
+                contract_key: ContractInstanceId::new([7u8; 32]),
+                client_id: 42,
+            }],
+            contract_states,
+            system_metrics: Some(SystemMetrics {
+                active_connections: 1,
+                hosting_contracts: 1,
+            }),
+            connected_peers_detailed: vec![ConnectedPeerInfo {
+                peer_id: "peer-x".to_string(),
+                address: "10.0.0.1:31337".to_string(),
+            }],
+        };
+
+        let bytes = bincode::serialize(&new_node_response).expect("a new node's response");
+
+        let faithfully_decoded = match bincode::deserialize::<OldNodeDiagnosticsResponse>(&bytes) {
+            // The common outcome, and the honest one: the shifted bytes do not
+            // form a decodable value and the client sees an error.
+            Err(_) => false,
+            // The quieter outcome: it decodes into something, and that
+            // something is wrong.
+            Ok(decoded) => {
+                decoded.system_metrics.is_some() && decoded.connected_peers_detailed.len() == 1
+            }
+        };
+
+        assert!(
+            !faithfully_decoded,
+            "an appended field on a non-terminal struct must not decode cleanly on an older \
+             reader; if this ever passes, bincode gained field framing and the compatibility \
+             table on this module needs rewriting"
+        );
+    }
 }
