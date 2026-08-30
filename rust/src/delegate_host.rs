@@ -707,8 +707,13 @@ impl DelegateCtx {
     /// answer from records it can cross-check rather than from the hook alone.
     /// This documentation deliberately promises the narrower meaning, so
     /// tightening the host's answer later is a bug fix and not a breaking
-    /// change. Both records become one, with one owner, in #4669 part 3's
-    /// durable delegate-subscription store.
+    /// change.
+    ///
+    /// Both divergences, and why the two obvious fixes are wrong, are tracked
+    /// in freenet-core#5487. They close together at #4669 part 3's durable
+    /// delegate-subscription store, where the two records become one with one
+    /// owner — so introspection built against the two-record shape will want
+    /// rewriting when that lands.
     ///
     /// # Cost
     ///
