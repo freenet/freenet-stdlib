@@ -14,6 +14,7 @@ We welcome contributions to Freenet! Here's what you need to know.
 - PRs should explain **why**, not just what. See [AGENTS.md](AGENTS.md) for description structure.
 - Bug fixes should include a regression test that fails without the fix.
 - Run `cargo fmt`, `cargo clippy --all-targets`, and `cargo test` before pushing.
+- **Discard `rust/src/generated/` before committing, unless changing it is the point of your PR.** Building regenerates those FlatBuffers files with whatever `flatc` you have locally, which is usually not the one that produced the checked-in versions — so a build leaves thousands of lines of unrelated churn in your working tree. `git checkout -- rust/src/generated/` clears it. Stage explicit paths rather than `git add -A`, or a toolchain-version downgrade rides into your PR unnoticed and unreviewed.
 - Keep PRs focused — one logical change per PR.
 
 ## AI-Assisted Contributions

@@ -2,6 +2,154 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`OutboundDelegateMsg::UnsubscribeContractRequest` and
+  `InboundDelegateMsg::UnsubscribeContractResponse`**, both appended at bincode
+  **tag 8** of their enum.
+
+  freenet-core#2830 specified subscribe and unsubscribe together; only subscribe
+  was built, and `crates/core/src/contract.rs` has carried the
+  `TODO(#2830)` since. Until now the only way a delegate's subscription was
+  released was the implicit cleanup when the delegate itself was unregistered,
+  so a delegate that had finished with a contract kept holding interest in it
+  for as long as the delegate existed.
+
+  **Unsubscribing a contract the delegate is not subscribed to reports
+  `Ok(())`.** Not a convenience: it is what the host does. Teardown goes through
+  a removal path that is already a no-op for a client id that is not present, so
+  an error return would have the host inventing a failure it did not have.
+
+  **Appended, never inserted** — every existing tag is exactly where it was, so
+  deployed delegate WASM is unaffected. Tag 8 was chosen deliberately in
+  coordination with freenet-stdlib#82, which appends `ScheduleWakeup` /
+  `WakeupFired` and now takes **tag 9**.
+
+- **`DelegateCtx::list_subscriptions`** — a delegate can now ask the node which
+  contracts it is subscribed to. Backed by two new V2 host functions in the
+  `freenet_delegate_contracts` import namespace,
+  `__frnt__delegate__list_subscriptions_len` and
+  `__frnt__delegate__list_subscriptions`, with
+  `encode_contract_id_list` / `decode_contract_id_list` as the shared codec.
+
+  A delegate's subscription set lives in the node: the WASM is instantiated per
+  invocation and dropped afterwards, so between invocations the delegate has no
+  view of it. Until now it could only keep a parallel record in its secrets,
+  which drifts from the node's exactly when it matters, or re-subscribe to
+  everything on every wake.
+
+  **Scoped honestly: this does not by itself deliver the restart-replay
+  freenet-core#5467 asks for.** The node's delegate-subscription registry is
+  in-memory, so a restart *loses* those subscriptions rather than replaying
+  them, and after one this call correctly returns an empty list. It is the read
+  side of that capability, and becomes load-bearing when freenet-core#4669
+  part 3's durable store lands and there is something persistent to read back.
+  Within a single node lifetime it is useful today.
+
+  It returns `Result<Vec<[u8; 32]>, i64>`, not a bare `Vec`. An empty list and a
+  failed enumeration mean opposite things to a caller deciding whether to
+  re-subscribe, so they must not share a representation.
+
+  **This is additive for every existing delegate**, and that was checked against
+  a shipped artifact rather than assumed. River's deployed `chat_delegate.wasm`
+  is built against stdlib 0.8.5, which already declares the five
+  `freenet_delegate_contracts` externs — and `wasm-objdump -x` shows it imports
+  **none** of them, only the four secrets functions and one logger it actually
+  calls. The linker drops unreferenced externs, so declaring two more changes
+  nothing for a delegate that does not call them. Had that not held, every
+  delegate merely *rebuilt* against 0.9.0 would have acquired imports no
+  deployed node provides and failed to instantiate everywhere.
+
+  A delegate that *does* call it fails to **load** on a node that does not
+  provide the imports — a named missing-import error at instantiation, rather
+  than a silent failure mid-protocol. That is the reason for choosing a host
+  function over a message variant.
+
+  **Requires a node whose freenet-core registers these imports, and no released
+  node does yet.** Host functions are registered by name and reference no stdlib
+  type, so the stdlib version a node was built against guarantees nothing here;
+  the core half is tracked separately.
+
+### Fixed
+
+- **`InboundDelegateMsg`'s doc comment claimed `OutboundDelegateMsg` was
+  `#[non_exhaustive]`. It never has been.** The comment is corrected, and the
+  asymmetry is now documented as the deliberate choice it is, on both enums.
+
+  `OutboundDelegateMsg` is **staying** un-marked, and should not be "fixed" by
+  marking it. Every variant is a request the host must act on, and freenet-core
+  dispatches them in exhaustive matches with no wildcard (`contract.rs`, in the
+  request loop and in the app-message filter). Marking the enum would force
+  those to grow `_ =>` arms, and a newly added variant would then compile
+  against the host with no arm of its own — the delegate's request falling into
+  the wildcard, the call reporting success. The compile error is what prevents
+  that, and it is the only thing that does. `InboundDelegateMsg` keeps the
+  attribute because its consumers are third-party delegate WASM, which can
+  reasonably ignore an unknown variant.
+
+  The doc states two limits on that argument rather than overselling it: the
+  compile error forces an *arm* to exist, not a working handler (this crate's
+  own FlatBuffers encoder has explicit arms that log and drop), and it is **not**
+  the bug behind this workstream — a delegate `SubscribeContractRequest` *is*
+  handled today; its defect is that it registers no demand
+  (freenet-core#4669), which is a different failure with a different fix.
+
+- **`DelegateCtx::subscribe_contract`'s doc comment** said notification delivery
+  was "a follow-up" (it works), and said nothing about whether a delegate
+  subscription registers demand in the network.
+
+  It now says that **whether it does is a property of the node, not of this
+  library, and a delegate cannot detect which it has**. On nodes predating
+  freenet-core#4669 a subscribe registers no demand at all — no pin, no renewal
+  set, no eviction exemption — so the delegate sees remote updates only while
+  something else keeps the node subscribed, typically an open UI client. Once
+  #4669 lands it registers demand when the node is hosting the contract, and
+  still does not when the node can resolve but is not hosting it, since a pin on
+  a contract the node does not hold could be neither renewed nor reclaimed.
+
+  The call reports success in every one of those cases and nothing
+  distinguishes them, which is why this belongs at the call site rather than in
+  an issue. It is deliberately phrased as current node behaviour with a tracking
+  reference rather than as a property of the API, so that freenet-core#4669
+  landing makes it incomplete rather than wrong.
+
+### Internal — wire-format guards
+
+- **Every variant of both delegate message enums now has its bincode tag
+  pinned** (`delegate_msg_variant_tags_are_pinned`). The previous pin covered
+  `InboundDelegateMsg`'s variant 0 alone, so any reorder that left
+  `ApplicationMessage` first went undetected — including swapping
+  `UserResponse` and `GetContractResponse`, which reassigns two tags and makes
+  deployed delegate WASM decode each as the other, silently. That exact swap was
+  written during the work that produced this pin, which is the argument for it.
+
+  The guard fails closed in both directions: the tag map is an exhaustive
+  `match`, so a new variant is a compile error until it is pinned, and a probe
+  asserts that the next tag along does not decode, so a variant cannot be added
+  without the count constants noticing.
+
+- **The compatibility rules are now asserted, not just documented**
+  (`delegate_wire_compat` in `delegate_interface.rs`, `struct_field_wire_compat`
+  in `client_events.rs`). Worth reading before changing anything on the wire,
+  because appending an enum variant and appending a struct field break in
+  **opposite** directions:
+
+  | change | old sender → new receiver | new sender → old receiver |
+  |---|---|---|
+  | append an enum variant | fine, old tags unchanged | hard error, unknown tag |
+  | append a struct field | **hard error**, unexpected end of input | silently ignored *if the struct is terminal in its message*; **silent corruption** if it is not |
+
+  So a struct field is the more dangerous of the two: bincode is positional and
+  carries no field tags, so there is nothing for a decoder to skip, and
+  `#[serde(default)]` does not help — it is a self-describing-format feature and
+  protects the `serde_json` path only. The practical rule is to prefer a new
+  enum variant over a new field on an existing wire struct, since a variant is
+  only seen by a peer that asked for it.
+
+  `NodeDiagnosticsResponse` happens to be terminal in its message, which is the
+  only reason a field could be appended to it without corrupting anything after
+  it. That property is now pinned rather than assumed.
+
 ### TypeScript SDK — Breaking (npm package `@freenetorg/freenet-stdlib`; next release must be 0.4.0, not a patch)
 
 The npm package is versioned separately from the Rust crate. This release
