@@ -366,6 +366,8 @@ extern "C" {
 
 // Stub for non-WASM builds (native tests, host-side compilation).
 // Returns 0 (EOF) since there is no WASM host to refill from.
+// Name must match the WASM import above exactly, so it cannot be snake_cased.
+#[allow(non_snake_case)]
 #[cfg(all(feature = "contract", not(target_family = "wasm")))]
 unsafe extern "C" fn __frnt__fill_buffer(_id: i64, _buf_ptr: i64) -> u32 {
     0
@@ -385,6 +387,11 @@ pub struct StreamingBuffer {
 
 #[cfg(feature = "contract")]
 impl StreamingBuffer {
+    /// Returns the total number of payload bytes remaining to be read.
+    pub fn total_remaining(&self) -> usize {
+        self.total_remaining
+    }
+
     /// Create a streaming reader from a buffer pointer.
     ///
     /// Reads the `[total_len: u32]` header and prepares for streaming.
@@ -392,11 +399,6 @@ impl StreamingBuffer {
     /// # Safety
     /// `ptr` must point to a valid `BufferBuilder` in WASM linear memory
     /// whose first 4 bytes of data contain the total payload length as LE u32.
-    /// Returns the total number of payload bytes remaining to be read.
-    pub fn total_remaining(&self) -> usize {
-        self.total_remaining
-    }
-
     pub unsafe fn from_ptr(ptr: i64) -> Self {
         let buf_ptr = ptr as *mut BufferBuilder;
         let builder = &*buf_ptr;
