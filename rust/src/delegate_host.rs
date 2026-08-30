@@ -133,6 +133,11 @@ pub mod error_codes {
 /// is already well outside the intended shape.
 pub const MAX_SUBSCRIPTION_LIST_BYTES: i64 = 32 * 1024;
 
+// The cap is compared against a length that must also be a multiple of 32. If
+// it ever stops being one, the upper bound becomes unreachable and the "1024
+// contract ids" above becomes a lie, silently.
+const _: () = assert!(MAX_SUBSCRIPTION_LIST_BYTES % 32 == 0);
+
 // ============================================================================
 // Host function declarations (WASM only)
 // ============================================================================
@@ -792,53 +797,22 @@ impl DelegateCtx {
             // Step 1: how many bytes to allocate. Zero is a valid answer and
             // means "subscribed to nothing".
             //
-            // Every host return is validated before it is used as a length.
-            // `usize` is 32 bits on wasm32, so an `as usize` cast on an
-            // unchecked i64 truncates silently: a bogus 2^32 would become 0 and
-            // surface as `Ok(vec![])` — the "you hold no subscriptions" answer
-            // this API's whole return type exists to keep distinguishable from
-            // a failure. Reject rather than cast.
+            // The decisions live in `validate_list_len` and `resolve_written`,
+            // which are pure and compiled on every target, so they have
+            // host-side tests. Only the two `unsafe` host calls are wasm-only —
+            // otherwise these branches would be reachable by nothing but a
+            // wasm32 runtime CI does not run.
             let len = unsafe { __frnt__delegate__list_subscriptions_len() };
-            if len < 0 {
-                return Err(len);
-            }
-            if len == 0 {
+            let capacity = validate_list_len(len)?;
+            if capacity == 0 {
                 return Ok(Vec::new());
             }
-            if len % 32 != 0 || len > MAX_SUBSCRIPTION_LIST_BYTES {
-                // The import contract promises a multiple of 32 within the
-                // cap. A host that breaks it is malfunctioning, and allocating
-                // on its say-so risks an allocation failure, which in a
-                // delegate is an abort rather than an error we can return.
-                return Err(error_codes::ERR_STORE_ERROR as i64);
-            }
 
-            // Step 2: read the ids.
-            let mut buf = vec![0u8; len as usize];
+            let mut buf = vec![0u8; capacity];
             let written = unsafe {
                 __frnt__delegate__list_subscriptions(buf.as_mut_ptr() as i64, buf.len() as i64)
             };
-            if written < 0 {
-                return Err(written);
-            }
-            if written > len {
-                // Writing past the buffer we advertised is a host bug. Left
-                // unchecked, `truncate` would be a no-op and the zero-filled
-                // tail would decode as valid-looking all-zero contract ids.
-                return Err(error_codes::ERR_STORE_ERROR as i64);
-            }
-            if written == len {
-                // Ambiguous: an exactly-full buffer cannot be distinguished
-                // from one the host wanted to overflow, so a set that GREW
-                // between the two calls would silently come back one entry
-                // short and look complete. Re-ask instead of guessing; the
-                // host reports ERR_BUFFER_TOO_SMALL if it still does not fit.
-                let recheck = unsafe { __frnt__delegate__list_subscriptions_len() };
-                if recheck > len {
-                    return Err(error_codes::ERR_BUFFER_TOO_SMALL as i64);
-                }
-            }
-            buf.truncate(written as usize);
+            buf.truncate(resolve_written(len, written)?);
             decode_contract_id_list(&buf).ok_or(error_codes::ERR_STORE_ERROR as i64)
         }
         #[cfg(not(target_family = "wasm"))]
@@ -911,6 +885,68 @@ impl std::fmt::Debug for DelegateCtx {
             .field("context_len", &self.len())
             .finish_non_exhaustive()
     }
+}
+
+// ============================================================================
+// list_subscriptions host-return validation
+//
+// Split out from the wasm-only body on purpose. CI runs `cargo test` on the
+// host target only — the wasm32 matrix entries build and lint but execute
+// nothing — so logic left inside `#[cfg(target_family = "wasm")]` is
+// type-checked and never run. These are the branches most worth running.
+// ============================================================================
+
+/// Validate the byte length the host reports before allocating on it.
+///
+/// Returns the capacity to allocate, or the error to hand back.
+///
+/// `usize` is 32 bits on wasm32, so an `as usize` cast on an unvalidated `i64`
+/// truncates silently: a bogus `2^32` becomes `0` and surfaces as `Ok(vec![])`,
+/// the "you hold no subscriptions" answer that this API's whole return type
+/// exists to keep distinguishable from a failure. So the value is refused
+/// rather than cast. The cap additionally keeps an implausible length away from
+/// `vec![0u8; len]`, since an allocation failure inside a delegate is an abort
+/// rather than an error anyone can return.
+#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
+fn validate_list_len(len: i64) -> Result<usize, i64> {
+    if len < 0 {
+        return Err(len);
+    }
+    if len % 32 != 0 || len > MAX_SUBSCRIPTION_LIST_BYTES {
+        return Err(error_codes::ERR_STORE_ERROR as i64);
+    }
+    Ok(len as usize)
+}
+
+/// Decide how much of the buffer to keep, given what the host reports writing.
+///
+/// `written < len` is accepted as a complete list: the import contract requires
+/// the host to return `ERR_BUFFER_TOO_SMALL` rather than truncate, so a short
+/// write means the set shrank between the two calls, not that it was cut off.
+/// Completeness therefore rests on the host honouring that contract, which is
+/// why the contract is stated on the import rather than left implied.
+///
+/// An earlier version re-called the length function whenever the buffer came
+/// back exactly full, meaning to catch a set that had grown. That was wrong
+/// twice over: an exactly-full buffer is the *normal* result, not an edge case,
+/// so it doubled a scan documented as expensive on every non-empty call — and
+/// it could fail a correct read, by reporting `ERR_BUFFER_TOO_SMALL` for a
+/// complete list when a subscription happened to arrive in between.
+#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
+fn resolve_written(len: i64, written: i64) -> Result<usize, i64> {
+    if written < 0 {
+        return Err(written);
+    }
+    if written > len {
+        // Writing past the buffer we advertised is a host bug. Left unchecked,
+        // `truncate` is a no-op and the zero-filled tail decodes as
+        // valid-looking all-zero contract ids.
+        return Err(error_codes::ERR_STORE_ERROR as i64);
+    }
+    if written % 32 != 0 {
+        return Err(error_codes::ERR_STORE_ERROR as i64);
+    }
+    Ok(written as usize)
 }
 
 // ============================================================================
@@ -1106,6 +1142,101 @@ mod contract_id_list_codec_tests {
             None,
             "a partial id means the buffer is wrong; returning the ids that did parse \
              would hand the caller a list that looks complete and is not"
+        );
+    }
+}
+
+#[cfg(test)]
+mod list_subscriptions_guard_tests {
+    use super::{error_codes, resolve_written, validate_list_len, MAX_SUBSCRIPTION_LIST_BYTES};
+
+    const STORE_ERR: i64 = error_codes::ERR_STORE_ERROR as i64;
+
+    #[test]
+    fn a_negative_length_is_passed_through_as_the_host_error() {
+        assert_eq!(
+            validate_list_len(error_codes::ERR_NOT_IN_PROCESS as i64),
+            Err(error_codes::ERR_NOT_IN_PROCESS as i64),
+            "a host error code must reach the caller unchanged, not be reshaped"
+        );
+    }
+
+    #[test]
+    fn zero_is_a_successful_empty_enumeration() {
+        assert_eq!(
+            validate_list_len(0),
+            Ok(0),
+            "zero means 'subscribed to nothing' and must NOT be an error"
+        );
+    }
+
+    #[test]
+    fn a_length_that_is_not_a_whole_number_of_ids_is_refused() {
+        assert_eq!(validate_list_len(33), Err(STORE_ERR));
+        assert_eq!(validate_list_len(31), Err(STORE_ERR));
+    }
+
+    #[test]
+    fn an_implausible_length_is_refused_before_it_reaches_an_allocation() {
+        assert_eq!(
+            validate_list_len(MAX_SUBSCRIPTION_LIST_BYTES + 32),
+            Err(STORE_ERR)
+        );
+        assert_eq!(
+            validate_list_len(MAX_SUBSCRIPTION_LIST_BYTES),
+            Ok(MAX_SUBSCRIPTION_LIST_BYTES as usize),
+            "the cap itself is allowed"
+        );
+    }
+
+    /// The wasm32 truncation this guard exists for: `usize` is 32 bits there,
+    /// so `2^32 as usize` is `0` and would have surfaced as an empty list.
+    #[test]
+    fn a_length_that_would_truncate_to_zero_on_wasm32_is_refused() {
+        assert_eq!(validate_list_len(1i64 << 32), Err(STORE_ERR));
+    }
+
+    #[test]
+    fn a_negative_write_is_passed_through_as_the_host_error() {
+        assert_eq!(
+            resolve_written(320, error_codes::ERR_STORE_ERROR as i64),
+            Err(STORE_ERR)
+        );
+    }
+
+    #[test]
+    fn writing_past_the_advertised_buffer_is_refused() {
+        assert_eq!(
+            resolve_written(320, 352),
+            Err(STORE_ERR),
+            "truncate would be a no-op, leaving a zero-filled tail to decode as \
+             valid-looking all-zero contract ids"
+        );
+    }
+
+    #[test]
+    fn a_partial_id_written_is_refused() {
+        assert_eq!(resolve_written(320, 300), Err(STORE_ERR));
+    }
+
+    #[test]
+    fn an_exactly_full_buffer_is_the_normal_case_and_is_accepted() {
+        assert_eq!(
+            resolve_written(320, 320),
+            Ok(320),
+            "len comes from the same set the read serialises, so exactly-full is \
+             the ordinary outcome — treating it as suspicious cost a second scan \
+             on every call and could fail a correct read"
+        );
+    }
+
+    #[test]
+    fn a_short_write_is_accepted_as_a_set_that_shrank() {
+        assert_eq!(
+            resolve_written(320, 288),
+            Ok(288),
+            "the import contract requires ERR_BUFFER_TOO_SMALL rather than \
+             truncation, so a short write means the set shrank"
         );
     }
 }
