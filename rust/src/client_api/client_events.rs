@@ -3950,7 +3950,7 @@ mod fbs_decode_hardening {
 /// asked for it; a field changes what every existing peer decodes.
 #[cfg(test)]
 mod struct_field_wire_compat {
-    use super::{HostResponse, NodeDiagnosticsResponse, QueryResponse};
+    use super::{HostResponse, NodeDiagnosticsResponse, QueryResponse, WrappedState};
     use serde::{Deserialize, Serialize};
 
     /// A wire struct before a field was appended.
@@ -4134,7 +4134,10 @@ mod struct_field_wire_compat {
         };
 
         let inner = bincode::serialize(&response).expect("response must serialize");
-        let whole = bincode::serialize(&HostResponse::<Vec<u8>>::QueryResponse(
+        // The default type parameter, i.e. the `HostResponse` that is actually
+        // on the wire. Pinning terminality against some other instantiation
+        // would be pinning a type nobody sends.
+        let whole = bincode::serialize(&HostResponse::<WrappedState>::QueryResponse(
             QueryResponse::NodeDiagnostics(response),
         ))
         .expect("host response must serialize");
