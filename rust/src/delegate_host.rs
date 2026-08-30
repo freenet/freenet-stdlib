@@ -625,9 +625,8 @@ impl DelegateCtx {
     /// Subscribe to contract updates by instance ID.
     ///
     /// Registers interest in receiving `ContractNotification` when the
-    /// contract's state changes. Notification delivery does work — an earlier
-    /// version of this comment said it was "a follow-up", which is no longer
-    /// true.
+    /// contract's state changes. Delivery works, and covers state committed
+    /// locally as well as state arriving from the network.
     ///
     /// # What this does not do, as of 0.9.0
     ///

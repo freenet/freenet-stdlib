@@ -4075,6 +4075,7 @@ mod struct_field_wire_compat {
     /// where the struct sits in the message, not on the struct.
     #[test]
     fn an_appended_field_corrupts_whatever_follows_it() {
+        #[allow(dead_code)] // `payload` exists to occupy wire space, not to be read
         #[derive(Serialize, Deserialize, Debug)]
         struct OldEnvelope {
             payload: OldShape,
