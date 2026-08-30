@@ -513,14 +513,42 @@ impl AsRef<[u8]> for DelegateContext {
 /// Messages delivered **into** a delegate's `process()` function.
 ///
 /// This is the inbound counterpart of [`OutboundDelegateMsg`] and sits on the
-/// host↔delegate wire boundary. Marked `#[non_exhaustive]` so future variants
-/// can be added without a source-level break; downstream `match` sites must
-/// include a wildcard arm. This matches the pre-existing `#[non_exhaustive]`
-/// on `OutboundDelegateMsg`.
+/// host↔delegate wire boundary.
 ///
-/// Wire format: bincode with variant index 0..=N in declaration order. The
-/// `inbound_delegate_msg_wire_format_is_stable` test pins the bytes for
-/// `ApplicationMessage(..)` so that refactors cannot silently shift the tag.
+/// Marked `#[non_exhaustive]` so future variants can be added without a
+/// source-level break; downstream `match` sites must include a wildcard arm.
+/// [`OutboundDelegateMsg`] is deliberately **not** marked, and the asymmetry is
+/// the point — see the rationale on that enum. (An earlier version of this
+/// comment asserted that `OutboundDelegateMsg` already carried the attribute.
+/// It never has.)
+///
+/// # Wire format and compatibility
+///
+/// bincode, variant index 0..=N in **declaration order**. Two rules follow, and
+/// the compiler enforces neither:
+///
+/// - **Never insert or reorder a variant.** That silently reassigns every later
+///   tag, so delegate WASM compiled against an older stdlib decodes the same
+///   bytes into a *different* variant — no error, just a message quietly
+///   reinterpreted as another one. `delegate_msg_variant_tags_are_pinned` pins
+///   the tag of every variant of both enums so a reorder fails CI instead.
+/// - **Appending is compatible in exactly one direction.** An old sender's old
+///   variant always decodes on a new receiver. A **new** sender's **new**
+///   variant does **not** decode on an old receiver: bincode rejects the
+///   unknown tag with `ErrorKind::InvalidTagEncoding`. `#[non_exhaustive]` does
+///   not change this — it is a source-level attribute with no effect on the
+///   encoding, and serde has no unknown-variant fallback to fall back to.
+///
+/// For this enum the incompatible direction is a **new host → old delegate**,
+/// and it is mostly unreachable in practice: the host emits a response variant
+/// only in reply to the matching request variant, so a delegate that never
+/// emits a request added in stdlib version X never receives the response added
+/// in X. Deployed delegate WASM therefore keeps working against an upgraded
+/// node. The genuinely constrained direction is delegate → host; see
+/// [`OutboundDelegateMsg`].
+///
+/// The compatibility claims above are asserted, not merely asserted-in-prose,
+/// by the `delegate_wire_compat` test module at the bottom of this file.
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum InboundDelegateMsg<'a> {
@@ -697,6 +725,65 @@ impl UserInputResponse<'_> {
     }
 }
 
+/// Messages emitted **out of** a delegate's `process()` function.
+///
+/// This is the outbound counterpart of [`InboundDelegateMsg`] and sits on the
+/// same host↔delegate wire boundary.
+///
+/// # Deliberately not `#[non_exhaustive]`
+///
+/// Adding a variant here is a source-level break for any downstream crate that
+/// matches on it exhaustively. That is the intended behaviour and it should not
+/// be "fixed" by marking the enum.
+///
+/// Every variant of this enum is a **request the host must act on**. There is
+/// one host — freenet-core — and it dispatches these in exhaustive matches with
+/// no wildcard (`crates/core/src/contract.rs`, in the request loop and again in
+/// the app-message filter). Marking this enum `#[non_exhaustive]` would force
+/// those matches to grow `_ =>` arms, and a newly added variant would then
+/// compile against the host with **no handler**: the delegate's request would be
+/// silently swallowed, the call would appear to succeed, and nothing anywhere
+/// would report that it did nothing. That failure mode is not hypothetical — it
+/// is what a delegate `SubscribeContractRequest` does today, and the reason this
+/// workstream exists.
+///
+/// The compile error is the mechanism that stops it. Keep it.
+///
+/// [`InboundDelegateMsg`] carries the opposite trade-off, and is marked: its
+/// consumers are third-party delegate WASM, which can reasonably ignore a
+/// variant it does not know about.
+///
+/// # Wire format and compatibility
+///
+/// bincode, variant index 0..=N in **declaration order**. Never insert or
+/// reorder a variant: that silently reassigns every later tag, and deployed
+/// delegate WASM built against an older stdlib would encode into what the host
+/// now reads as a different variant. `delegate_msg_variant_tags_are_pinned`
+/// pins every tag so a reorder fails CI rather than production.
+///
+/// Appending is compatible in one direction only, and this enum is the
+/// direction that bites:
+///
+/// - **Old delegate → new host: always fine.** The host understands every tag
+///   an older delegate can emit, so deployed delegate WASM keeps working
+///   against an upgraded node with no rebuild.
+/// - **New delegate → old host: fails, and fails loudly.** bincode rejects the
+///   unknown variant tag with `ErrorKind::InvalidTagEncoding`, so the host
+///   surfaces a decode error on that message rather than misreading it.
+///
+/// There is deliberately **no feature-detection handshake**. A delegate cannot
+/// ask the host which variants it understands, and adding a probe would itself
+/// be a wire change with the same bootstrapping problem. The rule is therefore
+/// the blunt one: **a delegate that emits a variant introduced in stdlib
+/// version X requires a host built against stdlib >= X.**
+///
+/// A delegate that must work against older hosts has one good alternative: the
+/// V2 host-function API (the `freenet_delegate_contracts` import namespace).
+/// Host functions are resolved **by name at module instantiation**, so an
+/// import an old host does not provide fails at load time with a named
+/// missing-import error, instead of mid-protocol on a decode. That is the
+/// better failure mode, and it is why new capabilities should prefer a host
+/// function over a new variant where there is a choice.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OutboundDelegateMsg {
     // for the apps
@@ -1247,5 +1334,343 @@ mod message_origin_tests {
         // And it must still round-trip into the same variant.
         let decoded: InboundDelegateMsg<'_> = bincode::deserialize(&encoded).unwrap();
         assert!(matches!(decoded, InboundDelegateMsg::ApplicationMessage(_)));
+    }
+}
+
+/// Executable evidence for the wire-compatibility rules documented on
+/// [`InboundDelegateMsg`] and [`OutboundDelegateMsg`].
+///
+/// The claims those doc comments make about bincode's behaviour are asserted
+/// here rather than believed, because every one of them is the kind of claim
+/// that is easy to state, easy to get backwards, and impossible to notice being
+/// wrong until deployed delegate WASM misreads a message in production.
+#[cfg(test)]
+mod delegate_wire_compat {
+    use super::*;
+    use crate::contract_interface::WrappedContract;
+    use crate::prelude::ContractCode;
+    use crate::versioning::ContractWasmAPIVersion;
+    use std::sync::Arc;
+
+    /// The number of variants each enum has **today**. These are not free
+    /// parameters: see `an_unpinned_variant_fails_this_test`, which is what
+    /// makes them fail closed rather than drift.
+    const INBOUND_VARIANT_COUNT: u32 = 8;
+    const OUTBOUND_VARIANT_COUNT: u32 = 8;
+
+    fn instance_id() -> ContractInstanceId {
+        ContractInstanceId::new([0x5Au8; 32])
+    }
+
+    fn delegate_key() -> DelegateKey {
+        DelegateKey::new([0x11u8; 32], CodeHash::new([0x22u8; 32]))
+    }
+
+    fn contract_container() -> ContractContainer {
+        ContractContainer::Wasm(ContractWasmAPIVersion::V1(WrappedContract::new(
+            Arc::new(ContractCode::from(vec![1u8, 2, 3])),
+            Parameters::from(vec![9u8, 8, 7]),
+        )))
+    }
+
+    /// The bincode variant tag actually on the wire: a 4-byte little-endian
+    /// u32 prefix (this workspace's bincode config uses fixint encoding).
+    fn wire_tag(encoded: &[u8]) -> u32 {
+        u32::from_le_bytes(
+            encoded[..4]
+                .try_into()
+                .expect("a bincode enum encoding starts with a 4-byte tag"),
+        )
+    }
+
+    /// The tag each [`InboundDelegateMsg`] variant is frozen at, forever.
+    ///
+    /// This match is **exhaustive on purpose**. `#[non_exhaustive]` has no
+    /// effect inside the crate that defines the enum, so adding a variant
+    /// without adding an arm here is a **compile error** — which is the point.
+    /// A new variant cannot slip in unpinned.
+    ///
+    /// If you are here because you added a variant: give it the next unused
+    /// number, append it at the END of the enum, add it to `every_inbound`
+    /// below, and bump `INBOUND_VARIANT_COUNT`. Do not renumber anything.
+    fn pinned_inbound_tag(msg: &InboundDelegateMsg<'_>) -> u32 {
+        match msg {
+            InboundDelegateMsg::ApplicationMessage(_) => 0,
+            InboundDelegateMsg::UserResponse(_) => 1,
+            InboundDelegateMsg::GetContractResponse(_) => 2,
+            InboundDelegateMsg::PutContractResponse(_) => 3,
+            InboundDelegateMsg::UpdateContractResponse(_) => 4,
+            InboundDelegateMsg::SubscribeContractResponse(_) => 5,
+            InboundDelegateMsg::ContractNotification(_) => 6,
+            InboundDelegateMsg::DelegateMessage(_) => 7,
+        }
+    }
+
+    /// The tag each [`OutboundDelegateMsg`] variant is frozen at, forever.
+    /// Exhaustive for the same reason as [`pinned_inbound_tag`].
+    fn pinned_outbound_tag(msg: &OutboundDelegateMsg) -> u32 {
+        match msg {
+            OutboundDelegateMsg::ApplicationMessage(_) => 0,
+            OutboundDelegateMsg::RequestUserInput(_) => 1,
+            OutboundDelegateMsg::ContextUpdated(_) => 2,
+            OutboundDelegateMsg::GetContractRequest(_) => 3,
+            OutboundDelegateMsg::PutContractRequest(_) => 4,
+            OutboundDelegateMsg::UpdateContractRequest(_) => 5,
+            OutboundDelegateMsg::SubscribeContractRequest(_) => 6,
+            OutboundDelegateMsg::SendDelegateMessage(_) => 7,
+        }
+    }
+
+    /// One value of every [`InboundDelegateMsg`] variant.
+    fn every_inbound() -> Vec<InboundDelegateMsg<'static>> {
+        let id = instance_id();
+        let ctx = DelegateContext::default();
+        vec![
+            InboundDelegateMsg::ApplicationMessage(ApplicationMessage::new(vec![0xCC])),
+            InboundDelegateMsg::UserResponse(UserInputResponse {
+                request_id: 7,
+                response: ClientResponse::new(vec![0x01]),
+                context: ctx.clone(),
+            }),
+            InboundDelegateMsg::GetContractResponse(GetContractResponse {
+                contract_id: id,
+                state: None,
+                context: ctx.clone(),
+            }),
+            InboundDelegateMsg::PutContractResponse(PutContractResponse {
+                contract_id: id,
+                result: Ok(()),
+                context: ctx.clone(),
+            }),
+            InboundDelegateMsg::UpdateContractResponse(UpdateContractResponse {
+                contract_id: id,
+                result: Ok(()),
+                context: ctx.clone(),
+            }),
+            InboundDelegateMsg::SubscribeContractResponse(SubscribeContractResponse {
+                contract_id: id,
+                result: Ok(()),
+                context: ctx.clone(),
+            }),
+            InboundDelegateMsg::ContractNotification(ContractNotification {
+                contract_id: id,
+                new_state: WrappedState::new(vec![0xAB]),
+                context: ctx.clone(),
+            }),
+            InboundDelegateMsg::DelegateMessage(DelegateMessage::new(
+                delegate_key(),
+                delegate_key(),
+                vec![0xEE],
+            )),
+        ]
+    }
+
+    /// One value of every [`OutboundDelegateMsg`] variant.
+    ///
+    /// Every variant is covered, `PutContractRequest` included: building a
+    /// `ContractContainer` is four lines (see `contract_container`), and a pin
+    /// test with a hole in it is exactly the shape of guard that reads as
+    /// coverage while providing none.
+    fn every_outbound() -> Vec<OutboundDelegateMsg> {
+        let id = instance_id();
+        vec![
+            OutboundDelegateMsg::ApplicationMessage(ApplicationMessage::new(vec![0xCC])),
+            OutboundDelegateMsg::RequestUserInput(UserInputRequest {
+                request_id: 7,
+                message: NotificationMessage(Cow::Owned(vec![0x02])),
+                responses: vec![],
+            }),
+            OutboundDelegateMsg::ContextUpdated(DelegateContext::default()),
+            OutboundDelegateMsg::GetContractRequest(GetContractRequest::new(id)),
+            OutboundDelegateMsg::PutContractRequest(PutContractRequest::new(
+                contract_container(),
+                WrappedState::new(vec![0xAB]),
+                RelatedContracts::default(),
+            )),
+            OutboundDelegateMsg::UpdateContractRequest(UpdateContractRequest::new(
+                id,
+                UpdateData::State(vec![0xAB].into()),
+            )),
+            OutboundDelegateMsg::SubscribeContractRequest(SubscribeContractRequest::new(id)),
+            OutboundDelegateMsg::SendDelegateMessage(DelegateMessage::new(
+                delegate_key(),
+                delegate_key(),
+                vec![0xEE],
+            )),
+        ]
+    }
+
+    /// Pins the bincode variant tag of **every** variant of both delegate
+    /// message enums.
+    ///
+    /// The pin this replaces covered `InboundDelegateMsg`'s variant 0 alone, so
+    /// any reorder that happened to leave `ApplicationMessage` first — swapping
+    /// `UserResponse` and `GetContractResponse`, say — went undetected. That is
+    /// not a theoretical gap: exactly that swap was written, and staged, during
+    /// the work that produced this test.
+    ///
+    /// A reorder is the dangerous edit precisely because it is silent. The
+    /// bytes still decode. They decode into the wrong variant, and the failure
+    /// surfaces as a delegate acting on a message it was never sent.
+    ///
+    /// **If this test fails, do not update the expected numbers.** Either a
+    /// variant was inserted or reordered (revert it; append instead), or one
+    /// was removed — which reassigns every later tag and is a wire break
+    /// needing a deliberate release decision. See the
+    /// `RegisterDelegateWithPredecessors` removal in 0.9.0 for the shape of
+    /// that decision: it was appended last specifically so that removing it
+    /// renumbered nothing.
+    #[test]
+    fn delegate_msg_variant_tags_are_pinned() {
+        for msg in every_inbound() {
+            let expected = pinned_inbound_tag(&msg);
+            let encoded = bincode::serialize(&msg).expect("inbound must serialize");
+            assert_eq!(
+                wire_tag(&encoded),
+                expected,
+                "InboundDelegateMsg::{msg:?} moved off wire tag {expected}; inserting, \
+                 reordering or removing variants breaks deployed delegate WASM"
+            );
+        }
+
+        for msg in every_outbound() {
+            let expected = pinned_outbound_tag(&msg);
+            let encoded = bincode::serialize(&msg).expect("outbound must serialize");
+            assert_eq!(
+                wire_tag(&encoded),
+                expected,
+                "OutboundDelegateMsg::{msg:?} moved off wire tag {expected}; inserting, \
+                 reordering or removing variants breaks deployed delegate WASM"
+            );
+        }
+    }
+
+    /// Every variant is actually exercised by the pin above.
+    ///
+    /// [`pinned_inbound_tag`] is exhaustive, so a new variant cannot be left
+    /// unpinned without a compile error — but it *could* be left out of
+    /// `every_inbound`, and then the pin would silently stop covering it.
+    /// Asserting that the sampled tags are exactly `0..COUNT`, with no gaps and
+    /// no repeats, closes that.
+    #[test]
+    fn every_variant_is_covered_by_the_pin() {
+        let mut inbound: Vec<u32> = every_inbound().iter().map(pinned_inbound_tag).collect();
+        inbound.sort_unstable();
+        assert_eq!(
+            inbound,
+            (0..INBOUND_VARIANT_COUNT).collect::<Vec<_>>(),
+            "every_inbound must contain each InboundDelegateMsg variant exactly once"
+        );
+
+        let mut outbound: Vec<u32> = every_outbound().iter().map(pinned_outbound_tag).collect();
+        outbound.sort_unstable();
+        assert_eq!(
+            outbound,
+            (0..OUTBOUND_VARIANT_COUNT).collect::<Vec<_>>(),
+            "every_outbound must contain each OutboundDelegateMsg variant exactly once"
+        );
+    }
+
+    /// The count constants above cannot be allowed to drift, so this probes the
+    /// enums themselves: a payload whose tag is one past the last known variant
+    /// must fail to decode.
+    ///
+    /// This is the test that fails **closed**. Add a variant and forget
+    /// everything else here, and the tag that was previously undecodable
+    /// becomes decodable, and this fails. Without it, `INBOUND_VARIANT_COUNT`
+    /// would be a number asserted only against a list written by the same hand
+    /// in the same commit — which is not a check, it is a restatement.
+    ///
+    /// The payload is a run of zero bytes after the tag, which decodes as
+    /// empty vectors, `None`, `Ok`, `false` and zeroed arrays, so it satisfies
+    /// essentially any variant shape a new variant is likely to have. Trailing
+    /// bytes are ignored: `bincode::deserialize` configures
+    /// `allow_trailing_bytes()` (bincode-1.3.3 `src/lib.rs`), which is also why
+    /// a fixed-size probe is safe here.
+    #[test]
+    fn an_unpinned_variant_fails_this_test() {
+        let mut probe = INBOUND_VARIANT_COUNT.to_le_bytes().to_vec();
+        probe.extend_from_slice(&[0u8; 256]);
+        let decoded = bincode::deserialize::<InboundDelegateMsg<'_>>(&probe);
+        assert!(
+            decoded.is_err(),
+            "tag {INBOUND_VARIANT_COUNT} decoded as an InboundDelegateMsg, so a variant was \
+             added without updating INBOUND_VARIANT_COUNT, pinned_inbound_tag and every_inbound"
+        );
+
+        let mut probe = OUTBOUND_VARIANT_COUNT.to_le_bytes().to_vec();
+        probe.extend_from_slice(&[0u8; 256]);
+        let decoded = bincode::deserialize::<OutboundDelegateMsg>(&probe);
+        assert!(
+            decoded.is_err(),
+            "tag {OUTBOUND_VARIANT_COUNT} decoded as an OutboundDelegateMsg, so a variant was \
+             added without updating OUTBOUND_VARIANT_COUNT, pinned_outbound_tag and \
+             every_outbound"
+        );
+    }
+
+    /// Direction 1 of the append rule: **old sender to new receiver always
+    /// works.** Bytes produced before a variant was appended still decode into
+    /// the variant they always meant.
+    ///
+    /// The payload here is hand-built rather than produced by this crate's own
+    /// encoder, so it stands in for bytes emitted by a delegate compiled
+    /// against an older stdlib. An encoder-produced value would only prove the
+    /// code agrees with itself.
+    #[test]
+    fn an_old_payload_still_decodes_after_appending_a_variant() {
+        // InboundDelegateMsg tag 6 = ContractNotification { contract_id,
+        // new_state: WrappedState (empty), context: DelegateContext (empty) }.
+        let mut old_payload = vec![6u8, 0, 0, 0];
+        old_payload.extend_from_slice(&[0x5Au8; 32]);
+        old_payload.extend_from_slice(&0u64.to_le_bytes()); // new_state: len 0
+        old_payload.extend_from_slice(&0u64.to_le_bytes()); // context: len 0
+
+        let decoded: InboundDelegateMsg<'_> = bincode::deserialize(&old_payload)
+            .expect("a payload predating any appended variant must still decode");
+        match decoded {
+            InboundDelegateMsg::ContractNotification(n) => {
+                assert_eq!(n.contract_id, instance_id());
+            }
+            other => panic!("an old ContractNotification decoded as {other:?}"),
+        }
+    }
+
+    /// Direction 2 of the append rule: **new sender to old receiver fails, and
+    /// fails loudly.** This is the direction the docs warn about, so it is
+    /// asserted rather than assumed.
+    ///
+    /// An old receiver is modelled by an enum with a truncated tag space,
+    /// which is exactly what an older stdlib's version of these types is. The
+    /// point is that the failure is an `Err` — not a silent mis-decode into
+    /// whatever variant happens to sit at that index.
+    #[test]
+    fn a_new_variant_does_not_decode_on_an_old_receiver() {
+        // An "old" OutboundDelegateMsg that knows tags 0..=6 only, i.e. one
+        // built before `SendDelegateMessage` was appended at 7.
+        #[derive(serde::Deserialize, Debug)]
+        enum OldOutboundTagSpace {
+            V0,
+            V1,
+            V2,
+            V3,
+            V4,
+            V5,
+            V6,
+        }
+
+        let new_msg = bincode::serialize(&OutboundDelegateMsg::SendDelegateMessage(
+            DelegateMessage::new(delegate_key(), delegate_key(), vec![0xEE]),
+        ))
+        .expect("outbound must serialize");
+        assert_eq!(wire_tag(&new_msg), 7);
+
+        let decoded = bincode::deserialize::<OldOutboundTagSpace>(&new_msg);
+        assert!(
+            decoded.is_err(),
+            "a receiver that predates a variant must REJECT it, not mis-decode it; \
+             if this ever passes, the compatibility rule documented on \
+             OutboundDelegateMsg is wrong and delegates are silently misreading messages"
+        );
     }
 }

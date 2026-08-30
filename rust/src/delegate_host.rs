@@ -47,8 +47,22 @@
 //!   Survives across all delegate invocations. Use for private keys, tokens, etc.
 //!
 //! - **Contracts** (`get_contract_state`/`put_contract_state`/`update_contract_state`/
-//!   `subscribe_contract`): V2 host functions for direct contract state access.
-//!   Synchronous local reads/writes — no request/response round-trips.
+//!   `subscribe_contract`/`list_subscriptions`): V2 host functions for direct
+//!   contract state access. Synchronous local reads/writes — no
+//!   request/response round-trips.
+//!
+//! # Adding a host function is the additive way to extend this API
+//!
+//! Host functions are resolved **by name at module instantiation**. A delegate
+//! that imports one an older node does not provide fails to load, with a named
+//! missing-import error; a delegate that does not import it is unaffected. So
+//! adding a host function is additive for every existing delegate, and its
+//! failure mode for a too-old node is loud and diagnosable at load time.
+//!
+//! Contrast the message API (`OutboundDelegateMsg`): a new variant sent to an
+//! older host fails mid-protocol at bincode decode, with no way for the
+//! delegate to have detected the host's version first. Where a capability can
+//! be expressed either way, prefer the host function.
 //!
 //! # Error Codes
 //!
@@ -181,6 +195,16 @@ extern "C" {
     ) -> i64;
     /// Subscribe to contract updates. Returns 0 on success, or negative error code (i64).
     fn __frnt__delegate__subscribe_contract(id_ptr: i64, id_len: i32) -> i64;
+    /// Byte length of this delegate's serialized subscription list — always a
+    /// multiple of 32. Returns the count to allocate, or a negative error code
+    /// (i64). Zero means "subscribed to nothing", which is distinct from an
+    /// error and must stay so.
+    fn __frnt__delegate__list_subscriptions_len() -> i64;
+    /// Enumerate this delegate's current contract subscriptions: writes the raw
+    /// 32-byte instance ids back to back into `out_ptr` (at most `out_len`
+    /// bytes) and returns the number of bytes written, or a negative error code
+    /// (i64).
+    fn __frnt__delegate__list_subscriptions(out_ptr: i64, out_len: i64) -> i64;
 }
 
 #[cfg(target_family = "wasm")]
@@ -223,7 +247,8 @@ extern "C" {
 /// - [`get_contract_state`](Self::get_contract_state),
 ///   [`put_contract_state`](Self::put_contract_state),
 ///   [`update_contract_state`](Self::update_contract_state),
-///   [`subscribe_contract`](Self::subscribe_contract)
+///   [`subscribe_contract`](Self::subscribe_contract),
+///   [`list_subscriptions`](Self::list_subscriptions)
 ///
 /// # Delegate Management Methods (V2)
 /// - [`create_delegate`](Self::create_delegate)
@@ -599,11 +624,30 @@ impl DelegateCtx {
 
     /// Subscribe to contract updates by instance ID.
     ///
-    /// Registers interest in receiving notifications when the contract's state
-    /// changes. Currently validates that the contract is known and returns success;
-    /// actual notification delivery is a follow-up.
+    /// Registers interest in receiving `ContractNotification` when the
+    /// contract's state changes. Notification delivery does work — an earlier
+    /// version of this comment said it was "a follow-up", which is no longer
+    /// true.
     ///
-    /// Returns `true` on success, `false` if the contract is unknown or on error.
+    /// # What this does not do, as of 0.9.0
+    ///
+    /// **A delegate subscription does not register demand in the network.** It
+    /// is a local notification hook: it does not mark the contract as in use,
+    /// does not enter the renewal set, and does not exempt the contract from
+    /// eviction. So a delegate sees a remote update only while the node happens
+    /// to be subscribed to that contract by some *other* route — typically a UI
+    /// client that is open. Close the tab and the notifications stop, without
+    /// any error being reported anywhere.
+    ///
+    /// This is tracked as freenet-core#4669 (phase 1 of the freenet-core#5467
+    /// epic) and is being fixed. It is documented here rather than left to be
+    /// rediscovered because the call *succeeds*: nothing in the return value,
+    /// the logs, or the delegate's own view distinguishes a subscription that
+    /// pinned the contract from one that did nothing.
+    ///
+    /// Returns `true` on success, `false` if the contract is unknown or on
+    /// error. Note that the contract must already be in the node's local store;
+    /// subscribing does not fetch it.
     pub fn subscribe_contract(&mut self, instance_id: &[u8; 32]) -> bool {
         #[cfg(target_family = "wasm")]
         {
@@ -615,6 +659,68 @@ impl DelegateCtx {
         {
             let _ = instance_id;
             false
+        }
+    }
+
+    /// List the contract instance ids this delegate is currently subscribed to.
+    ///
+    /// A delegate's subscription set lives in the node, not in the delegate.
+    /// The WASM is instantiated per invocation and dropped immediately after,
+    /// and the node replays subscriptions across a restart without running the
+    /// delegate at all. So without this call a delegate has no way to learn
+    /// what it is already subscribed to: it can only keep a parallel record in
+    /// its own secrets, which drifts from the node's exactly in the cases that
+    /// matter, or re-subscribe to everything on every wake. This is the gap
+    /// freenet-core#5467 names for restart-replay.
+    ///
+    /// Order is unspecified; do not depend on it.
+    ///
+    /// # Why this returns a `Result`
+    ///
+    /// An empty list and a failed enumeration mean opposite things to the
+    /// caller — "you hold no subscriptions, take them out again" versus "I
+    /// could not tell you" — so they must not be represented by the same
+    /// value. Collapsing them into an empty `Vec` is how a delegate ends up
+    /// concluding its user's content is unpinned because a host call failed.
+    /// The error is the raw host code (see [`error_codes`]).
+    ///
+    /// Off-WASM this is `Err(ERR_NOT_IN_PROCESS)` rather than an empty list,
+    /// for the same reason: a host-side unit test must not be able to read
+    /// "no subscriptions" out of a stub that never had any.
+    ///
+    /// **Host version floor:** this import is provided by nodes built against
+    /// freenet-stdlib 0.9.0 or later. A delegate that calls it fails to
+    /// instantiate on an older node with a named missing-import error — loud
+    /// and diagnosable at load time, rather than silently mid-protocol.
+    pub fn list_subscriptions(&self) -> Result<Vec<[u8; 32]>, i64> {
+        #[cfg(target_family = "wasm")]
+        {
+            // Step 1: how many bytes to allocate. Zero is a valid answer and
+            // means "subscribed to nothing".
+            let len = unsafe { __frnt__delegate__list_subscriptions_len() };
+            if len < 0 {
+                return Err(len);
+            }
+            if len == 0 {
+                return Ok(Vec::new());
+            }
+
+            // Step 2: read the ids. The host may write fewer bytes than it
+            // reported if the set shrank between the two calls, so the return
+            // value, not `len`, is authoritative.
+            let mut buf = vec![0u8; len as usize];
+            let written = unsafe {
+                __frnt__delegate__list_subscriptions(buf.as_mut_ptr() as i64, buf.len() as i64)
+            };
+            if written < 0 {
+                return Err(written);
+            }
+            buf.truncate(written as usize);
+            decode_contract_id_list(&buf).ok_or(error_codes::ERR_STORE_ERROR as i64)
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            Err(error_codes::ERR_NOT_IN_PROCESS as i64)
         }
     }
 
@@ -682,6 +788,55 @@ impl std::fmt::Debug for DelegateCtx {
             .field("context_len", &self.len())
             .finish_non_exhaustive()
     }
+}
+
+// ============================================================================
+// Contract-id-list wire codec (shared host↔delegate contract for
+// list_subscriptions)
+// ============================================================================
+
+/// Serialize contract instance ids for [`DelegateCtx::list_subscriptions`]: the
+/// raw 32 bytes of each id, back to back, with no framing.
+///
+/// Ids are fixed width, so unlike the secret-key list below they need no length
+/// prefix. The encoding lives here rather than only in the host so that both
+/// sides and the round-trip tests share one authoritative definition — a codec
+/// written twice is a codec that will disagree with itself eventually.
+pub fn encode_contract_id_list<'a, I>(ids: I) -> Vec<u8>
+where
+    I: IntoIterator<Item = &'a [u8; 32]>,
+{
+    let mut out = Vec::new();
+    for id in ids {
+        out.extend_from_slice(id);
+    }
+    out
+}
+
+/// Decode the format written by [`encode_contract_id_list`], or `None` if the
+/// buffer is not a whole number of ids.
+///
+/// This is deliberately stricter than [`decode_secret_key_list`], which
+/// tolerates a truncated trailing record. Ids are fixed width, so a length that
+/// is not a multiple of 32 cannot be a short read of a valid list — it is a
+/// host-side bug or a corrupted buffer, and the only honest answer is that the
+/// enumeration failed. Silently dropping a partial id would hand the delegate
+/// a list that looks complete and is not, which is precisely the class of
+/// failure this API exists to remove.
+pub fn decode_contract_id_list(buf: &[u8]) -> Option<Vec<[u8; 32]>> {
+    let chunks = buf.chunks_exact(32);
+    if !chunks.remainder().is_empty() {
+        return None;
+    }
+    Some(
+        chunks
+            .map(|chunk| {
+                let mut id = [0u8; 32];
+                id.copy_from_slice(chunk);
+                id
+            })
+            .collect(),
+    )
 }
 
 // ============================================================================
@@ -766,5 +921,46 @@ mod secret_key_list_codec_tests {
         // Clip mid-way through the second record's payload.
         encoded.truncate(encoded.len() - 2);
         assert_eq!(decode_secret_key_list(&encoded), vec![b"abc".to_vec()]);
+    }
+}
+
+#[cfg(test)]
+mod contract_id_list_codec_tests {
+    use super::{decode_contract_id_list, encode_contract_id_list};
+
+    #[test]
+    fn round_trips_multiple_ids() {
+        let ids = [[0x01u8; 32], [0xFEu8; 32], [0x00u8; 32]];
+        let encoded = encode_contract_id_list(ids.iter());
+        assert_eq!(
+            encoded.len(),
+            96,
+            "ids are fixed width, so the encoding carries no framing"
+        );
+        assert_eq!(decode_contract_id_list(&encoded), Some(ids.to_vec()));
+    }
+
+    #[test]
+    fn round_trips_the_empty_list() {
+        let encoded = encode_contract_id_list(std::iter::empty::<&[u8; 32]>());
+        assert!(encoded.is_empty());
+        assert_eq!(
+            decode_contract_id_list(&encoded),
+            Some(vec![]),
+            "an empty buffer is a successful enumeration of nothing, NOT an error — \
+             a delegate must be able to tell those apart"
+        );
+    }
+
+    #[test]
+    fn rejects_a_truncated_trailing_id() {
+        let mut encoded = encode_contract_id_list([&[0xAAu8; 32], &[0xBBu8; 32]]);
+        encoded.truncate(encoded.len() - 1);
+        assert_eq!(
+            decode_contract_id_list(&encoded),
+            None,
+            "a partial id means the buffer is wrong; returning the ids that did parse \
+             would hand the caller a list that looks complete and is not"
+        );
     }
 }
