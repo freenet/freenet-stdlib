@@ -12,22 +12,42 @@
   `encode_contract_id_list` / `decode_contract_id_list` as the shared codec.
 
   A delegate's subscription set lives in the node: the WASM is instantiated per
-  invocation and dropped afterwards, and the node replays subscriptions across a
-  restart without running the delegate at all. Until now a delegate had no way
-  to learn its own state after a restart — it could only keep a parallel record
-  in its secrets, which drifts from the node's exactly when it matters, or
-  re-subscribe to everything on every wake. See freenet-core#5467.
+  invocation and dropped afterwards, so between invocations the delegate has no
+  view of it. Until now it could only keep a parallel record in its secrets,
+  which drifts from the node's exactly when it matters, or re-subscribe to
+  everything on every wake.
+
+  **Scoped honestly: this does not by itself deliver the restart-replay
+  freenet-core#5467 asks for.** The node's delegate-subscription registry is
+  in-memory, so a restart *loses* those subscriptions rather than replaying
+  them, and after one this call correctly returns an empty list. It is the read
+  side of that capability, and becomes load-bearing when freenet-core#4669
+  part 3's durable store lands and there is something persistent to read back.
+  Within a single node lifetime it is useful today.
 
   It returns `Result<Vec<[u8; 32]>, i64>`, not a bare `Vec`. An empty list and a
   failed enumeration mean opposite things to a caller deciding whether to
   re-subscribe, so they must not share a representation.
 
-  **This is additive for every existing delegate.** Host functions resolve by
-  name at module instantiation, so a delegate that does not import it is
-  unaffected, and one that does fails to *load* on a node too old to provide it
-  — a named missing-import error, rather than a silent failure mid-protocol.
-  **Requires a node whose freenet-core registers these imports**; calling it
-  against an older node is a load-time failure, by design.
+  **This is additive for every existing delegate**, and that was checked against
+  a shipped artifact rather than assumed. River's deployed `chat_delegate.wasm`
+  is built against stdlib 0.8.5, which already declares the five
+  `freenet_delegate_contracts` externs — and `wasm-objdump -x` shows it imports
+  **none** of them, only the four secrets functions and one logger it actually
+  calls. The linker drops unreferenced externs, so declaring two more changes
+  nothing for a delegate that does not call them. Had that not held, every
+  delegate merely *rebuilt* against 0.9.0 would have acquired imports no
+  deployed node provides and failed to instantiate everywhere.
+
+  A delegate that *does* call it fails to **load** on a node that does not
+  provide the imports — a named missing-import error at instantiation, rather
+  than a silent failure mid-protocol. That is the reason for choosing a host
+  function over a message variant.
+
+  **Requires a node whose freenet-core registers these imports, and no released
+  node does yet.** Host functions are registered by name and reference no stdlib
+  type, so the stdlib version a node was built against guarantees nothing here;
+  the core half is tracked separately.
 
 ### Fixed
 
@@ -40,11 +60,18 @@
   dispatches them in exhaustive matches with no wildcard (`contract.rs`, in the
   request loop and in the app-message filter). Marking the enum would force
   those to grow `_ =>` arms, and a newly added variant would then compile
-  against the host with no handler — the delegate's request silently swallowed,
-  the call reporting success. That is the failure mode a delegate
-  `SubscribeContractRequest` has today, and the compile error is what prevents
-  the next one. `InboundDelegateMsg` keeps the attribute because its consumers
-  are third-party delegate WASM, which can reasonably ignore an unknown variant.
+  against the host with no arm of its own — the delegate's request falling into
+  the wildcard, the call reporting success. The compile error is what prevents
+  that, and it is the only thing that does. `InboundDelegateMsg` keeps the
+  attribute because its consumers are third-party delegate WASM, which can
+  reasonably ignore an unknown variant.
+
+  The doc states two limits on that argument rather than overselling it: the
+  compile error forces an *arm* to exist, not a working handler (this crate's
+  own FlatBuffers encoder has explicit arms that log and drop), and it is **not**
+  the bug behind this workstream — a delegate `SubscribeContractRequest` *is*
+  handled today; its defect is that it registers no demand
+  (freenet-core#4669), which is a different failure with a different fix.
 
 - **`DelegateCtx::subscribe_contract`'s doc comment** said notification delivery
   was "a follow-up" (it works), and said nothing about whether a delegate
