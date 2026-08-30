@@ -4180,9 +4180,12 @@ mod struct_field_wire_compat {
         };
 
         let inner = bincode::serialize(&response).expect("response must serialize");
-        assert!(
-            inner.iter().any(|b| *b != 0),
-            "the fixture must not be all zeros, or the ends_with below proves nothing"
+        assert_ne!(
+            *inner.last().expect("the fixture encodes to something"),
+            0,
+            "ends_with needs a non-zero TAIL, not merely a non-zero byte somewhere. If the last \
+             field ever becomes empty again, ends_with silently degenerates into 'ends in zeros' \
+             and stops catching the append it exists to catch"
         );
         // The default type parameter, i.e. the `HostResponse` that is actually
         // on the wire. Pinning terminality against some other instantiation

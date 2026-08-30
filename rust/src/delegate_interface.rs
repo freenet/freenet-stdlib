@@ -601,6 +601,10 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::ApplicationMessage(ApplicationMessage { context, .. }) => {
                 Some(context)
             }
+            // UserResponse carries a context too. It was missing from both
+            // accessors, so this returned None for it — the `_ => None`
+            // wildcard below swallowed the omission silently. Found in review.
+            InboundDelegateMsg::UserResponse(UserInputResponse { context, .. }) => Some(context),
             InboundDelegateMsg::GetContractResponse(GetContractResponse { context, .. }) => {
                 Some(context)
             }
@@ -622,7 +626,10 @@ impl InboundDelegateMsg<'_> {
                 context,
                 ..
             }) => Some(context),
-            _ => None,
+            // No wildcard, deliberately. Every variant carries a context, and
+            // the `_ => None` that used to sit here is what let UserResponse go
+            // unhandled and silently report "no context". Exhaustive means a
+            // new variant is a compile error here instead.
         }
     }
 
@@ -631,6 +638,10 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::ApplicationMessage(ApplicationMessage { context, .. }) => {
                 Some(context)
             }
+            // UserResponse carries a context too. It was missing from both
+            // accessors, so this returned None for it — the `_ => None`
+            // wildcard below swallowed the omission silently. Found in review.
+            InboundDelegateMsg::UserResponse(UserInputResponse { context, .. }) => Some(context),
             InboundDelegateMsg::GetContractResponse(GetContractResponse { context, .. }) => {
                 Some(context)
             }
@@ -652,7 +663,10 @@ impl InboundDelegateMsg<'_> {
                 context,
                 ..
             }) => Some(context),
-            _ => None,
+            // No wildcard, deliberately. Every variant carries a context, and
+            // the `_ => None` that used to sit here is what let UserResponse go
+            // unhandled and silently report "no context". Exhaustive means a
+            // new variant is a compile error here instead.
         }
     }
 }
@@ -800,9 +814,10 @@ impl UserInputResponse<'_> {
 ///   understands every tag an older delegate can emit, so deployed delegate
 ///   WASM keeps working against an upgraded node with no rebuild. This does
 ///   **not** extend to appending a FIELD to an existing variant's payload
-///   struct — several of them are `#[non_exhaustive]`, which invites exactly
-///   that — because a field breaks in the opposite direction. See
+///   struct, because a field breaks in the opposite direction. See
 ///   `struct_field_wire_compat` in `client_api::client_events`.
+///   (`ApplicationMessage` is `#[non_exhaustive]`, which invites precisely that
+///   edit. It is the only payload struct here that is.)
 /// - **New delegate → old host: fails, and fails loudly.** bincode rejects the
 ///   unknown variant tag — as `ErrorKind::Custom("invalid value: integer `N`,
 ///   expected variant index 0 <= i < M")`, since it hands the index to serde's
@@ -838,8 +853,10 @@ pub enum OutboundDelegateMsg {
     SubscribeContractRequest(SubscribeContractRequest),
     SendDelegateMessage(DelegateMessage),
     // Appended in 0.9.0 at tag 8. New variants go at the END, never inserted —
-    // see the wire-format note on this enum. freenet-stdlib#82 appends
-    // ScheduleWakeup after this, at tag 9.
+    // see the wire-format note on this enum. freenet-stdlib#82 also appends
+    // here (ScheduleWakeup) and must therefore move to tag 9; at the time of
+    // writing that PR still declares tag 8, so whichever lands second will trip
+    // the pin, which is the intended outcome rather than a surprise.
     UnsubscribeContractRequest(UnsubscribeContractRequest),
 }
 
@@ -1731,14 +1748,22 @@ mod delegate_wire_compat {
 
         let mut probe = INBOUND_VARIANT_COUNT.to_le_bytes().to_vec();
         probe.extend_from_slice(&[0u8; 256]);
-        let err = bincode::deserialize::<InboundDelegateMsg<'_>>(&probe)
-            .expect_err("tag {INBOUND_VARIANT_COUNT} must not decode as an InboundDelegateMsg");
+        let err = match bincode::deserialize::<InboundDelegateMsg<'_>>(&probe) {
+            Ok(v) => panic!(
+                "tag {INBOUND_VARIANT_COUNT} must not decode as an InboundDelegateMsg, got {v:?}"
+            ),
+            Err(e) => e,
+        };
         assert_rejected_as_unknown_variant(&err, INBOUND_VARIANT_COUNT, "InboundDelegateMsg");
 
         let mut probe = OUTBOUND_VARIANT_COUNT.to_le_bytes().to_vec();
         probe.extend_from_slice(&[0u8; 256]);
-        let err = bincode::deserialize::<OutboundDelegateMsg>(&probe)
-            .expect_err("tag {OUTBOUND_VARIANT_COUNT} must not decode as an OutboundDelegateMsg");
+        let err = match bincode::deserialize::<OutboundDelegateMsg>(&probe) {
+            Ok(v) => panic!(
+                "tag {OUTBOUND_VARIANT_COUNT} must not decode as an OutboundDelegateMsg, got {v:?}"
+            ),
+            Err(e) => e,
+        };
         assert_rejected_as_unknown_variant(&err, OUTBOUND_VARIANT_COUNT, "OutboundDelegateMsg");
 
         // Control, so the probe cannot pass vacuously from the other end: the
@@ -1749,8 +1774,17 @@ mod delegate_wire_compat {
         let mut control = (INBOUND_VARIANT_COUNT - 1).to_le_bytes().to_vec();
         control.extend_from_slice(&[0u8; 256]);
         bincode::deserialize::<InboundDelegateMsg<'_>>(&control).expect(
-            "the last known inbound tag must decode from zeros, or the unknown-tag probe above \
-             is no longer distinguishing an unknown tag from an unparseable payload",
+            "the LAST inbound variant's payload must be decodable from zeros, or this probe can \
+             no longer tell an unknown tag from an unparseable payload. If a variant whose \
+             payload rejects zeros was just appended, do not delete this — point the control at \
+             a variant that still decodes from zeros",
+        );
+
+        let mut control = (OUTBOUND_VARIANT_COUNT - 1).to_le_bytes().to_vec();
+        control.extend_from_slice(&[0u8; 256]);
+        bincode::deserialize::<OutboundDelegateMsg>(&control).expect(
+            "the LAST outbound variant's payload must be decodable from zeros — see the inbound \
+             control above for what to do if that stops being true",
         );
     }
 
@@ -1859,10 +1893,62 @@ mod delegate_wire_compat {
         });
         let encoded = bincode::serialize(&resp).expect("response must serialize");
         assert_eq!(wire_tag(&encoded), 8, "unsubscribe response is frozen at 8");
-        assert!(matches!(
-            bincode::deserialize::<InboundDelegateMsg<'_>>(&encoded).expect("must round-trip"),
-            InboundDelegateMsg::UnsubscribeContractResponse(_)
-        ));
+        match bincode::deserialize::<InboundDelegateMsg<'_>>(&encoded).expect("must round-trip") {
+            InboundDelegateMsg::UnsubscribeContractResponse(r) => {
+                // Assert the VALUES, not merely the variant. Checking only
+                // `matches!` is what lets a field reorder through: the encoder
+                // and decoder would still agree with each other.
+                assert_eq!(r.contract_id, id);
+                assert!(r.result.is_ok());
+            }
+            other => panic!("round-tripped into {other:?}"),
+        }
+
+        // Both structs' doc comments say the field ORDER is the wire format.
+        // A round-trip through this crate's own encoder cannot establish that —
+        // it proves the code agrees with itself, and a swap of `contract_id`
+        // and `result` would round-trip just as happily. So the layout is
+        // frozen as hand-written bytes, the same way ContractNotification is.
+        let mut expected_resp = vec![8u8, 0, 0, 0];
+        expected_resp.extend_from_slice(&[0x5Au8; 32]); // contract_id
+        expected_resp.extend_from_slice(&0u32.to_le_bytes()); // result: Ok variant tag
+        expected_resp.extend_from_slice(&0u64.to_le_bytes()); // context: empty
+        assert_eq!(
+            encoded, expected_resp,
+            "UnsubscribeContractResponse layout is frozen: tag, contract_id, result, context"
+        );
+
+        let expected_req = {
+            let mut v = vec![8u8, 0, 0, 0];
+            v.extend_from_slice(&[0x5Au8; 32]); // contract_id
+            v.extend_from_slice(&0u64.to_le_bytes()); // context: empty
+            v.push(0u8); // processed: false
+            v
+        };
+        assert_eq!(
+            bincode::serialize(&req).expect("request must serialize"),
+            expected_req,
+            "UnsubscribeContractRequest layout is frozen: tag, contract_id, context, processed"
+        );
+
+        // The error path has a different bincode shape from Ok and is part of
+        // the same frozen layout, so it is exercised rather than assumed.
+        let err_resp =
+            InboundDelegateMsg::UnsubscribeContractResponse(UnsubscribeContractResponse {
+                contract_id: id,
+                result: Err("nope".to_string()),
+                context: DelegateContext::default(),
+            });
+        match bincode::deserialize::<InboundDelegateMsg<'_>>(
+            &bincode::serialize(&err_resp).expect("must serialize"),
+        )
+        .expect("must round-trip")
+        {
+            InboundDelegateMsg::UnsubscribeContractResponse(r) => {
+                assert_eq!(r.result.unwrap_err(), "nope");
+            }
+            other => panic!("error response round-tripped into {other:?}"),
+        }
 
         // A ContractNotification encoded before 0.9.0 existed: tag 6, the 32
         // raw id bytes, an empty state and an empty context. Appending at 8
@@ -1876,6 +1962,69 @@ mod delegate_wire_compat {
         {
             InboundDelegateMsg::ContractNotification(n) => assert_eq!(n.contract_id, id),
             other => panic!("a pre-0.9.0 ContractNotification decoded as {other:?}"),
+        }
+    }
+
+    /// Every inbound variant whose payload carries a `context` must return it.
+    ///
+    /// Both `get_context` and `get_mut_context` end in `_ => None`, so a
+    /// missing arm is not a compile error — it silently reports "no context".
+    /// That wildcard had already swallowed one: `UserResponse` carries a
+    /// context and returned `None` for it, undetected, because nothing in the
+    /// crate called either accessor.
+    ///
+    /// Driven off `every_inbound`, so a newly appended variant is covered the
+    /// moment it is added to that list — which the tag pin already forces.
+    #[test]
+    fn every_inbound_variant_with_a_context_exposes_it() {
+        for mut msg in every_inbound() {
+            let carries_context = !matches!(msg, InboundDelegateMsg::ApplicationMessage(_));
+            let tag = pinned_inbound_tag(&msg);
+
+            // ApplicationMessage has a context field too, so in fact every
+            // variant present today should expose one. Asserted uniformly
+            // rather than by an allow-list, so the question a new variant
+            // raises is "does it have a context", not "is it in the list".
+            let _ = carries_context;
+
+            assert!(
+                msg.get_context().is_some(),
+                "InboundDelegateMsg tag {tag} has a context field but get_context returned None; \
+                 the `_ => None` wildcard hides a missing arm"
+            );
+            assert!(
+                msg.get_mut_context().is_some(),
+                "InboundDelegateMsg tag {tag} has a context field but get_mut_context returned \
+                 None; the two accessors must agree"
+            );
+        }
+    }
+
+    /// The same, for the outbound side.
+    ///
+    /// `RequestUserInput` and `ContextUpdated` genuinely have no context field
+    /// to return, so they are the two exceptions and are named explicitly
+    /// rather than skipped by a wildcard.
+    #[test]
+    fn every_outbound_variant_with_a_context_exposes_it() {
+        for mut msg in every_outbound() {
+            let tag = pinned_outbound_tag(&msg);
+            let has_no_context = matches!(
+                msg,
+                OutboundDelegateMsg::RequestUserInput(_) | OutboundDelegateMsg::ContextUpdated(_)
+            );
+            if has_no_context {
+                continue;
+            }
+            assert!(
+                msg.get_context().is_some(),
+                "OutboundDelegateMsg tag {tag} has a context field but get_context returned None"
+            );
+            assert!(
+                msg.get_mut_context().is_some(),
+                "OutboundDelegateMsg tag {tag} has a context field but get_mut_context returned \
+                 None; the two accessors must agree"
+            );
         }
     }
 }
