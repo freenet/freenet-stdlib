@@ -4124,16 +4124,55 @@ mod struct_field_wire_compat {
     /// buys one direction, not both.
     #[test]
     fn node_diagnostics_response_is_terminal_in_its_message() {
+        // Every field carries a DISTINCTIVE, NON-ZERO value on purpose.
+        //
+        // An all-default response encodes as 27 zero bytes, and `ends_with`
+        // against a run of zeros degenerates into "the message ends in zeros" —
+        // which stays true after appending any field that encodes as zeros
+        // (`None`, an empty `Vec`, `0u64`, `false`). That is satisfiable under
+        // exactly the mutation this test exists to catch, so the assertion
+        // would have passed while terminality was broken.
+        let mut contract_states = std::collections::HashMap::new();
+        contract_states.insert(
+            "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9".to_string(),
+            super::ContractState {
+                subscribers: 0xAB,
+                subscriber_peer_ids: vec!["peer-a".to_string()],
+                size_bytes: 0xCDEF,
+            },
+        );
         let response = NodeDiagnosticsResponse {
-            node_info: None,
-            network_info: None,
-            subscriptions: vec![],
-            contract_states: Default::default(),
-            system_metrics: None,
-            connected_peers_detailed: vec![],
+            node_info: Some(super::NodeInfo {
+                peer_id: "peer-self".to_string(),
+                is_gateway: true,
+                location: Some("0.5".to_string()),
+                listening_address: Some("0.0.0.0:31337".to_string()),
+                uptime_seconds: 0x1234,
+            }),
+            network_info: Some(super::NetworkInfo {
+                connected_peers: vec![("peer-x".to_string(), "10.0.0.1:31337".to_string())],
+                active_connections: 7,
+            }),
+            subscriptions: vec![super::SubscriptionInfo {
+                contract_key: crate::contract_interface::ContractInstanceId::new([7u8; 32]),
+                client_id: 42,
+            }],
+            contract_states,
+            system_metrics: Some(super::SystemMetrics {
+                active_connections: 0x5678,
+                hosting_contracts: 0x9A,
+            }),
+            connected_peers_detailed: vec![super::ConnectedPeerInfo {
+                peer_id: "peer-x".to_string(),
+                address: "10.0.0.1:31337".to_string(),
+            }],
         };
 
         let inner = bincode::serialize(&response).expect("response must serialize");
+        assert!(
+            inner.iter().any(|b| *b != 0),
+            "the fixture must not be all zeros, or the ends_with below proves nothing"
+        );
         // The default type parameter, i.e. the `HostResponse` that is actually
         // on the wire. Pinning terminality against some other instantiation
         // would be pinning a type nobody sends.
@@ -4148,6 +4187,17 @@ mod struct_field_wire_compat {
              Something now follows it, so appending a field to it would no longer be \
              trailing-byte-safe for older clients — it would silently corrupt whatever \
              was added after it."
+        );
+
+        // Belt to the ends_with brace: the payload must account for everything
+        // after the two 4-byte enum tags (HostResponse::QueryResponse, then
+        // QueryResponse::NodeDiagnostics) and nothing else. This catches an
+        // appended sibling field even in the case ends_with cannot — one whose
+        // encoding happens to match the payload's own trailing bytes.
+        assert_eq!(
+            whole.len(),
+            8 + inner.len(),
+            "exactly two enum tags may precede the payload and nothing may follow it"
         );
     }
 

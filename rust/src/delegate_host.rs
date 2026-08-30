@@ -122,6 +122,17 @@ pub mod error_codes {
     pub const ERR_STORE_FAILED: i32 = -24;
 }
 
+/// Upper bound on the serialized subscription list a host may report from
+/// `__frnt__delegate__list_subscriptions_len`, in bytes — 32 KiB, i.e. 1024
+/// contract ids.
+///
+/// This exists because the delegate allocates on the strength of that number.
+/// An allocation failure inside a delegate is an abort, not a value we can
+/// return, so an implausible length has to be refused before `vec![0u8; len]`
+/// rather than survived afterwards. A delegate holding a thousand subscriptions
+/// is already well outside the intended shape.
+pub const MAX_SUBSCRIPTION_LIST_BYTES: i64 = 32 * 1024;
+
 // ============================================================================
 // Host function declarations (WASM only)
 // ============================================================================
@@ -196,14 +207,23 @@ extern "C" {
     /// Subscribe to contract updates. Returns 0 on success, or negative error code (i64).
     fn __frnt__delegate__subscribe_contract(id_ptr: i64, id_len: i32) -> i64;
     /// Byte length of this delegate's serialized subscription list — always a
-    /// multiple of 32. Returns the count to allocate, or a negative error code
-    /// (i64). Zero means "subscribed to nothing", which is distinct from an
-    /// error and must stay so.
+    /// multiple of 32, and never more than [`MAX_SUBSCRIPTION_LIST_BYTES`].
+    /// Returns the count to allocate, or a negative error code (i64). Zero
+    /// means "subscribed to nothing", which is distinct from an error and must
+    /// stay so.
     fn __frnt__delegate__list_subscriptions_len() -> i64;
     /// Enumerate this delegate's current contract subscriptions: writes the raw
     /// 32-byte instance ids back to back into `out_ptr` (at most `out_len`
     /// bytes) and returns the number of bytes written, or a negative error code
     /// (i64).
+    ///
+    /// **The host MUST return `ERR_BUFFER_TOO_SMALL` (-6) rather than a partial
+    /// list if the set no longer fits in `out_len`.** The set can change
+    /// between the length call and this one, and a buffer filled exactly to
+    /// `out_len` is indistinguishable from one the host wanted to overflow — so
+    /// a silently truncated list would look complete to the delegate, which is
+    /// the failure this API exists to remove. Writing more than `out_len` bytes
+    /// is a contract violation in either direction.
     fn __frnt__delegate__list_subscriptions(out_ptr: i64, out_len: i64) -> i64;
 }
 
@@ -625,8 +645,15 @@ impl DelegateCtx {
     /// Subscribe to contract updates by instance ID.
     ///
     /// Registers interest in receiving `ContractNotification` when the
-    /// contract's state changes. Delivery works, and covers state committed
-    /// locally as well as state arriving from the network.
+    /// contract's state changes, covering state committed locally as well as
+    /// state arriving from the network.
+    ///
+    /// **Delivery is best-effort and lossy.** The node drops notifications
+    /// rather than blocking a state commit when the delivery channel is full,
+    /// and if that channel is closed it removes the contract's subscription
+    /// entry outright — silently, for every delegate subscribed to it. A
+    /// delegate that needs to be sure should poll contract state as a fallback
+    /// rather than treat a notification as guaranteed.
     ///
     /// # Whether this registers demand is a property of the NODE, not of this library
     ///
@@ -675,14 +702,28 @@ impl DelegateCtx {
 
     /// List the contract instance ids this delegate is currently subscribed to.
     ///
-    /// A delegate's subscription set lives in the node, not in the delegate.
-    /// The WASM is instantiated per invocation and dropped immediately after,
-    /// and the node replays subscriptions across a restart without running the
-    /// delegate at all. So without this call a delegate has no way to learn
-    /// what it is already subscribed to: it can only keep a parallel record in
-    /// its own secrets, which drifts from the node's exactly in the cases that
-    /// matter, or re-subscribe to everything on every wake. This is the gap
-    /// freenet-core#5467 names for restart-replay.
+    /// A delegate's subscription set lives in the node, not in the delegate:
+    /// the WASM is instantiated per invocation and dropped immediately after,
+    /// so between invocations the delegate has no view of it at all. Without
+    /// this call it can only keep a parallel record in its own secrets, which
+    /// drifts from the node's exactly in the cases that matter, or re-subscribe
+    /// to everything on every wake.
+    ///
+    /// # What this does not yet solve
+    ///
+    /// **Today the node does not survive a restart with its delegate
+    /// subscriptions intact — it loses them.** `DELEGATE_SUBSCRIPTIONS` is an
+    /// in-memory map (freenet-core `wasm_runtime/native_api.rs`), so after a
+    /// restart this call correctly returns `Ok(vec![])`, and a delegate should
+    /// read that as "the node is holding nothing for me", not as "my
+    /// subscriptions are gone but recoverable from somewhere else".
+    ///
+    /// So this call does **not**, on its own, deliver the restart-replay that
+    /// freenet-core#5467 asks for. It is the read side of that capability, and
+    /// it becomes load-bearing when #4669 part 3's durable
+    /// delegate-subscription store lands and there is finally something
+    /// persistent to read back. Until then its value is within a single node
+    /// lifetime: learning what the node currently holds, without guessing.
     ///
     /// Order is unspecified; do not depend on it.
     ///
@@ -736,15 +777,27 @@ impl DelegateCtx {
     /// for the same reason: a host-side unit test must not be able to read
     /// "no subscriptions" out of a stub that never had any.
     ///
-    /// **Host version floor:** this import is provided by nodes built against
-    /// freenet-stdlib 0.9.0 or later. A delegate that calls it fails to
-    /// instantiate on an older node with a named missing-import error — loud
-    /// and diagnosable at load time, rather than silently mid-protocol.
+    /// **Host requirement:** the node must register these imports in its
+    /// wasmtime linker. That is a freenet-core change, not a stdlib one — host
+    /// functions are registered by name and reference no stdlib type, so the
+    /// stdlib version a node was built against guarantees nothing here. **No
+    /// released node provides them yet.** A delegate that calls this against a
+    /// node that does not fails to instantiate, with a named missing-import
+    /// error — loud and diagnosable at load time rather than silently
+    /// mid-protocol, which is the reason for choosing a host function over a
+    /// message variant.
     pub fn list_subscriptions(&self) -> Result<Vec<[u8; 32]>, i64> {
         #[cfg(target_family = "wasm")]
         {
             // Step 1: how many bytes to allocate. Zero is a valid answer and
             // means "subscribed to nothing".
+            //
+            // Every host return is validated before it is used as a length.
+            // `usize` is 32 bits on wasm32, so an `as usize` cast on an
+            // unchecked i64 truncates silently: a bogus 2^32 would become 0 and
+            // surface as `Ok(vec![])` — the "you hold no subscriptions" answer
+            // this API's whole return type exists to keep distinguishable from
+            // a failure. Reject rather than cast.
             let len = unsafe { __frnt__delegate__list_subscriptions_len() };
             if len < 0 {
                 return Err(len);
@@ -752,16 +805,38 @@ impl DelegateCtx {
             if len == 0 {
                 return Ok(Vec::new());
             }
+            if len % 32 != 0 || len > MAX_SUBSCRIPTION_LIST_BYTES {
+                // The import contract promises a multiple of 32 within the
+                // cap. A host that breaks it is malfunctioning, and allocating
+                // on its say-so risks an allocation failure, which in a
+                // delegate is an abort rather than an error we can return.
+                return Err(error_codes::ERR_STORE_ERROR as i64);
+            }
 
-            // Step 2: read the ids. The host may write fewer bytes than it
-            // reported if the set shrank between the two calls, so the return
-            // value, not `len`, is authoritative.
+            // Step 2: read the ids.
             let mut buf = vec![0u8; len as usize];
             let written = unsafe {
                 __frnt__delegate__list_subscriptions(buf.as_mut_ptr() as i64, buf.len() as i64)
             };
             if written < 0 {
                 return Err(written);
+            }
+            if written > len {
+                // Writing past the buffer we advertised is a host bug. Left
+                // unchecked, `truncate` would be a no-op and the zero-filled
+                // tail would decode as valid-looking all-zero contract ids.
+                return Err(error_codes::ERR_STORE_ERROR as i64);
+            }
+            if written == len {
+                // Ambiguous: an exactly-full buffer cannot be distinguished
+                // from one the host wanted to overflow, so a set that GREW
+                // between the two calls would silently come back one entry
+                // short and look complete. Re-ask instead of guessing; the
+                // host reports ERR_BUFFER_TOO_SMALL if it still does not fit.
+                let recheck = unsafe { __frnt__delegate__list_subscriptions_len() };
+                if recheck > len {
+                    return Err(error_codes::ERR_BUFFER_TOO_SMALL as i64);
+                }
             }
             buf.truncate(written as usize);
             decode_contract_id_list(&buf).ok_or(error_codes::ERR_STORE_ERROR as i64)
@@ -975,6 +1050,28 @@ mod secret_key_list_codec_tests {
 #[cfg(test)]
 mod contract_id_list_codec_tests {
     use super::{decode_contract_id_list, encode_contract_id_list};
+
+    /// Off-WASM, `list_subscriptions` must report an error rather than an
+    /// empty list.
+    ///
+    /// The whole argument for its `Result` return type is that "you hold no
+    /// subscriptions" and "I could not tell you" must not share a
+    /// representation. A stub that returned `Ok(vec![])` would let a host-side
+    /// test read "no subscriptions" out of something that never had any — the
+    /// exact conflation the type exists to prevent, reintroduced at the one
+    /// place nobody looks.
+    #[test]
+    #[cfg(not(target_family = "wasm"))]
+    fn list_subscriptions_off_wasm_is_an_error_not_an_empty_list() {
+        // SAFETY: `__new` builds a zero-sized handle; off-WASM every method on
+        // it takes the non-WASM branch and touches no host state.
+        let ctx = unsafe { super::DelegateCtx::__new() };
+        assert_eq!(
+            ctx.list_subscriptions(),
+            Err(super::error_codes::ERR_NOT_IN_PROCESS as i64),
+            "off-WASM must be distinguishable from a successful empty enumeration"
+        );
+    }
 
     #[test]
     fn round_trips_multiple_ids() {

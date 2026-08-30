@@ -535,7 +535,11 @@ impl AsRef<[u8]> for DelegateContext {
 /// - **Appending is compatible in exactly one direction.** An old sender's old
 ///   variant always decodes on a new receiver. A **new** sender's **new**
 ///   variant does **not** decode on an old receiver: bincode rejects the
-///   unknown tag with `ErrorKind::InvalidTagEncoding`. `#[non_exhaustive]` does
+///   unknown tag — as `ErrorKind::Custom("invalid value: integer `N`, expected
+///   variant index 0 <= i < M")`, since bincode hands the index to serde's
+///   derived visitor rather than validating it itself. (Not
+///   `InvalidTagEncoding`, which bincode only ever produces for a bad `Option`
+///   discriminant.) `#[non_exhaustive]` does
 ///   not change this — it is a source-level attribute with no effect on the
 ///   encoding, and serde has no unknown-variant fallback to fall back to.
 ///
@@ -741,13 +745,27 @@ impl UserInputResponse<'_> {
 /// no wildcard (`crates/core/src/contract.rs`, in the request loop and again in
 /// the app-message filter). Marking this enum `#[non_exhaustive]` would force
 /// those matches to grow `_ =>` arms, and a newly added variant would then
-/// compile against the host with **no handler**: the delegate's request would be
-/// silently swallowed, the call would appear to succeed, and nothing anywhere
-/// would report that it did nothing. That failure mode is not hypothetical — it
-/// is what a delegate `SubscribeContractRequest` does today, and the reason this
-/// workstream exists.
+/// compile against the host with **no arm of its own**: the delegate's request
+/// would fall into the wildcard, the call would appear to succeed, and nothing
+/// would report that it did nothing.
 ///
-/// The compile error is the mechanism that stops it. Keep it.
+/// The compile error is what stops that, and it is the only mechanism that
+/// does. Keep it.
+///
+/// Two honest limits on this argument, because it is easy to claim more:
+///
+/// - **It forces an arm to exist, not a handler to be correct.** This crate's
+///   own FlatBuffers encoder (`client_api::client_events`) has explicit arms
+///   for five outbound variants that log an error and drop the message. The
+///   compile error made someone write those arms deliberately; it could not
+///   make them do anything useful.
+/// - **It is not the bug behind this workstream.** A delegate
+///   `SubscribeContractRequest` *is* handled by the host today. Its defect is
+///   different and subtler: it registers no demand in the network, so the
+///   subscription does not pin the contract (freenet-core#4669). Do not read
+///   the compile-error argument as a fix for that; it is a guard against a
+///   different failure that has not happened yet, which is the point of a
+///   guard.
 ///
 /// [`InboundDelegateMsg`] carries the opposite trade-off, and is marked: its
 /// consumers are third-party delegate WASM, which can reasonably ignore a
@@ -764,12 +782,18 @@ impl UserInputResponse<'_> {
 /// Appending is compatible in one direction only, and this enum is the
 /// direction that bites:
 ///
-/// - **Old delegate → new host: always fine.** The host understands every tag
-///   an older delegate can emit, so deployed delegate WASM keeps working
-///   against an upgraded node with no rebuild.
+/// - **Old delegate → new host: fine, for appended VARIANTS.** The host
+///   understands every tag an older delegate can emit, so deployed delegate
+///   WASM keeps working against an upgraded node with no rebuild. This does
+///   **not** extend to appending a FIELD to an existing variant's payload
+///   struct — several of them are `#[non_exhaustive]`, which invites exactly
+///   that — because a field breaks in the opposite direction. See
+///   `struct_field_wire_compat` in `client_api::client_events`.
 /// - **New delegate → old host: fails, and fails loudly.** bincode rejects the
-///   unknown variant tag with `ErrorKind::InvalidTagEncoding`, so the host
-///   surfaces a decode error on that message rather than misreading it.
+///   unknown variant tag — as `ErrorKind::Custom("invalid value: integer `N`,
+///   expected variant index 0 <= i < M")`, since it hands the index to serde's
+///   derived visitor rather than validating it itself — so the host surfaces a
+///   decode error on that message rather than misreading it.
 ///
 /// There is deliberately **no feature-detection handshake**. A delegate cannot
 /// ask the host which variants it understands, and adding a probe would itself
@@ -1589,36 +1613,70 @@ mod delegate_wire_compat {
     /// a fixed-size probe is safe here.
     #[test]
     fn an_unpinned_variant_fails_this_test() {
+        // The probe must fail because the TAG is unknown, not because a
+        // payload of zeros happened not to parse. Asserting only `is_err()`
+        // would let a new variant whose first field rejects zeros (a
+        // `DateTime`, a `NonZero*`, a validating `deserialize_with`) go
+        // undetected: the tag would be valid, the decode would still fail, and
+        // this test would stay green while the counts drifted.
+        //
+        // bincode hands an out-of-range variant index to serde's derived
+        // visitor, which rejects it as `invalid value: integer `N`, expected
+        // variant index 0 <= i < M` — an `ErrorKind::Custom`. Match on that
+        // wording rather than on `InvalidTagEncoding`, which bincode produces
+        // only for a bad `Option` discriminant.
+        fn assert_rejected_as_unknown_variant(err: &bincode::Error, tag: u32, which: &str) {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("variant index"),
+                "tag {tag} on {which} failed for the wrong reason ({msg}); the tag itself must \
+                 still be unknown, otherwise a variant was added without updating the count, \
+                 the pinned_*_tag match and the every_* list"
+            );
+        }
+
         let mut probe = INBOUND_VARIANT_COUNT.to_le_bytes().to_vec();
         probe.extend_from_slice(&[0u8; 256]);
-        let decoded = bincode::deserialize::<InboundDelegateMsg<'_>>(&probe);
-        assert!(
-            decoded.is_err(),
-            "tag {INBOUND_VARIANT_COUNT} decoded as an InboundDelegateMsg, so a variant was \
-             added without updating INBOUND_VARIANT_COUNT, pinned_inbound_tag and every_inbound"
-        );
+        let err = bincode::deserialize::<InboundDelegateMsg<'_>>(&probe)
+            .expect_err("tag {INBOUND_VARIANT_COUNT} must not decode as an InboundDelegateMsg");
+        assert_rejected_as_unknown_variant(&err, INBOUND_VARIANT_COUNT, "InboundDelegateMsg");
 
         let mut probe = OUTBOUND_VARIANT_COUNT.to_le_bytes().to_vec();
         probe.extend_from_slice(&[0u8; 256]);
-        let decoded = bincode::deserialize::<OutboundDelegateMsg>(&probe);
-        assert!(
-            decoded.is_err(),
-            "tag {OUTBOUND_VARIANT_COUNT} decoded as an OutboundDelegateMsg, so a variant was \
-             added without updating OUTBOUND_VARIANT_COUNT, pinned_outbound_tag and \
-             every_outbound"
+        let err = bincode::deserialize::<OutboundDelegateMsg>(&probe)
+            .expect_err("tag {OUTBOUND_VARIANT_COUNT} must not decode as an OutboundDelegateMsg");
+        assert_rejected_as_unknown_variant(&err, OUTBOUND_VARIANT_COUNT, "OutboundDelegateMsg");
+
+        // Control, so the probe cannot pass vacuously from the other end: the
+        // LAST known tag must still decode from the same all-zero payload. If
+        // this ever fails, the zero payload has stopped being a valid encoding
+        // for the final variant, and the probes above are no longer testing
+        // what they claim.
+        let mut control = (INBOUND_VARIANT_COUNT - 1).to_le_bytes().to_vec();
+        control.extend_from_slice(&[0u8; 256]);
+        bincode::deserialize::<InboundDelegateMsg<'_>>(&control).expect(
+            "the last known inbound tag must decode from zeros, or the unknown-tag probe above \
+             is no longer distinguishing an unknown tag from an unparseable payload",
         );
     }
 
-    /// Direction 1 of the append rule: **old sender to new receiver always
-    /// works.** Bytes produced before a variant was appended still decode into
-    /// the variant they always meant.
+    /// Direction 1 of the append rule: **old sender to new receiver works.**
     ///
-    /// The payload here is hand-built rather than produced by this crate's own
+    /// The payload is hand-built rather than produced by this crate's own
     /// encoder, so it stands in for bytes emitted by a delegate compiled
-    /// against an older stdlib. An encoder-produced value would only prove the
+    /// against an older stdlib; an encoder-produced value would only prove the
     /// code agrees with itself.
+    ///
+    /// Named for what it actually pins. Nothing here appends a variant — the
+    /// test cannot fail *because of* an append, only because a tag moved or a
+    /// payload layout changed, which `delegate_msg_variant_tags_are_pinned`
+    /// also covers. Its distinct value is that the expected bytes are written
+    /// out by hand, so a change to `ContractNotification`'s field order or to
+    /// the bincode config fails here with a concrete byte string to compare
+    /// against. Direction 2, which genuinely models an old receiver, is
+    /// `a_new_variant_does_not_decode_on_an_old_receiver` below.
     #[test]
-    fn an_old_payload_still_decodes_after_appending_a_variant() {
+    fn a_hand_built_old_encoder_payload_decodes_into_the_same_variant() {
         // InboundDelegateMsg tag 6 = ContractNotification { contract_id,
         // new_state: WrappedState (empty), context: DelegateContext (empty) }.
         let mut old_payload = vec![6u8, 0, 0, 0];
