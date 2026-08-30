@@ -1648,6 +1648,9 @@ mod delegate_wire_compat {
     fn a_new_variant_does_not_decode_on_an_old_receiver() {
         // An "old" OutboundDelegateMsg that knows tags 0..=6 only, i.e. one
         // built before `SendDelegateMessage` was appended at 7.
+        // Variants are only ever produced by deserialization, never
+        // constructed here — which is the whole point of the test.
+        #[allow(dead_code)]
         #[derive(serde::Deserialize, Debug)]
         enum OldOutboundTagSpace {
             V0,
