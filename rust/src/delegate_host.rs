@@ -628,21 +628,33 @@ impl DelegateCtx {
     /// contract's state changes. Delivery works, and covers state committed
     /// locally as well as state arriving from the network.
     ///
-    /// # What this does not do, as of 0.9.0
+    /// # Whether this registers demand is a property of the NODE, not of this library
     ///
-    /// **A delegate subscription does not register demand in the network.** It
-    /// is a local notification hook: it does not mark the contract as in use,
-    /// does not enter the renewal set, and does not exempt the contract from
-    /// eviction. So a delegate sees a remote update only while the node happens
-    /// to be subscribed to that contract by some *other* route — typically a UI
-    /// client that is open. Close the tab and the notifications stop, without
-    /// any error being reported anywhere.
+    /// Subscribing always installs a local notification hook. Whether it *also*
+    /// registers demand — keeping the contract in the update mesh and
+    /// protecting it from eviction — depends on the freenet-core the delegate
+    /// happens to be running on, and **a delegate cannot detect which it has**.
+    /// The call reports success either way.
     ///
-    /// This is tracked as freenet-core#4669 (phase 1 of the freenet-core#5467
-    /// epic) and is being fixed. It is documented here rather than left to be
-    /// rediscovered because the call *succeeds*: nothing in the return value,
-    /// the logs, or the delegate's own view distinguishes a subscription that
-    /// pinned the contract from one that did nothing.
+    /// - **Nodes predating freenet-core#4669** register no demand at all:
+    ///   `contract_in_use` has no delegate term, so the contract does not enter
+    ///   the renewal set and is not exempt from eviction. Such a delegate sees
+    ///   remote updates only while something else keeps the node subscribed to
+    ///   that contract — typically an open UI client. Close the tab and the
+    ///   notifications stop, with no error reported anywhere.
+    /// - **Once #4669 lands**, a subscribe registers demand *when the node is
+    ///   hosting the contract*. If the node can resolve the contract but is not
+    ///   hosting it, the subscribe still succeeds and notifications still work,
+    ///   but no demand is registered — registering demand for a contract the
+    ///   node does not hold would create a pin that can be neither renewed nor
+    ///   reclaimed. Closing that remaining gap needs a subscribe that can
+    ///   bootstrap an unheld contract over the network.
+    ///
+    /// So do not write a delegate that assumes its subscription pins anything.
+    /// This is documented at the call site rather than left in an issue
+    /// precisely because nothing in the return value, the logs, or the
+    /// delegate's own view distinguishes the cases. Tracked in
+    /// freenet-core#4669, phase 1 of the freenet-core#5467 epic.
     ///
     /// Returns `true` on success, `false` if the contract is unknown or on
     /// error. Note that the contract must already be in the node's local store;
@@ -673,6 +685,14 @@ impl DelegateCtx {
     /// freenet-core#5467 names for restart-replay.
     ///
     /// Order is unspecified; do not depend on it.
+    ///
+    /// # Cost
+    ///
+    /// The node holds delegate subscriptions keyed contract → delegates, so
+    /// answering this is a scan across every contract carrying any delegate
+    /// subscription, filtered to the caller — **O(all such contracts), not
+    /// O(this delegate's subscriptions)**. Call it on wake or after a restart,
+    /// which is what it is for; do not call it in a loop or per message.
     ///
     /// # Why this returns a `Result`
     ///

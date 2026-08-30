@@ -47,13 +47,23 @@
   are third-party delegate WASM, which can reasonably ignore an unknown variant.
 
 - **`DelegateCtx::subscribe_contract`'s doc comment** said notification delivery
-  was "a follow-up" (it works), and said nothing about the fact that a delegate
-  subscription **registers no demand in the network** — it is a local
-  notification hook that does not pin the contract, enter the renewal set, or
-  exempt it from eviction, so a delegate only sees remote updates while some
-  other route keeps the node subscribed. The call succeeds either way, and
-  nothing distinguishes the two, which is why it is now documented at the call
-  site rather than left to be rediscovered. Tracked in freenet-core#4669.
+  was "a follow-up" (it works), and said nothing about whether a delegate
+  subscription registers demand in the network.
+
+  It now says that **whether it does is a property of the node, not of this
+  library, and a delegate cannot detect which it has**. On nodes predating
+  freenet-core#4669 a subscribe registers no demand at all — no pin, no renewal
+  set, no eviction exemption — so the delegate sees remote updates only while
+  something else keeps the node subscribed, typically an open UI client. Once
+  #4669 lands it registers demand when the node is hosting the contract, and
+  still does not when the node can resolve but is not hosting it, since a pin on
+  a contract the node does not hold could be neither renewed nor reclaimed.
+
+  The call reports success in every one of those cases and nothing
+  distinguishes them, which is why this belongs at the call site rather than in
+  an issue. It is deliberately phrased as current node behaviour with a tracking
+  reference rather than as a property of the API, so that freenet-core#4669
+  landing makes it incomplete rather than wrong.
 
 ### Internal — wire-format guards
 
