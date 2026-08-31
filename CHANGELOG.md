@@ -2,11 +2,18 @@
 
 ## [Unreleased]
 
-### TypeScript SDK — Breaking (npm package `@freenetorg/freenet-stdlib`; next release must be 0.4.0, not a patch)
+### TypeScript SDK 0.4.0 — Breaking (npm package `@freenetorg/freenet-stdlib`)
 
 The npm package is versioned separately from the Rust crate. This release
 changes runtime behavior for existing callers, so on a 0.x line it takes a
 minor bump: **0.3.0 -> 0.4.0**, not 0.3.1.
+
+Upgrading from npm: 0.3.0 and earlier matched responses to requests by *arrival
+order alone*, with no correlation of any kind, so concurrent requests for
+different contracts could resolve into each other's promises. That is what this
+release fixes. Applications that serialised their requests to work around it can
+stop doing so **for requests on different contracts**; see "Known limitation"
+below before relaxing it for concurrent requests on the *same* contract.
 
 - **Host responses are now correlated to requests by contract key.**
   `FreenetWsApi` previously resolved the *oldest* pending request of a type
@@ -45,6 +52,44 @@ minor bump: **0.3.0 -> 0.4.0**, not 0.3.1.
   Errors are now scoped to the requests whose contract key the error message
   names. An error naming no pending contract still fails everything, since it
   may be connection-wide and must not leave callers waiting out the timeout.
+
+#### Known limitation: two requests for the SAME contract key
+
+Correlation is by contract key, because the key is the only identifying field a
+`ContractResponse` carries. Two requests for the *same* key are therefore
+indistinguishable, and one case remains open, reported as
+[#96](https://github.com/freenet/freenet-stdlib/issues/96):
+
+Giving up on a request locally does not stop the node working on it — the SDK
+sends nothing to cancel the operation — so a request that hit
+`REQUEST_TIMEOUT_MS` can still be answered afterwards. If the caller has retried
+the same contract by then, that late answer matches the retry exactly and
+settles it. The retry resolves with a result fetched for a request its caller
+already abandoned, and its own answer is later dropped against an empty queue.
+Mostly this means staler state for the right contract, but not always: a retry
+issued with `fetchContract: true` can be settled by an earlier response that
+carries no contract.
+
+**This release does not fix that, deliberately.** A client-side fence was
+attempted and withdrawn: with no request id on the wire, the SDK cannot tell a
+late answer from the retry's own answer, so any rule that drops "the next
+response for this key" is as likely to drop the retry's answer as the ghost's.
+Doing so hangs that retry until its own timeout, which mints another
+indistinguishable case — a self-sustaining chain of spurious timeouts against a
+contract the node is serving correctly. That is a worse failure than the
+mis-delivery it was meant to prevent. The evidence is on
+[#105](https://github.com/freenet/freenet-stdlib/pull/105).
+
+The real fix is a client-generated request id echoed in every terminal response,
+which makes correlation exact and this whole class of problem unreachable. That
+is a wire-protocol change spanning freenet-core, tracked in
+[#106](https://github.com/freenet/freenet-stdlib/issues/106).
+
+**Until then**, an application that issues concurrent requests for the same
+contract key, or retries one after a timeout, should treat a response as
+"an answer for this contract" rather than "the answer to this call": re-check
+whatever the result is used for, and prefer idempotent retries. Requests for
+*different* contracts are correlated correctly and need no such care.
 
 ### Breaking (next release must be 0.9.0, not a patch)
 - **`DelegateRequest::RegisterDelegateWithPredecessors`** removed (added in

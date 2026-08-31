@@ -673,3 +673,96 @@ describe("request timeout", () => {
     expect((await putB).key.encode()).toEqual(ENCODED_B);
   });
 });
+
+/**
+ * The residual that key-based correlation cannot close, pinned as a KNOWN
+ * LIMITATION rather than as desired behaviour.
+ *
+ * Two requests for the same contract key are identical on the wire — the key is
+ * the only identifying field a `ContractResponse` carries — so a late answer to
+ * a request the caller has already abandoned matches a retry for that key
+ * exactly. Reported as issue 96.
+ *
+ * A client-side fence for this was attempted and withdrawn (PR 105). With no
+ * request id, "drop the next response for this key" cannot tell the ghost's
+ * answer from the retry's own, and dropping the retry's answer hangs it until
+ * its own timeout — which mints another indistinguishable case, chaining
+ * spurious timeouts against a contract the node is serving correctly. That is
+ * worse than the mis-delivery it removes.
+ *
+ * These tests therefore assert what the SDK ACTUALLY DOES today. They are
+ * expected to be inverted, not deleted, by the wire-level request id that fixes
+ * this properly (issue 106).
+ */
+describe("known limitation: same-key requests are indistinguishable", () => {
+  const RESIDUAL_WS_URL = "ws://localhost:1243/contract/command/";
+  let server: Server;
+
+  beforeEach(() => {
+    server = new Server(RESIDUAL_WS_URL);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    server.clients().forEach((c) => c.close());
+    server.close();
+  });
+
+  async function connectResidual(): Promise<FreenetWsApi> {
+    const api = new FreenetWsApi(new URL(RESIDUAL_WS_URL), makeHandler());
+    await settle();
+    return api;
+  }
+
+  test("a late answer to a timed-out get settles a retry for the same key", async () => {
+    const api = await connectResidual();
+
+    jest.useFakeTimers();
+    const abandoned = api
+      .get(new GetRequest(new ContractKey(KEY_A), false))
+      .catch((e) => e);
+    jest.advanceTimersByTime(31_000);
+    expect(((await abandoned) as Error).message).toEqual("Request timeout");
+
+    // The node is still working on the abandoned request; nothing cancelled it.
+    const retry = api.get(new GetRequest(new ContractKey(KEY_A), false));
+    jest.useRealTimers();
+
+    // The abandoned request's answer arrives. It matches the retry's key
+    // exactly, and nothing on the wire distinguishes the two requests.
+    server
+      .clients()
+      .forEach((c) => c.send(getResponseFor(KEY_A, [0x01])));
+
+    // KNOWN LIMITATION: the retry settles with the abandoned request's answer.
+    // Invert this assertion once responses carry a request id.
+    expect((await retry).state).toEqual([0x01]);
+  });
+
+  test("a response for a DIFFERENT key never settles the wrong request", async () => {
+    const api = await connectResidual();
+
+    jest.useFakeTimers();
+    const abandoned = api
+      .get(new GetRequest(new ContractKey(KEY_A), false))
+      .catch((e) => e);
+    jest.advanceTimersByTime(31_000);
+    await abandoned;
+
+    const other = api.get(new GetRequest(new ContractKey(KEY_B), false));
+    jest.useRealTimers();
+
+    // The bound that DOES hold: the abandoned request's answer cannot reach a
+    // request for another contract. This is the half #94 fixed and the half
+    // that carried the real user-visible harm.
+    server
+      .clients()
+      .forEach((c) => c.send(getResponseFor(KEY_A, [0x01])));
+    expect(await statusOf(other)).toEqual("pending");
+
+    server
+      .clients()
+      .forEach((c) => c.send(getResponseFor(KEY_B, [0x02])));
+    expect((await other).state).toEqual([0x02]);
+  });
+});
