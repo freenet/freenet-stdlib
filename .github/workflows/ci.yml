@@ -157,31 +157,61 @@ jobs:
           node-version: '20'
 
       # Pinned deliberately. Different flatc releases format their output
-      # differently, so this job compares against one specific compiler; bump it
-      # and PINNED_FLATC in rust/build.rs together, in a commit that also
-      # regenerates.
+      # differently, so this job compares against one specific compiler.
+      #
+      # The version is read from build.rs rather than repeated here: two copies
+      # would let the compiler and the pin drift apart, which is the class of
+      # mistake this job exists to catch.
+      - name: Read pinned flatc version
+        id: flatc
+        run: |
+          version="$(grep -oP 'PINNED_FLATC: &str = "\K[^"]+' rust/build.rs)"
+          if [ -z "$version" ]; then
+            echo "could not read PINNED_FLATC from rust/build.rs" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       # Downloaded outside the checkout on purpose: anything left in the working
       # tree would show up as untracked, and the staleness check below treats
       # untracked files as drift.
+      #
+      # The checksum is not ceremony. Release assets can be replaced by anyone
+      # with upstream write access, and a substituted binary would self-report
+      # the expected version, pass the gate below, and then dictate what this
+      # repository is required to commit.
       - name: Install pinned flatc
         env:
-          FLATC_VERSION: 24.3.25
+          FLATC_VERSION: ${{ steps.flatc.outputs.version }}
+          FLATC_SHA256: 9e3b46402076388e61ceeb07344e95a71b2c67fa54b861eaaef905bbe9311b86
         run: |
           curl -sSfL -o "$RUNNER_TEMP/flatc.zip" \
             "https://github.com/google/flatbuffers/releases/download/v${FLATC_VERSION}/Linux.flatc.binary.g++-13.zip"
+          echo "${FLATC_SHA256}  $RUNNER_TEMP/flatc.zip" | sha256sum -c -
           unzip -q "$RUNNER_TEMP/flatc.zip" -d "$HOME/.flatc"
           chmod +x "$HOME/.flatc/flatc"
           echo "$HOME/.flatc" >> "$GITHUB_PATH"
 
       - name: Verify flatc version
+        env:
+          FLATC_VERSION: ${{ steps.flatc.outputs.version }}
         run: |
           # A silently-different compiler would make this whole job compare the
           # wrong thing and pass, which is the failure mode it exists to prevent.
           installed="$(flatc --version | awk '{print $NF}')"
-          if [ "$installed" != "24.3.25" ]; then
-            echo "expected flatc 24.3.25, got '$installed'" >&2
+          if [ "$installed" != "$FLATC_VERSION" ]; then
+            echo "expected flatc $FLATC_VERSION, got '$installed'" >&2
             exit 1
           fi
+
+      # Deleting first makes a regeneration that quietly does nothing fail
+      # closed. Deletions of tracked files ARE visible to the staleness check
+      # below, whereas a no-op regeneration leaves a clean tree that reads as
+      # success. Without this the job's correctness rests on the build script
+      # actually executing, which today holds only because this is the one Rust
+      # job without a cargo cache -- an implicit property nothing enforces.
+      - name: Remove generated bindings so a no-op regeneration is visible
+        run: rm -f rust/src/generated/*_generated.rs
 
       # build.rs runs cargo fmt itself and panics if anything goes wrong, so a
       # regeneration that cannot run fails here rather than reaching the
@@ -190,11 +220,12 @@ jobs:
         working-directory: rust
         run: FREENET_REGEN_FLATBUFFERS=1 cargo build
 
+      # No `npm install`: flatc-schemas only shells out to the flatc binary, so
+      # installing the package tree would add a minute and a network flake
+      # surface for nothing.
       - name: Regenerate TypeScript bindings
         working-directory: typescript
-        run: |
-          npm install
-          npm run flatc-schemas
+        run: npm run flatc-schemas
 
       # Until this job existed nothing compared the schemas to the bindings: the
       # build regenerated only when a contributor happened to have flatc, and CI
