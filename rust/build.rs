@@ -160,7 +160,9 @@ fn warn_if_schemas_look_newer() {
     };
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "fbs") {
+        // `matches!` rather than `Option::is_none_or`, which is stable only
+        // since 1.82 while this crate's MSRV is 1.80.
+        if !matches!(path.extension(), Some(ext) if ext == "fbs") {
             continue;
         }
         let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
