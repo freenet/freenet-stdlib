@@ -53,27 +53,27 @@ fn main() {
         return;
     }
 
-    // Note: `cargo:` directives are parsed from stdout only. A warning written
-    // to stderr renders nowhere, so every diagnostic here goes through
-    // `println!` — including the ones that read like errors.
+    // Everything below panics rather than warning. Setting the variable is an
+    // explicit request to regenerate, so a run that quietly regenerates nothing
+    // is the same silent-no-op this script exists to remove -- and it is worse
+    // here, because cargo caches a *successful* build-script run keyed on the
+    // declared inputs. A warn-and-return would be recorded as success, so
+    // installing the right compiler and re-running the documented command could
+    // legitimately not execute this script again, leaving the bindings stale
+    // while the developer believes they regenerated. Failing loudly is not
+    // cached and cannot be missed.
     match installed_flatc_version() {
         Some(version) if version == PINNED_FLATC => {}
-        Some(version) => {
-            println!(
-                "cargo:warning=FREENET_REGEN_FLATBUFFERS is set but flatc {version} is \
-                 installed; the bindings are pinned to {PINNED_FLATC}. Regenerating with a \
-                 different compiler rewrites every generated file. Skipping regeneration."
-            );
-            return;
-        }
-        None => {
-            println!(
-                "cargo:warning=FREENET_REGEN_FLATBUFFERS is set but no flatc was found on \
-                 PATH. Install flatc {PINNED_FLATC} (https://github.com/google/flatbuffers). \
-                 Skipping regeneration."
-            );
-            return;
-        }
+        Some(version) => panic!(
+            "FREENET_REGEN_FLATBUFFERS is set but flatc {version} is installed; the bindings \
+             are pinned to {PINNED_FLATC}. Regenerating with a different compiler rewrites \
+             every generated file. Install flatc {PINNED_FLATC} \
+             (https://github.com/google/flatbuffers/releases/tag/v{PINNED_FLATC})."
+        ),
+        None => panic!(
+            "FREENET_REGEN_FLATBUFFERS is set but no flatc was found on PATH. Install flatc \
+             {PINNED_FLATC} (https://github.com/google/flatbuffers/releases/tag/v{PINNED_FLATC})."
+        ),
     }
 
     let mut cmd = Command::new("flatc");
@@ -82,13 +82,17 @@ fn main() {
         cmd.arg(schema);
     }
     match cmd.status() {
-        Ok(status) if status.success() => {
-            // The checked-in bindings are formatted, so the regenerated ones
-            // must be too or the drift check compares formatting, not content.
-            let _ = Command::new("cargo").arg("fmt").status();
-        }
-        Ok(status) => println!("cargo:warning=flatc exited with {status}"),
-        Err(err) => println!("cargo:warning=failed to run flatc: {err}"),
+        Ok(status) if status.success() => {}
+        Ok(status) => panic!("flatc exited with {status}"),
+        Err(err) => panic!("failed to run flatc: {err}"),
+    }
+
+    // The checked-in bindings are formatted, so the regenerated ones must be too
+    // or the drift check compares formatting rather than content.
+    match Command::new("cargo").arg("fmt").status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => panic!("cargo fmt exited with {status} after regenerating"),
+        Err(err) => panic!("failed to run cargo fmt after regenerating: {err}"),
     }
 }
 

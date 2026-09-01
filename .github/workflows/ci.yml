@@ -160,13 +160,16 @@ jobs:
       # differently, so this job compares against one specific compiler; bump it
       # and PINNED_FLATC in rust/build.rs together, in a commit that also
       # regenerates.
+      # Downloaded outside the checkout on purpose: anything left in the working
+      # tree would show up as untracked, and the staleness check below treats
+      # untracked files as drift.
       - name: Install pinned flatc
         env:
           FLATC_VERSION: 24.3.25
         run: |
-          curl -sSfL -o flatc.zip \
+          curl -sSfL -o "$RUNNER_TEMP/flatc.zip" \
             "https://github.com/google/flatbuffers/releases/download/v${FLATC_VERSION}/Linux.flatc.binary.g++-13.zip"
-          unzip -q flatc.zip -d "$HOME/.flatc"
+          unzip -q "$RUNNER_TEMP/flatc.zip" -d "$HOME/.flatc"
           chmod +x "$HOME/.flatc/flatc"
           echo "$HOME/.flatc" >> "$GITHUB_PATH"
 
@@ -180,11 +183,12 @@ jobs:
             exit 1
           fi
 
+      # build.rs runs cargo fmt itself and panics if anything goes wrong, so a
+      # regeneration that cannot run fails here rather than reaching the
+      # comparison below having quietly changed nothing.
       - name: Regenerate Rust bindings
         working-directory: rust
-        run: |
-          FREENET_REGEN_FLATBUFFERS=1 cargo build
-          cargo fmt
+        run: FREENET_REGEN_FLATBUFFERS=1 cargo build
 
       - name: Regenerate TypeScript bindings
         working-directory: typescript
@@ -196,13 +200,21 @@ jobs:
       # build regenerated only when a contributor happened to have flatc, and CI
       # never installed it, so a schema edit that was never regenerated compiled
       # and passed against bindings describing the previous schema.
+      # `git status --porcelain`, not `git diff --exit-code`: a new .fbs file
+      # generates entirely NEW binding files, which are untracked, and a plain
+      # diff reports a clean tree for them. That would let a schema merge with no
+      # committed bindings at all -- the loudest version of the drift this job
+      # exists to catch, sailing straight past it.
       - name: Fail if the committed bindings are stale
         run: |
-          if ! git diff --exit-code; then
-            echo >&2
+          changes="$(git status --porcelain)"
+          if [ -n "$changes" ]; then
             echo "The committed flatbuffers bindings do not match the schemas." >&2
+            echo >&2
+            echo "$changes" >&2
+            echo >&2
             echo "Regenerate them and commit the result:" >&2
-            echo "  (cd rust && FREENET_REGEN_FLATBUFFERS=1 cargo build && cargo fmt)" >&2
+            echo "  (cd rust && FREENET_REGEN_FLATBUFFERS=1 cargo build)" >&2
             echo "  (cd typescript && npm run flatc-schemas)" >&2
             echo "This needs flatc 24.3.25 specifically; another release reformats every file." >&2
             exit 1
