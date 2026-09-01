@@ -139,6 +139,75 @@ jobs:
       - name: Test
         run: npm test
 
+  flatbuffers_drift:
+    name: Flatbuffers bindings match schemas
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Pinned deliberately. Different flatc releases format their output
+      # differently, so this job compares against one specific compiler; bump it
+      # and PINNED_FLATC in rust/build.rs together, in a commit that also
+      # regenerates.
+      - name: Install pinned flatc
+        env:
+          FLATC_VERSION: 24.3.25
+        run: |
+          curl -sSfL -o flatc.zip \
+            "https://github.com/google/flatbuffers/releases/download/v${FLATC_VERSION}/Linux.flatc.binary.g++-13.zip"
+          unzip -q flatc.zip -d "$HOME/.flatc"
+          chmod +x "$HOME/.flatc/flatc"
+          echo "$HOME/.flatc" >> "$GITHUB_PATH"
+
+      - name: Verify flatc version
+        run: |
+          # A silently-different compiler would make this whole job compare the
+          # wrong thing and pass, which is the failure mode it exists to prevent.
+          installed="$(flatc --version | awk '{print $NF}')"
+          if [ "$installed" != "24.3.25" ]; then
+            echo "expected flatc 24.3.25, got '$installed'" >&2
+            exit 1
+          fi
+
+      - name: Regenerate Rust bindings
+        working-directory: rust
+        run: |
+          FREENET_REGEN_FLATBUFFERS=1 cargo build
+          cargo fmt
+
+      - name: Regenerate TypeScript bindings
+        working-directory: typescript
+        run: |
+          npm install
+          npm run flatc-schemas
+
+      # Until this job existed nothing compared the schemas to the bindings: the
+      # build regenerated only when a contributor happened to have flatc, and CI
+      # never installed it, so a schema edit that was never regenerated compiled
+      # and passed against bindings describing the previous schema.
+      - name: Fail if the committed bindings are stale
+        run: |
+          if ! git diff --exit-code; then
+            echo >&2
+            echo "The committed flatbuffers bindings do not match the schemas." >&2
+            echo "Regenerate them and commit the result:" >&2
+            echo "  (cd rust && FREENET_REGEN_FLATBUFFERS=1 cargo build && cargo fmt)" >&2
+            echo "  (cd typescript && npm run flatc-schemas)" >&2
+            echo "This needs flatc 24.3.25 specifically; another release reformats every file." >&2
+            exit 1
+          fi
+
   claude-ci-analysis:
     name: Claude CI Analysis
 
