@@ -236,7 +236,13 @@ jobs:
       # diff reports a clean tree for them. That would let a schema merge with no
       # committed bindings at all -- the loudest version of the drift this job
       # exists to catch, sailing straight past it.
+      # The version in the remediation comes from the same step output as the
+      # install, not a literal: a hardcoded one silently rots when the pin moves,
+      # and the advice then tells contributors to install a compiler the build
+      # script explicitly rejects.
       - name: Fail if the committed bindings are stale
+        env:
+          FLATC_VERSION: ${{ steps.flatc.outputs.version }}
         run: |
           changes="$(git status --porcelain)"
           if [ -n "$changes" ]; then
@@ -247,7 +253,7 @@ jobs:
             echo "Regenerate them and commit the result:" >&2
             echo "  (cd rust && FREENET_REGEN_FLATBUFFERS=1 cargo build)" >&2
             echo "  (cd typescript && npm run flatc-schemas)" >&2
-            echo "This needs flatc 24.3.25 specifically; another release reformats every file." >&2
+            echo "This needs flatc $FLATC_VERSION specifically; another release reformats every file." >&2
             exit 1
           fi
 

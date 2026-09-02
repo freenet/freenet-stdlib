@@ -51,28 +51,41 @@ const PINNED_FLATC: &str = "24.12.23";
 const SCHEMA_DIR: &str = "../schemas/flatbuffers";
 
 fn main() {
-    // Deliberately the ONLY directive emitted on the ordinary build path, and
-    // deliberately not a `rerun-if-changed` on the schemas.
+    println!("cargo:rerun-if-env-changed=FREENET_REGEN_FLATBUFFERS");
+
+    // Declared only when the schemas are actually present, and that condition
+    // is the whole point.
     //
     // `cargo package` ships only files under `rust/`, so in a registry checkout
     // `../schemas/` does not exist — and cargo treats a `rerun-if-changed` path
-    // that does not exist as permanently dirty. Declaring the schemas here would
-    // therefore rebuild `freenet-stdlib`, and everything downstream of it, on
-    // every single `cargo build` in every consumer. Measured at ~1s per no-op
-    // build for this crate alone, before its reverse-dependency cone.
-    println!("cargo:rerun-if-env-changed=FREENET_REGEN_FLATBUFFERS");
+    // that does not exist as permanently dirty. Declaring them unconditionally
+    // rebuilt `freenet-stdlib`, and everything downstream of it, on every single
+    // `cargo build` in every consumer (~1s per no-op build for this crate alone,
+    // before its reverse-dependency cone).
+    //
+    // Declaring nothing at all is equally wrong in the other direction: cargo
+    // then re-runs this script only when the env var changes, so editing a
+    // schema would not re-run it, and the stale-schema warning below could never
+    // fire in the one situation it exists for. Existing paths get the directive;
+    // a checkout without them falls back to cargo's default "any packaged file"
+    // heuristic, which caches correctly.
+    let schemas = discover_schemas();
+    if let Some(schemas) = &schemas {
+        for schema in schemas {
+            println!("cargo:rerun-if-changed={}", schema.display());
+        }
+    }
 
     if std::env::var_os("FREENET_REGEN_FLATBUFFERS").is_none() {
         warn_if_schemas_look_newer();
         return;
     }
 
-    let schemas = schema_files();
-
-    // Safe here: regeneration is only ever requested from a source checkout, so
-    // the directory exists and the always-dirty problem above does not apply.
-    for schema in &schemas {
-        println!("cargo:rerun-if-changed={}", schema.display());
+    let schemas = schemas.unwrap_or_else(|| {
+        panic!("FREENET_REGEN_FLATBUFFERS is set but {SCHEMA_DIR} does not exist")
+    });
+    if schemas.is_empty() {
+        panic!("no .fbs schemas found in {SCHEMA_DIR}");
     }
 
     // Everything below panics rather than warning. Setting the variable is an
@@ -118,25 +131,26 @@ fn main() {
     }
 }
 
-/// Every `.fbs` in [`SCHEMA_DIR`], sorted so the flatc invocation is stable.
+/// Every `.fbs` in [`SCHEMA_DIR`], sorted so the flatc invocation is stable, or
+/// `None` when the directory is not there at all.
 ///
 /// Discovered rather than listed. The TypeScript side globs the same directory,
 /// so a hardcoded list here would silently cover one language and not the other:
 /// a new schema would generate TypeScript bindings and no Rust ones, and the
 /// drift job would report success having compared a file set that did not
 /// include it.
-fn schema_files() -> Vec<PathBuf> {
-    let dir = Path::new(SCHEMA_DIR);
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap_or_else(|err| panic!("cannot read {SCHEMA_DIR}: {err}"))
+///
+/// Returns `None` rather than panicking on a missing directory because that is
+/// the normal state of a published crate — this runs on every downstream build,
+/// where a panic would be far worse than the problem it reports.
+fn discover_schemas() -> Option<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(Path::new(SCHEMA_DIR))
+        .ok()?
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| path.extension().is_some_and(|ext| ext == "fbs"))
         .collect();
-    if files.is_empty() {
-        panic!("no .fbs schemas found in {SCHEMA_DIR}");
-    }
     files.sort();
-    files
+    Some(files)
 }
 
 /// Best-effort nudge when a schema looks newer than the bindings built from it.
