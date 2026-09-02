@@ -83,6 +83,12 @@ fn main() {
     // for a registry checkout, whose sources cannot change anyway.
     let schemas = discover_schemas();
     if let Some(schemas) = &schemas {
+        // The directory as well as the files in it. Watching only the files
+        // means cargo has no input that changes when a schema is ADDED, so on an
+        // already-built checkout the script would not re-run: no stale-schema
+        // warning, and a regeneration that was already enabled could stay cached
+        // and silently omit the new binding.
+        println!("cargo:rerun-if-changed={SCHEMA_DIR}");
         for schema in schemas {
             println!("cargo:rerun-if-changed={}", schema.display());
         }
