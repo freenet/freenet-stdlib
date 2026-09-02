@@ -165,9 +165,13 @@ jobs:
       - name: Read pinned flatc version
         id: flatc
         run: |
-          version="$(grep -oP 'PINNED_FLATC: &str = "\K[^"]+' rust/build.rs)"
+          # `|| true` so a failed grep does not abort the step under `bash -e`
+          # before the message below can explain what went wrong. It fails
+          # closed either way; this makes the failure legible.
+          version="$(grep -oP 'PINNED_FLATC: &str = "\K[^"]+' rust/build.rs || true)"
           if [ -z "$version" ]; then
             echo "could not read PINNED_FLATC from rust/build.rs" >&2
+            echo "(has the declaration been reformatted?)" >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -180,6 +184,13 @@ jobs:
       # with upstream write access, and a substituted binary would self-report
       # the expected version, pass the gate below, and then dictate what this
       # repository is required to commit.
+      #
+      # It is necessarily pinned by hand, so it is the one value that does NOT
+      # follow PINNED_FLATC automatically: moving the pin without updating this
+      # fails with "computed checksum did NOT match", which reads as a
+      # supply-chain alarm rather than "you forgot the hash". Update both
+      # together. The asset filename is likewise not stable across flatc
+      # releases and may need revisiting on a bump.
       - name: Install pinned flatc
         env:
           FLATC_VERSION: ${{ steps.flatc.outputs.version }}
