@@ -50,6 +50,14 @@ const PINNED_FLATC: &str = "24.12.23";
 /// ordinary build; see `main`.
 const SCHEMA_DIR: &str = "../schemas/flatbuffers";
 
+/// Records the schema content the committed bindings were generated from.
+///
+/// Written by the regeneration path and committed alongside the bindings, so an
+/// ordinary build can tell whether the two still correspond without needing
+/// flatc. The drift job regenerates it like everything else, so a stale one is
+/// itself caught as drift.
+const SCHEMA_FINGERPRINT: &str = "src/generated/.schema-fingerprint";
+
 fn main() {
     println!("cargo:rerun-if-env-changed=FREENET_REGEN_FLATBUFFERS");
 
@@ -66,9 +74,13 @@ fn main() {
     // Declaring nothing at all is equally wrong in the other direction: cargo
     // then re-runs this script only when the env var changes, so editing a
     // schema would not re-run it, and the stale-schema warning below could never
-    // fire in the one situation it exists for. Existing paths get the directive;
-    // a checkout without them falls back to cargo's default "any packaged file"
-    // heuristic, which caches correctly.
+    // fire in the one situation it exists for.
+    //
+    // So existing paths get the directive. Where they are absent no path
+    // directive is emitted, and since `rerun-if-env-changed` above is
+    // unconditional the script has still opted out of cargo's default
+    // "any packaged file" scan — it re-runs only on the env var. That is right
+    // for a registry checkout, whose sources cannot change anyway.
     let schemas = discover_schemas();
     if let Some(schemas) = &schemas {
         for schema in schemas {
@@ -77,7 +89,7 @@ fn main() {
     }
 
     if std::env::var_os("FREENET_REGEN_FLATBUFFERS").is_none() {
-        warn_if_schemas_look_newer();
+        warn_if_schemas_stale();
         return;
     }
 
@@ -129,6 +141,14 @@ fn main() {
         Ok(status) => panic!("cargo fmt exited with {status} after regenerating"),
         Err(err) => panic!("failed to run cargo fmt after regenerating: {err}"),
     }
+
+    // Last, so it records only schemas that actually made it through.
+    let Some(fingerprint) = fingerprint(&schemas) else {
+        panic!("could not read the schemas to fingerprint them");
+    };
+    if let Err(err) = std::fs::write(SCHEMA_FINGERPRINT, format!("{fingerprint}\n")) {
+        panic!("failed to write {SCHEMA_FINGERPRINT}: {err}");
+    }
 }
 
 /// Every `.fbs` in [`SCHEMA_DIR`], sorted so the flatc invocation is stable, or
@@ -153,44 +173,63 @@ fn discover_schemas() -> Option<Vec<PathBuf>> {
     Some(files)
 }
 
-/// Best-effort nudge when a schema looks newer than the bindings built from it.
+/// Nudge when the schemas no longer match the bindings built from them.
 ///
 /// Regeneration is opt-in, which means the failure mode for someone editing a
 /// schema locally is that their new field simply does not exist and the compile
 /// error says nothing about flatbuffers. This is the one moment the build script
-/// runs with a chance to say so. Advisory only, and mtime-based, so it stays a
-/// warning and never a hard failure.
-fn warn_if_schemas_look_newer() {
-    let Ok(entries) = std::fs::read_dir(SCHEMA_DIR) else {
+/// runs with a chance to say so. Advisory only: it warns and never fails.
+///
+/// Compares CONTENT, not timestamps. An earlier version of this compared
+/// schema mtimes against the generated files and fired on every fresh clone,
+/// because git writes checkout files in path order — `rust/src/generated/`
+/// sorts before `schemas/`, so every schema was always strictly newer. It
+/// emitted fifteen warnings across five jobs in a CI run where the drift job
+/// simultaneously proved the bindings matched exactly. A warning that is
+/// already going off is not a warning; by the time it was true nobody would
+/// have been able to tell it apart from the noise.
+fn warn_if_schemas_stale() {
+    let Some(schemas) = discover_schemas() else {
         return;
     };
-    let newest_generated = std::fs::read_dir("src/generated")
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok()?.metadata().ok()?.modified().ok())
-        .max();
-    let Some(newest_generated) = newest_generated else {
+    let Some(current) = fingerprint(&schemas) else {
         return;
     };
-    for entry in entries.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        // `matches!` rather than `Option::is_none_or`, which is stable only
-        // since 1.82 while this crate's MSRV is 1.80.
-        if !matches!(path.extension(), Some(ext) if ext == "fbs") {
-            continue;
-        }
-        let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
-            continue;
-        };
-        if modified > newest_generated {
-            println!(
-                "cargo:warning={} is newer than the generated bindings. If you edited it, \
-                 regenerate with: FREENET_REGEN_FLATBUFFERS=1 cargo build (needs flatc \
-                 {PINNED_FLATC}), and in typescript/: npm run flatc-schemas",
-                path.display()
-            );
-        }
+    // Absent on a checkout predating the fingerprint; silence beats nagging
+    // about something the developer cannot act on.
+    let Ok(recorded) = std::fs::read_to_string(SCHEMA_FINGERPRINT) else {
+        return;
+    };
+    if recorded.trim() != current {
+        println!(
+            "cargo:warning=the flatbuffers schemas do not match the committed bindings. \
+             If you edited a schema, regenerate with: FREENET_REGEN_FLATBUFFERS=1 cargo \
+             build (needs flatc {PINNED_FLATC}), and in typescript/: npm run flatc-schemas"
+        );
     }
+}
+
+/// A content fingerprint of `schemas`, or `None` if any cannot be read.
+///
+/// FNV-1a over each file's name and bytes, in the sorted order
+/// [`discover_schemas`] returns. Hand-rolled rather than pulled from a crate
+/// because a build dependency for this would be absurd, and deliberately not
+/// `DefaultHasher`, whose output is explicitly not stable across Rust releases
+/// — that would reintroduce the false positive this replaced, keyed on the
+/// contributor's toolchain instead of their clone order.
+fn fingerprint(schemas: &[PathBuf]) -> Option<String> {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+    };
+    for schema in schemas {
+        eat(schema.file_name()?.to_str()?.as_bytes());
+        eat(&std::fs::read(schema).ok()?);
+    }
+    Some(format!("{hash:016x}"))
 }
 
 /// The `x.y.z` of the `flatc` on `PATH`, or `None` when it cannot be run.
