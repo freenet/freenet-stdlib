@@ -215,10 +215,10 @@ jobs:
             exit 1
           fi
 
-      # The compiler and the runtime library have to be the same release.
+      # Keeps the RUST runtime on the same release as the pinned compiler.
       # Upstream ships flatc and the `flatbuffers` crate from one tag, and
       # generated code is only guaranteed against the runtime it was generated
-      # for -- so a pin on one of them alone is half a pin.
+      # for, so the two drifting apart is a real risk worth failing on.
       #
       # This is the gap the rest of the job cannot see. Everything else here
       # compares generated code to the SCHEMAS; nothing compared it to the
@@ -228,16 +228,30 @@ jobs:
       #
       # `Cargo.lock` is untracked, so the requirement in Cargo.toml is a range
       # and this reads what actually resolved rather than what was asked for.
-      - name: Verify the flatbuffers runtime matches the pinned compiler
+      #
+      # DELIBERATELY NOT a repo-wide rule, and the distinction matters: the
+      # npm runtime (typescript/package.json, ^25.9.23) is two majors ahead of
+      # the same pinned compiler that generates typescript/src, and its suite
+      # passes. So cross-major flatc/runtime mixing is evidently not fatal in
+      # practice, and this check is a guard on the half we control end to end
+      # rather than proof that a mismatch cannot work. Aligning the TypeScript
+      # side means moving PINNED_FLATC to 25.x and regenerating both languages,
+      # which is a deliberate change, not a side effect of this one.
+      - name: Verify the Rust flatbuffers runtime matches the pinned compiler
         working-directory: rust
         env:
           FLATC_VERSION: ${{ steps.flatc.outputs.version }}
         run: |
-          # Walks the resolve graph from freenet-stdlib to ITS direct
+          # Without pipefail the assignment below is fail-closed only because
+          # python happens to reject empty input; an extractor that tolerated it
+          # would silently degrade to comparing an empty string.
+          set -o pipefail
+          # Walks the resolve graph from freenet-stdlib to ITS direct, normal
           # flatbuffers dependency, rather than selecting every package with
           # that name. A second flatbuffers anywhere else in the graph -- a dev
           # dependency, another workspace member -- would otherwise fail this
-          # job even though our own runtime still matched the compiler.
+          # job even though the runtime the bindings compile against still
+          # matched the compiler.
           cat > "$RUNNER_TEMP/resolve_flatbuffers.py" <<'PY'
           import json, sys
 
@@ -248,11 +262,26 @@ jobs:
           node = next((n for n in meta["resolve"]["nodes"] if n["id"] == pkg["id"]), None)
           if node is None:
               sys.exit("no resolve node for freenet-stdlib")
-          ids = {d["pkg"] for d in node["deps"] if d["name"] == "flatbuffers"}
+          def is_normal(dep):
+              # Dev-only deps compile the tests, not the bindings.
+              kinds = dep.get("dep_kinds") or [{"kind": None}]
+              return any(k.get("kind") is None for k in kinds)
+
+          ids = {
+              d["pkg"]
+              for d in node["deps"]
+              if d["name"] == "flatbuffers" and is_normal(d)
+          }
           versions = sorted({p["version"] for p in meta["packages"] if p["id"] in ids})
           if not versions:
               sys.exit("freenet-stdlib has no resolved flatbuffers dependency")
-          print(" ".join(versions))
+          if len(versions) > 1:
+              sys.exit(
+                  "freenet-stdlib resolved MULTIPLE flatbuffers versions: "
+                  + ", ".join(versions)
+                  + " -- the bindings can only match one of them"
+              )
+          print(versions[0])
           PY
           # A failure anywhere in this pipeline aborts the step under `bash -e`,
           # and the script exits with a message rather than empty output, so
