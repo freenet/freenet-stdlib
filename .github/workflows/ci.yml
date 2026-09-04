@@ -233,12 +233,31 @@ jobs:
         env:
           FLATC_VERSION: ${{ steps.flatc.outputs.version }}
         run: |
-          resolved="$(cargo metadata --format-version 1 \
-            | python3 -c "import json,sys; print(' '.join(sorted({p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='flatbuffers'})))")"
-          if [ -z "$resolved" ]; then
-            echo "could not determine the resolved flatbuffers version" >&2
-            exit 1
-          fi
+          # Walks the resolve graph from freenet-stdlib to ITS direct
+          # flatbuffers dependency, rather than selecting every package with
+          # that name. A second flatbuffers anywhere else in the graph -- a dev
+          # dependency, another workspace member -- would otherwise fail this
+          # job even though our own runtime still matched the compiler.
+          cat > "$RUNNER_TEMP/resolve_flatbuffers.py" <<'PY'
+          import json, sys
+
+          meta = json.load(sys.stdin)
+          pkg = next((p for p in meta["packages"] if p["name"] == "freenet-stdlib"), None)
+          if pkg is None:
+              sys.exit("freenet-stdlib not present in cargo metadata")
+          node = next((n for n in meta["resolve"]["nodes"] if n["id"] == pkg["id"]), None)
+          if node is None:
+              sys.exit("no resolve node for freenet-stdlib")
+          ids = {d["pkg"] for d in node["deps"] if d["name"] == "flatbuffers"}
+          versions = sorted({p["version"] for p in meta["packages"] if p["id"] in ids})
+          if not versions:
+              sys.exit("freenet-stdlib has no resolved flatbuffers dependency")
+          print(" ".join(versions))
+          PY
+          # A failure anywhere in this pipeline aborts the step under `bash -e`,
+          # and the script exits with a message rather than empty output, so
+          # there is no path where an unset value compares equal and passes.
+          resolved="$(cargo metadata --format-version 1 | python3 "$RUNNER_TEMP/resolve_flatbuffers.py")"
           if [ "$resolved" != "$FLATC_VERSION" ]; then
             echo "flatbuffers runtime/compiler mismatch." >&2
             echo "  flatc (PINNED_FLATC in rust/build.rs): $FLATC_VERSION" >&2

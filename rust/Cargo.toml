@@ -16,7 +16,13 @@ byteorder = "1"
 blake3 = { version = "1", features = ["std", "traits-preview"] }
 bs58 = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["serde"] }
-flatbuffers = "24.3"
+# Floor raised to the exact release the bindings are generated with (see
+# PINNED_FLATC in build.rs). The caret still permits any later 24.x, but
+# 24.12.23 is the last one -- everything since is 25.x -- so in practice this
+# resolves to a single version for consumers as well as for CI. The previous
+# "24.3" also admitted OLDER 24.x releases, which would have compiled
+# 24.12.23-generated bindings against a runtime they were not generated for.
+flatbuffers = "24.12.23"
 futures = { version = "0.3", default-features = false }
 semver = { version = "1", default-features = false }
 serde = { version = "1", features = ["derive"] }
