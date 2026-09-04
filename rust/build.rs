@@ -34,13 +34,23 @@ use std::process::Command;
 
 /// The `flatc` release the checked-in bindings are generated with.
 ///
-/// Matches the `flatbuffers` runtime crate this package resolves to, which is
-/// what makes the pairing meaningful: upstream ships `flatc` and the Rust crate
-/// from the same tag. Note `Cargo.toml` declares `flatbuffers = "24.3"`, a caret
-/// range rather than an exact version, and `Cargo.lock` is not tracked — so the
-/// runtime floats within 24.x and can drift away from this pin without anything
-/// noticing. Nothing here detects that; the drift job compares generated code to
-/// the *schemas*, never to the runtime.
+/// Must equal the `flatbuffers` runtime crate this package resolves to.
+/// Upstream ships `flatc` and the Rust crate from one tag, and generated code
+/// is only guaranteed against the runtime it was generated for, so pinning one
+/// without the other is half a pin.
+///
+/// `Cargo.toml`'s floor is this same version, which makes the downgrade
+/// unrepresentable rather than merely observed: since 24.12.23 is the last
+/// 24.x, the caret range is a single point in practice, for consumers as well
+/// as here. The `flatbuffers_drift` job additionally reads what actually
+/// resolved and REPORTS a mismatch — reports, not prevents, for as long as
+/// `main` requires no status checks (see the note above).
+///
+/// Bumping this is a three-part change, and the parts are in different files:
+/// this constant, the `flatbuffers` floor in `Cargo.toml`, and `FLATC_SHA256`
+/// in `ci.yml` (the checksum cannot be derived, and a stale one fails as a
+/// supply-chain alarm rather than a forgotten hash). Regenerate in the same
+/// commit.
 const PINNED_FLATC: &str = "24.12.23";
 
 /// Where the `.fbs` files live, relative to this package.
