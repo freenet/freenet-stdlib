@@ -34,13 +34,16 @@ use std::process::Command;
 
 /// The `flatc` release the checked-in bindings are generated with.
 ///
-/// Matches the `flatbuffers` runtime crate this package resolves to, which is
-/// what makes the pairing meaningful: upstream ships `flatc` and the Rust crate
-/// from the same tag. Note `Cargo.toml` declares `flatbuffers = "24.3"`, a caret
-/// range rather than an exact version, and `Cargo.lock` is not tracked — so the
-/// runtime floats within 24.x and can drift away from this pin without anything
-/// noticing. Nothing here detects that; the drift job compares generated code to
-/// the *schemas*, never to the runtime.
+/// Must equal the `flatbuffers` runtime crate this package resolves to, and CI
+/// enforces that. Upstream ships `flatc` and the Rust crate from one tag, and
+/// generated code is only guaranteed against the runtime it was generated for,
+/// so pinning one without the other is half a pin.
+///
+/// `Cargo.toml` declares a caret range and `Cargo.lock` is untracked, so the
+/// resolved runtime is not fixed by the manifest. The `flatbuffers_drift` job
+/// therefore reads what actually resolved and fails on a mismatch, rather than
+/// trusting the requirement. Bumping this means bumping the crate and
+/// regenerating in the same change.
 const PINNED_FLATC: &str = "24.12.23";
 
 /// Where the `.fbs` files live, relative to this package.

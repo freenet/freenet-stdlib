@@ -215,6 +215,41 @@ jobs:
             exit 1
           fi
 
+      # The compiler and the runtime library have to be the same release.
+      # Upstream ships flatc and the `flatbuffers` crate from one tag, and
+      # generated code is only guaranteed against the runtime it was generated
+      # for -- so a pin on one of them alone is half a pin.
+      #
+      # This is the gap the rest of the job cannot see. Everything else here
+      # compares generated code to the SCHEMAS; nothing compared it to the
+      # runtime, so bumping `flatbuffers` in Cargo.toml while leaving
+      # PINNED_FLATC alone passed every check. That was not hypothetical: PR #115
+      # (flatbuffers 24.3 -> 25.12) was green on exactly this job.
+      #
+      # `Cargo.lock` is untracked, so the requirement in Cargo.toml is a range
+      # and this reads what actually resolved rather than what was asked for.
+      - name: Verify the flatbuffers runtime matches the pinned compiler
+        working-directory: rust
+        env:
+          FLATC_VERSION: ${{ steps.flatc.outputs.version }}
+        run: |
+          resolved="$(cargo metadata --format-version 1 \
+            | python3 -c "import json,sys; print(' '.join(sorted({p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='flatbuffers'})))")"
+          if [ -z "$resolved" ]; then
+            echo "could not determine the resolved flatbuffers version" >&2
+            exit 1
+          fi
+          if [ "$resolved" != "$FLATC_VERSION" ]; then
+            echo "flatbuffers runtime/compiler mismatch." >&2
+            echo "  flatc (PINNED_FLATC in rust/build.rs): $FLATC_VERSION" >&2
+            echo "  flatbuffers crate resolved to:         $resolved" >&2
+            echo >&2
+            echo "These must be the same release. Either bump PINNED_FLATC to match" >&2
+            echo "the crate and regenerate the bindings, or hold the crate at" >&2
+            echo "$FLATC_VERSION in rust/Cargo.toml." >&2
+            exit 1
+          fi
+
       # Deleting first makes a regeneration that quietly does nothing fail
       # closed. Deletions of tracked files ARE visible to the staleness check
       # below, whereas a no-op regeneration leaves a clean tree that reads as
