@@ -245,38 +245,59 @@ Two changes appending at the same anchor conflict there, and the resolution is
 almost always "keep both sides". That is right for the *content* and unsafe for
 the *delimiters*.
 
-Git's conflict regions are line ranges. They do not respect syntactic
-boundaries, so a closing `}` or an attribute can sit in the shared trailing
-context rather than inside either side, and concatenating both sides drops it.
-Observed while merging two test modules: `mod a_tests { … }`'s closing brace and
-the following `#[cfg(test)]` both vanished, because the brace belonged to the
-context and not to either alternative.
+Git's conflict regions are line ranges and do not respect syntactic boundaries,
+so the tokens that bind a construct together can end up in **shared context**,
+belonging to neither side. Two branches each appending a `#[test]` function to
+the same module produce exactly this:
 
-### What the compiler actually catches, measured
+```
+     3	    #[test]
+     4	    fn base() {}
+     5	    #[test]          <- leading context: shared, belongs to neither side
+     6	<<<<<<< HEAD
+     7	    fn tb() {}
+     8	=======
+     9	    fn ta() {}
+    10	>>>>>>> sideA
+    11	}                    <- trailing context: also shared
+```
 
-Do not guess at this — the intuitive answer is wrong in both directions.
+Keep both sides naively and you get `#[test] fn tb() {}` followed by a **bare**
+`fn ta() {}`. Braces balance. It compiles. It runs. `ta` is quietly no longer a
+test, and **the suite is green with one fewer test in it.**
 
-| What is lost | Does the test still run? | What you are told |
+**The leading case is the one that bites.** A lost trailing brace is a hard
+compile error — loud, immediate, unmissable. A lost leading attribute is not an
+error at all, because what remains is still valid code meaning something else.
+Same mechanism, opposite consequence, and only the harmless one announces itself.
+
+### What the compiler does and does not catch, measured
+
+Do not guess at this; the intuitive answer is wrong in both directions.
+
+| What is lost | Test still runs? | What you are told |
 |---|---|---|
-| `#[cfg(test)]` on the module | **Yes, all of them** | `cargo build` warns (`unused import`) — the module now compiles into the library |
-| `#[test]` on a function | **No** — silently absent from the run | `warning: function … is never used` (dead_code) |
-| The function or `mod` itself, absorbed into a neighbour | **No** | **Nothing.** There is no referent left to warn about |
-| A closing `}` | n/a | Hard error — but only because of where the token happened to sit |
+| `#[test]` on a function | **no** | a `dead_code` warning, buried in build output |
+| The `fn` or `mod`, absorbed into a neighbour | **no** | **nothing** — no referent is left to warn about |
+| `#[cfg(test)]` on the module | **yes, all of them** | `cargo build` warns (`unused import`) |
+| A closing `}` | n/a | hard error — by luck of where the token sat |
 
-So `#[cfg(test)]` is **not** a silent-loss mode: `#[test]` functions are collected
-by the harness regardless of it, and the attribute governs whether the module
-compiles *outside* test builds, not whether its tests run *inside* one. Losing it
-makes the build noisier, not quieter.
+Two things worth reading off that table.
 
-The genuinely dangerous rows are the middle two. A dropped `#[test]` does earn a
-`dead_code` warning, but the **test run itself stays green with a smaller count**,
-and that warning arrives in a wall of build output nobody reads on a green run. A
-function absorbed wholesale earns nothing at all.
+**Losing `#[cfg(test)]` is not a silent-loss mode**, though it is the natural
+thing to fear. `#[test]` functions are collected by the harness regardless of it;
+the attribute governs whether the module compiles *outside* test builds, not
+whether its tests run *inside* one. Losing it makes the build **noisier** — the
+test code is now compiled into the library and says so.
 
-The real silent-exclusion mechanism in this repo is a **target** gate, not a test
-gate: the twelve `list_subscriptions` guards sat behind
-`cfg(target_family = "wasm")`, which genuinely excludes them, and CI's wasm32 jobs
-build and lint without executing anything. That is the shape to fear.
+**Losing `#[test]` is the dangerous one even though it warns.** The warning is
+real but arrives in build output nobody reads on a green run, and the signal that
+matters — the test result — stays green. The number just gets smaller.
+
+The other genuine silent-exclusion mechanism in this repo is a **target** gate
+rather than a test gate: the twelve `list_subscriptions` guards sat behind
+`cfg(target_family = "wasm")`, which really does exclude them, and CI's wasm32
+jobs build and lint without executing anything.
 
 ### The check
 
@@ -288,7 +309,8 @@ cargo test --features … <module_name>     # per module, and count them
 
 Confirm each affected module still **executes**, by name and by count. A total
 that looks plausible is not evidence; the number you are checking against moved
-too.
+too. Losing `ta`'s `#[test]` above drops that module's count by exactly one,
+which is what this census sees and what nothing else does.
 
 ## A stacked PR gets no CI here, silently
 
