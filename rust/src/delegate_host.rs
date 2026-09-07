@@ -138,6 +138,72 @@ pub const MAX_SUBSCRIPTION_LIST_BYTES: i64 = 32 * 1024;
 // contract ids" above becomes a lie, silently.
 const _: () = assert!(MAX_SUBSCRIPTION_LIST_BYTES % 32 == 0);
 
+/// What a delegate's subscribe request actually achieved.
+///
+/// Returned by
+/// [`DelegateCtx::subscribe_contract_checked`](DelegateCtx::subscribe_contract_checked).
+/// It exists because `Result<(), _>` has only two states and the subscribe path
+/// has three: it can pin, it can register for notifications without pinning, or
+/// it can fail. Reusing `Err` for the middle case is wrong — delegates
+/// legitimately subscribe before the node has settled, and a usually-transient
+/// condition surfacing as a hard failure would break working delegates today.
+///
+/// This type is **not on the wire**. It is the decoded form of a non-negative
+/// `i64` returned by a host function, so adding a variant costs no bincode
+/// variant tag and cannot shift one.
+///
+/// See freenet-core#5565.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubscribeOutcome {
+    /// Registered **and** pinned: the node holds durable demand for this
+    /// contract on the delegate's behalf, so it enters the renewal set and is
+    /// exempt from eviction.
+    Pinned,
+    /// Registered for notifications, but **not pinned**.
+    ///
+    /// This is the case [`DelegateCtx::subscribe_contract`]'s doc describes at
+    /// length and cannot report: notifications are delivered only while some
+    /// *other* route keeps this node subscribed. Nothing holds the contract on
+    /// the delegate's behalf, so it can be evicted, after which notifications
+    /// stop with no further signal. Treat it as "retry later", not success.
+    NotPinned,
+    /// The node reported an outcome this build of the stdlib does not know.
+    ///
+    /// A newer node may report an outcome added after this delegate was
+    /// compiled. Treating it as [`Self::Pinned`] would reintroduce exactly the
+    /// silent over-claim this type exists to remove, so it is surfaced.
+    Unrecognized(i64),
+}
+
+impl SubscribeOutcome {
+    /// Discriminant for [`Self::Pinned`] on the host-function return channel.
+    pub const CODE_PINNED: i64 = 0;
+    /// Discriminant for [`Self::NotPinned`] on the host-function return channel.
+    pub const CODE_NOT_PINNED: i64 = 1;
+
+    /// Decode a non-negative host return code.
+    ///
+    /// Negative codes are host **errors** and never reach here; the caller
+    /// separates them first. An unrecognized non-negative code becomes
+    /// [`Self::Unrecognized`] rather than being folded into a known outcome.
+    pub fn from_code(code: i64) -> Self {
+        match code {
+            Self::CODE_PINNED => Self::Pinned,
+            Self::CODE_NOT_PINNED => Self::NotPinned,
+            other => Self::Unrecognized(other),
+        }
+    }
+
+    /// Whether the node recorded durable demand for the contract.
+    ///
+    /// False for [`Self::NotPinned`] and for [`Self::Unrecognized`] — an
+    /// outcome this build cannot interpret is not evidence of a pin.
+    pub fn is_pinned(self) -> bool {
+        matches!(self, Self::Pinned)
+    }
+}
+
 // ============================================================================
 // Host function declarations (WASM only)
 // ============================================================================
@@ -211,6 +277,14 @@ extern "C" {
     ) -> i64;
     /// Subscribe to contract updates. Returns 0 on success, or negative error code (i64).
     fn __frnt__delegate__subscribe_contract(id_ptr: i64, id_len: i32) -> i64;
+
+    /// Subscribe and report the *outcome*, not just success/failure.
+    ///
+    /// Returns a non-negative [`SubscribeOutcome`] discriminant, or a negative
+    /// error code. Distinct from `__frnt__delegate__subscribe_contract`, whose
+    /// `i64` is collapsed to a `bool` by its wrapper and so cannot express an
+    /// outcome that is neither success nor failure. See freenet-core#5565.
+    fn __frnt__delegate__subscribe_contract_checked(id_ptr: i64, id_len: i32) -> i64;
     /// Byte length of this delegate's serialized subscription list — always a
     /// multiple of 32, and never more than [`MAX_SUBSCRIPTION_LIST_BYTES`].
     /// Returns the count to allocate, or a negative error code (i64). Zero
@@ -691,6 +765,20 @@ impl DelegateCtx {
     /// Returns `true` on success, `false` if the contract is unknown or on
     /// error. Note that the contract must already be in the node's local store;
     /// subscribing does not fetch it.
+    ///
+    /// # The `bool` cannot express the case above
+    ///
+    /// Everything this doc says about demand is invisible in the return value:
+    /// `true` means "the node accepted the registration", not "the contract is
+    /// pinned". The `bool` also collapses every negative error code into
+    /// `false`, so a transient failure is indistinguishable from an unknown
+    /// contract.
+    ///
+    /// [`subscribe_contract_checked`](Self::subscribe_contract_checked) reports
+    /// the outcome instead, and is what a delegate should use when its
+    /// correctness depends on continuing to receive notifications. This method
+    /// is deliberately left behaviourally unchanged, because altering what it
+    /// returns would change the behaviour of already-deployed delegate WASM.
     pub fn subscribe_contract(&mut self, instance_id: &[u8; 32]) -> bool {
         #[cfg(target_family = "wasm")]
         {
@@ -702,6 +790,68 @@ impl DelegateCtx {
         {
             let _ = instance_id;
             false
+        }
+    }
+
+    /// Subscribe to contract updates, and learn whether the subscription
+    /// actually pinned the contract.
+    ///
+    /// This is [`subscribe_contract`](Self::subscribe_contract) with the
+    /// outcome preserved instead of collapsed into a `bool`. Use it whenever
+    /// the delegate's correctness depends on continuing to receive
+    /// notifications — a missed notification on a payment address is money, and
+    /// the failure is otherwise indistinguishable from "nothing has happened
+    /// yet".
+    ///
+    /// # Compatibility
+    ///
+    /// This is a **host function**, not a wire-format variant, so it costs no
+    /// bincode variant tag and is additive in both directions:
+    ///
+    /// - A delegate that does not call it is completely unaffected; host
+    ///   imports resolve by name at module instantiation, so an unimported
+    ///   function costs nothing.
+    /// - A delegate that *does* call it, on a node too old to provide it, fails
+    ///   to **instantiate** with a named missing-import error — loudly, at load
+    ///   time, before the delegate has touched any state. A wire variant
+    ///   instead fails mid-protocol at bincode decode, with no way for the
+    ///   delegate to have checked first.
+    ///
+    /// Requires a node providing `__frnt__delegate__subscribe_contract_checked`
+    /// in the `freenet_delegate_contracts` namespace. No released node does
+    /// yet; the host half is freenet-core#5565.
+    ///
+    /// # Errors
+    ///
+    /// `Err(code)` carries the negative host error code and means the
+    /// subscription did not happen at all. A call that succeeded but did not
+    /// pin is `Ok(SubscribeOutcome::NotPinned)`, **not** an error — collapsing
+    /// those two is the defect this method exists to fix.
+    ///
+    /// Off-WASM this always returns `Err(ERR_NOT_IN_PROCESS)` rather than a
+    /// plausible-looking success, so a host-side test cannot read an outcome
+    /// out of a stub that never subscribed to anything.
+    pub fn subscribe_contract_checked(
+        &mut self,
+        instance_id: &[u8; 32],
+    ) -> Result<SubscribeOutcome, i32> {
+        #[cfg(target_family = "wasm")]
+        {
+            let code = unsafe {
+                __frnt__delegate__subscribe_contract_checked(instance_id.as_ptr() as i64, 32)
+            };
+            if code < 0 {
+                // Clamp rather than truncate: an i64 error code outside i32
+                // range is a host bug, and `as i32` would silently alias it
+                // onto a different, meaningful code.
+                return Err(i32::try_from(code).unwrap_or(i32::MIN));
+            }
+            Ok(SubscribeOutcome::from_code(code))
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = instance_id;
+            Err(error_codes::ERR_NOT_IN_PROCESS)
         }
     }
 
@@ -1237,6 +1387,73 @@ mod list_subscriptions_guard_tests {
             Ok(288),
             "the import contract requires ERR_BUFFER_TOO_SMALL rather than \
              truncation, so a short write means the set shrank"
+        );
+    }
+}
+
+#[cfg(test)]
+mod subscribe_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn known_codes_decode_to_their_outcomes() {
+        assert_eq!(
+            SubscribeOutcome::from_code(SubscribeOutcome::CODE_PINNED),
+            SubscribeOutcome::Pinned
+        );
+        assert_eq!(
+            SubscribeOutcome::from_code(SubscribeOutcome::CODE_NOT_PINNED),
+            SubscribeOutcome::NotPinned
+        );
+    }
+
+    /// The two discriminants are part of the host ABI. Changing either
+    /// reassigns the meaning of a value already returned by deployed nodes, so
+    /// they are pinned rather than left to whatever order the enum happens to
+    /// be written in.
+    #[test]
+    fn outcome_codes_are_pinned() {
+        assert_eq!(SubscribeOutcome::CODE_PINNED, 0);
+        assert_eq!(SubscribeOutcome::CODE_NOT_PINNED, 1);
+    }
+
+    /// An outcome added by a newer node must not be read as a pin. This is the
+    /// whole point of the type: the failure being removed is a delegate
+    /// concluding it holds durable interest when it does not.
+    #[test]
+    fn an_unknown_outcome_is_not_read_as_pinned() {
+        let future = SubscribeOutcome::from_code(7);
+        assert_eq!(future, SubscribeOutcome::Unrecognized(7));
+        assert!(
+            !future.is_pinned(),
+            "an outcome this build cannot interpret must never report as pinned"
+        );
+    }
+
+    #[test]
+    fn only_pinned_reports_pinned() {
+        assert!(SubscribeOutcome::Pinned.is_pinned());
+        assert!(!SubscribeOutcome::NotPinned.is_pinned());
+        assert!(!SubscribeOutcome::Unrecognized(1_000).is_pinned());
+    }
+
+    /// Off-WASM the host function does not exist, so the stub must report an
+    /// error and never a plausible-looking outcome. A stub returning
+    /// `Ok(Pinned)` would let a host-side test read a pin out of a call that
+    /// subscribed to nothing — the same "absence reported as fact" defect the
+    /// method exists to remove, reintroduced in the test harness. This mirrors
+    /// `list_subscriptions_off_wasm_is_an_error_not_an_empty_list`.
+    #[test]
+    fn the_off_wasm_stub_reports_an_error_not_an_outcome() {
+        // SAFETY: off-WASM every method on this handle is a stub that touches
+        // no runtime state; the safety contract concerns the WASM execution
+        // environment, which does not exist in a host-side test.
+        let mut ctx = unsafe { DelegateCtx::__new() };
+        let result = ctx.subscribe_contract_checked(&[0u8; 32]);
+        assert_eq!(
+            result,
+            Err(error_codes::ERR_NOT_IN_PROCESS),
+            "the off-WASM stub must not fabricate a subscribe outcome"
         );
     }
 }

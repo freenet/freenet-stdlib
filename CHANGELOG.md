@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+### Added — a delegate can learn whether its subscribe actually pinned
+
+`DelegateCtx::subscribe_contract`'s doc now describes at length that a subscribe
+may register no demand, and that **a delegate cannot detect which it got**. This
+adds the way to detect it.
+
+`true` from `subscribe_contract` means "the node accepted the registration", not
+"the contract is pinned". A registration accepted without durable demand is
+reported identically to one that pinned, so the delegate believes it holds
+durable interest and does not — the contract stays evictable and notifications
+later stop at a moment the delegate never observes. On a payment address that is
+money. See freenet-core#5565.
+
+- `DelegateCtx::subscribe_contract_checked(&[u8; 32]) -> Result<SubscribeOutcome, i32>`
+- `SubscribeOutcome` — `Pinned`, `NotPinned`, or `Unrecognized(i64)`.
+  `is_pinned()` is true only for `Pinned`: an outcome a given build cannot
+  interpret is not evidence of a pin.
+
+`subscribe_contract` is left **behaviourally unchanged**, deliberately. Altering
+what it returns would change the behaviour of already-deployed delegate WASM.
+
+**This is not a wire-format change.** It adds a host function and a plain Rust
+type, so it consumes no bincode variant tag and cannot shift one — additive in
+both directions, which a new enum variant would not be. A delegate that does not
+import it is unaffected; one that does, on a node too old to provide it, fails to
+**instantiate** with a named missing-import error rather than failing
+mid-protocol at decode. Same reasoning as `list_subscriptions`.
+
+Note this does **not** duplicate `list_subscriptions`: that reads the
+subscription set, which contains accepted-but-unpinned registrations, so
+introspection answers "what did I register?" and this answers "what actually got
+pinned?".
+
+The two outcome discriminants (`Pinned = 0`, `NotPinned = 1`) are part of the
+host ABI once a node returns them, and are pinned by test. Requires a node
+providing `__frnt__delegate__subscribe_contract_checked` in the
+`freenet_delegate_contracts` namespace. **No released node does yet** — the host
+half is freenet-core#5565.
+
 ### Added
 
 - **`OutboundDelegateMsg::UnsubscribeContractRequest` and
