@@ -263,18 +263,42 @@ pub const MIN_WAKEUP_DELAY: std::time::Duration = std::time::Duration::from_secs
 
 /// Raise `after` to [`MIN_WAKEUP_DELAY`] if it is below it.
 ///
-/// Split out as a pure function so it is exercised by host-side `cargo test`.
-/// The call site lives in [`DelegateCtx::schedule_wakeup`], whose body is
-/// `cfg(target_family = "wasm")` and therefore **never runs in CI** — the
-/// wasm32 jobs build and lint but execute nothing. A clamp that only exists
-/// inside that branch would be type-checked and unverified, which reads as
-/// coverage and provides none.
+/// Pure, so host-side `cargo test` can exercise it. Used by
+/// [`prepare_wakeup`], which is where the boundary actually sits: everything
+/// up to and including the conversion to milliseconds runs on **both** targets,
+/// and only the `extern "C"` call beneath it is `cfg(target_family = "wasm")`
+/// and therefore never executed by CI — the wasm32 jobs build and lint but run
+/// nothing.
 pub fn clamp_wakeup_delay(after: std::time::Duration) -> std::time::Duration {
     if after < MIN_WAKEUP_DELAY {
         MIN_WAKEUP_DELAY
     } else {
         after
     }
+}
+
+/// Validate and normalise the arguments to [`DelegateCtx::schedule_wakeup`],
+/// returning the delay in milliseconds for the host call.
+///
+/// This is the whole of that function except the FFI call itself, split out so
+/// the parts that CI can execute are executed. It covers the tag-size refusal,
+/// the [`MIN_WAKEUP_DELAY`] clamp, **the order of the two**, and the saturating
+/// conversion to milliseconds — the last of which otherwise lives inside the
+/// `cfg(target_family = "wasm")` block and would never run under test.
+///
+/// `schedule_wakeup` is a thin wrapper over this, so the wiring cannot be
+/// deleted without breaking compilation. That matters: an earlier arrangement
+/// clamped in the wrapper and discarded the result on the host target, so
+/// removing the clamp entirely left the suite green.
+fn prepare_wakeup(after: std::time::Duration, tag: &[u8]) -> Result<i64, i64> {
+    if tag.len() > MAX_WAKEUP_TAG_BYTES {
+        return Err(error_codes::ERR_INVALID_PARAM as i64);
+    }
+    let after = clamp_wakeup_delay(after);
+    // Saturate rather than wrap: `as_millis` is u128, and a delay past
+    // i64::MAX milliseconds is ~292 million years, so clamping loses nothing a
+    // caller could have meant.
+    Ok(i64::try_from(after.as_millis()).unwrap_or(i64::MAX))
 }
 
 // ============================================================================
@@ -1121,20 +1145,12 @@ impl DelegateCtx {
     /// across a restart — see [`MIN_WAKEUP_DELAY`] for why that is stated as an
     /// obligation rather than a guarantee.
     pub fn schedule_wakeup(&mut self, after: std::time::Duration, tag: &[u8]) -> Result<(), i64> {
-        if tag.len() > MAX_WAKEUP_TAG_BYTES {
-            return Err(error_codes::ERR_INVALID_PARAM as i64);
-        }
-        // Enforce the floor here, where the constant lives, rather than only
-        // documenting it as a host behaviour. Clamped up rather than rejected:
-        // asking for "as soon as possible" is a reasonable thing to mean, and
-        // an error would push every caller into writing this line themselves.
-        let after = clamp_wakeup_delay(after);
+        // Everything except the FFI call lives in `prepare_wakeup`, which runs
+        // on both targets and is unit-tested. Binding its result here is what
+        // wires it in: delete this line and the code does not compile.
+        let after_millis = prepare_wakeup(after, tag)?;
         #[cfg(target_family = "wasm")]
         {
-            // Saturate rather than wrap: `as_millis` is u128 and a delay past
-            // i64::MAX milliseconds is ~292 million years, so clamping loses
-            // nothing a caller could have meant.
-            let after_millis = i64::try_from(after.as_millis()).unwrap_or(i64::MAX);
             let code = unsafe {
                 __frnt__delegate__schedule_wakeup(
                     after_millis,
@@ -1149,7 +1165,7 @@ impl DelegateCtx {
         }
         #[cfg(not(target_family = "wasm"))]
         {
-            let _ = after;
+            let _ = after_millis;
             Err(error_codes::ERR_NOT_IN_PROCESS as i64)
         }
     }
@@ -1660,6 +1676,9 @@ mod subscribe_outcome_tests {
             "the off-WASM stub must not fabricate a subscribe outcome"
         );
     }
+}
+
+#[cfg(test)]
 mod schedule_wakeup_guard_tests {
     use super::*;
 
@@ -1714,6 +1733,56 @@ mod schedule_wakeup_guard_tests {
             ctx.schedule_wakeup(std::time::Duration::from_secs(60), b"rotate"),
             Err(error_codes::ERR_NOT_IN_PROCESS as i64),
             "the off-WASM stub must not report a scheduled wakeup"
+        );
+    }
+
+    /// The prologue as one unit: cap, clamp, ordering, and the millisecond
+    /// conversion. `schedule_wakeup` is a thin wrapper over `prepare_wakeup`,
+    /// so these cover everything in that function except the `extern "C"` call.
+    #[test]
+    fn prepare_returns_the_clamped_delay_in_milliseconds() {
+        assert_eq!(
+            prepare_wakeup(std::time::Duration::ZERO, b"t"),
+            Ok(MIN_WAKEUP_DELAY.as_millis() as i64),
+            "a zero delay must reach the host as the floor, not as zero"
+        );
+        assert_eq!(
+            prepare_wakeup(std::time::Duration::from_secs(604_800), b"t"),
+            Ok(604_800_000),
+            "a week must survive the conversion unchanged"
+        );
+    }
+
+    /// An oversized tag is refused even when the delay *also* needs correcting,
+    /// so the two checks cannot mask each other.
+    ///
+    /// This deliberately does **not** claim to pin their order. Swapping them
+    /// is an equivalent mutant — verified: moving the tag check below the clamp
+    /// leaves all seven tests passing — because `clamp_wakeup_delay` is pure,
+    /// infallible, and its result is discarded on the error path. There is no
+    /// observation that distinguishes the two orders, so no test can, and an
+    /// ordering test here would be a name asserting coverage it does not have.
+    #[test]
+    fn an_oversized_tag_is_refused_even_when_the_delay_also_needs_clamping() {
+        let too_big = vec![0u8; MAX_WAKEUP_TAG_BYTES + 1];
+        assert_eq!(
+            prepare_wakeup(std::time::Duration::ZERO, &too_big),
+            Err(error_codes::ERR_INVALID_PARAM as i64),
+            "an oversized tag must be refused even when the delay also needs correcting"
+        );
+    }
+
+    /// `as_millis` is `u128`. Saturating rather than wrapping is what stops an
+    /// absurd delay becoming a small or negative one at the FFI boundary — a
+    /// wrap here would turn "never" into "immediately". This conversion sat
+    /// inside the `cfg(target_family = "wasm")` block before `prepare_wakeup`
+    /// existed, so nothing executed it.
+    #[test]
+    fn an_absurd_delay_saturates_rather_than_wrapping() {
+        assert_eq!(
+            prepare_wakeup(std::time::Duration::MAX, b"t"),
+            Ok(i64::MAX),
+            "a delay past i64::MAX ms must saturate, never wrap to a small value"
         );
     }
 
