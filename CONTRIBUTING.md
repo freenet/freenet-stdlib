@@ -16,6 +16,10 @@ We welcome contributions to Freenet! Here's what you need to know.
 - Run `cargo fmt`, `cargo clippy --all-targets`, and `cargo test` before pushing.
 - **Discard `rust/src/generated/` before committing, unless changing it is the point of your PR.** Building regenerates those FlatBuffers files with whatever `flatc` you have locally, which is usually not the one that produced the checked-in versions — so a build leaves thousands of lines of unrelated churn in your working tree. `git checkout -- rust/src/generated/` clears it. Stage explicit paths rather than `git add -A`, or a toolchain-version downgrade rides into your PR unnoticed and unreviewed.
 - Keep PRs focused — one logical change per PR.
+- **Changing the host↔delegate wire format?** Read [WIRE-FORMAT.md](WIRE-FORMAT.md)
+  first. Appending an enum variant and appending a struct field break in
+  *opposite* directions, `#[non_exhaustive]` does nothing on the wire, and a
+  deployed delegate's decoder cannot be fixed after release.
 
 ## AI-Assisted Contributions
 
