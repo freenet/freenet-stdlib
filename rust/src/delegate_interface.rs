@@ -567,6 +567,34 @@ pub enum InboundDelegateMsg<'a> {
     // Appended in 0.10.0 at tag 8. New variants go at the END, never inserted —
     // see the wire-format note on this enum.
     UnsubscribeContractResponse(UnsubscribeContractResponse),
+    /// Delivered by the host when a wakeup previously requested via
+    /// `DelegateCtx::schedule_wakeup` fires. `tag` is the opaque
+    /// value the delegate supplied when scheduling, echoed back verbatim so
+    /// the delegate can identify which wakeup fired. Owned (`'static`).
+    ///
+    /// # What the context cache holds during a wakeup
+    ///
+    /// Nothing the delegate should read. freenet-core's delegate context cache
+    /// is keyed **per delegate**, not per conversation, and entries are pruned
+    /// after `DELEGATE_CONTEXT_TTL` (10 minutes). Two consequences, both
+    /// arguing the same way:
+    ///
+    /// - Any wakeup worth scheduling is far longer than 10 minutes, so whatever
+    ///   context existed when it was scheduled is **gone** by the time it fires.
+    /// - If the delegate happens to have a live context from some *other*
+    ///   in-flight exchange inside that window, it belongs to that exchange.
+    ///   Reading it during a wakeup would be reading another conversation's
+    ///   working state.
+    ///
+    /// This is why the variant carries no `DelegateContext`: there is no
+    /// coherent value to put in it. A delegate needing state across a wakeup
+    /// reads it from its secrets, which is what core's own cache doc
+    /// recommends for exactly this case.
+    ///
+    /// Appended at tag **9**, after `UnsubscribeContractResponse` at tag 8.
+    WakeupFired {
+        tag: Vec<u8>,
+    },
 }
 
 impl InboundDelegateMsg<'_> {
@@ -593,6 +621,7 @@ impl InboundDelegateMsg<'_> {
             InboundDelegateMsg::UnsubscribeContractResponse(r) => {
                 InboundDelegateMsg::UnsubscribeContractResponse(r)
             }
+            InboundDelegateMsg::WakeupFired { tag } => InboundDelegateMsg::WakeupFired { tag },
         }
     }
 
@@ -626,10 +655,29 @@ impl InboundDelegateMsg<'_> {
                 context,
                 ..
             }) => Some(context),
-            // No wildcard, deliberately. Every variant carries a context, and
-            // the `_ => None` that used to sit here is what let UserResponse go
-            // unhandled and silently report "no context". Exhaustive means a
-            // new variant is a compile error here instead.
+            // `WakeupFired` carries no `DelegateContext`, so `None` here is
+            // the honest answer rather than a missing arm. The reasoning lives
+            // on the variant itself -- see `InboundDelegateMsg::WakeupFired`,
+            // which explains both why a wakeup is not a reply and why the
+            // context cache could not supply a coherent value anyway. Kept in
+            // one place deliberately: a maintainer editing this accessor should
+            // not meet a second, older version of the argument.
+            InboundDelegateMsg::WakeupFired { .. } => None,
+            // No wildcard, deliberately. The `_ => None` that used to sit here
+            // is what let UserResponse go unhandled and silently report "no
+            // context". Exhaustive means a new variant is a compile error here
+            // instead — which is how `WakeupFired` above came to be considered
+            // explicitly rather than defaulting into the wildcard.
+            //
+            // Correcting a premise this crate briefly asserted: "every variant
+            // carries a context" was already false before `WakeupFired`, and
+            // false about *this accessor* rather than about the structs. In
+            // 0.8.5 this match listed seven variants, omitted `UserResponse`
+            // — which does have a context field — and ended in `_ => None`. So
+            // the claim was true of the types and wrong about the code. That
+            // is why the `WakeupFired` exemption in the test asserts
+            // `get_context()` is `None`: it pins what this function does, not
+            // what the struct definitions look like.
         }
     }
 
@@ -663,10 +711,12 @@ impl InboundDelegateMsg<'_> {
                 context,
                 ..
             }) => Some(context),
-            // No wildcard, deliberately. Every variant carries a context, and
-            // the `_ => None` that used to sit here is what let UserResponse go
-            // unhandled and silently report "no context". Exhaustive means a
-            // new variant is a compile error here instead.
+            // `WakeupFired` carries no context; see `get_context`.
+            InboundDelegateMsg::WakeupFired { .. } => None,
+            // No wildcard, deliberately. The `_ => None` that used to sit here
+            // is what let UserResponse go unhandled and silently report "no
+            // context". Exhaustive means a new variant is a compile error here
+            // instead.
         }
     }
 }
@@ -853,10 +903,7 @@ pub enum OutboundDelegateMsg {
     SubscribeContractRequest(SubscribeContractRequest),
     SendDelegateMessage(DelegateMessage),
     // Appended in 0.10.0 at tag 8. New variants go at the END, never inserted —
-    // see the wire-format note on this enum. freenet-stdlib#82 also appends
-    // here (ScheduleWakeup) and must therefore move to tag 9; at the time of
-    // writing that PR still declares tag 8, so whichever lands second will trip
-    // the pin, which is the intended outcome rather than a surprise.
+    // see the wire-format note on this enum.
     UnsubscribeContractRequest(UnsubscribeContractRequest),
 }
 
@@ -1462,6 +1509,35 @@ mod message_origin_tests {
         let decoded: InboundDelegateMsg<'_> = bincode::deserialize(&encoded).unwrap();
         assert!(matches!(decoded, InboundDelegateMsg::ApplicationMessage(_)));
     }
+
+    /// Wire-format pin for [`InboundDelegateMsg::WakeupFired`]. It is the 10th
+    /// variant (declaration index 9), so its bincode tag must be `9` (4-byte
+    /// LE) — it sits behind `UnsubscribeContractResponse` at tag 8. Once
+    /// shipped this tag is frozen: reordering or inserting a variant ahead of
+    /// it would silently redirect a host's wakeup delivery to the wrong variant
+    /// on a delegate compiled against this stdlib.
+    #[test]
+    fn inbound_wakeup_fired_wire_format_is_stable() {
+        let msg = InboundDelegateMsg::WakeupFired {
+            tag: vec![0xAA, 0xBB],
+        };
+        let encoded = bincode::serialize(&msg).unwrap();
+
+        // tag 9 (u32 LE) + Vec<u8> len (u64 LE = 2) + the two tag bytes.
+        let mut expected = vec![9u8, 0, 0, 0];
+        expected.extend_from_slice(&[2, 0, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[0xAA, 0xBB]);
+        assert_eq!(
+            encoded, expected,
+            "WakeupFired must stay at variant tag 9 with a stable payload layout"
+        );
+
+        let decoded: InboundDelegateMsg<'_> = bincode::deserialize(&encoded).unwrap();
+        assert!(matches!(
+            decoded,
+            InboundDelegateMsg::WakeupFired { tag } if tag == vec![0xAA, 0xBB]
+        ));
+    }
 }
 
 /// Executable evidence for the wire-compatibility rules documented on
@@ -1482,7 +1558,7 @@ mod delegate_wire_compat {
     /// The number of variants each enum has **today**. These are not free
     /// parameters: see `an_unpinned_variant_fails_this_test`, which is what
     /// makes them fail closed rather than drift.
-    const INBOUND_VARIANT_COUNT: u32 = 9;
+    const INBOUND_VARIANT_COUNT: u32 = 10;
     const OUTBOUND_VARIANT_COUNT: u32 = 9;
 
     fn instance_id() -> ContractInstanceId {
@@ -1531,6 +1607,7 @@ mod delegate_wire_compat {
             InboundDelegateMsg::ContractNotification(_) => 6,
             InboundDelegateMsg::DelegateMessage(_) => 7,
             InboundDelegateMsg::UnsubscribeContractResponse(_) => 8,
+            InboundDelegateMsg::WakeupFired { .. } => 9,
         }
     }
 
@@ -1596,6 +1673,9 @@ mod delegate_wire_compat {
                 result: Ok(()),
                 context: ctx.clone(),
             }),
+            InboundDelegateMsg::WakeupFired {
+                tag: vec![0xAA, 0xBB],
+            },
         ]
     }
 
@@ -1978,14 +2058,28 @@ mod delegate_wire_compat {
     #[test]
     fn every_inbound_variant_with_a_context_exposes_it() {
         for mut msg in every_inbound() {
-            let carries_context = !matches!(msg, InboundDelegateMsg::ApplicationMessage(_));
             let tag = pinned_inbound_tag(&msg);
 
-            // ApplicationMessage has a context field too, so in fact every
-            // variant present today should expose one. Asserted uniformly
-            // rather than by an allow-list, so the question a new variant
-            // raises is "does it have a context", not "is it in the list".
-            let _ = carries_context;
+            // `WakeupFired` is the one inbound variant with no context field,
+            // and it is named here rather than skipped by a wildcard, matching
+            // the outbound test below. See `get_context` for why it has none:
+            // a context is per-conversation working state handed back on a
+            // reply, and a wakeup opens a conversation rather than continuing
+            // one. Carrying one would commit the host to persisting delegate
+            // context across arbitrary wall-clock time, which is #5467 Phase 3.
+            //
+            // This asserts the accessor returns `None`, not that the struct
+            // lacks a field. That distinction is the point: the claim "every
+            // variant carries a context" was already false of this accessor in
+            // 0.8.5, where it omitted `UserResponse` behind a `_ => None`
+            // wildcard. Pin the behaviour, not the shape.
+            if matches!(msg, InboundDelegateMsg::WakeupFired { .. }) {
+                assert!(
+                    msg.get_context().is_none() && msg.get_mut_context().is_none(),
+                    "WakeupFired is documented as carrying no context; if it grew one,                      remove this exemption rather than widening it"
+                );
+                continue;
+            }
 
             assert!(
                 msg.get_context().is_some(),

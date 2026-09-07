@@ -204,6 +204,107 @@ half is freenet-core#5565.
   only reason a field could be appended to it without corrupting anything after
   it. That property is now pinned rather than assumed.
 
+### Added — scheduled-wakeup primitive for delegates
+
+Lets an always-on delegate run periodic background work (key rotation, TTL
+pruning, scheduled publication) without a connected UI, instead of pushing that
+work into a client sync loop that stops when the tab closes.
+Driving use case: freenet/river#228. Host half: freenet/freenet-core#3972.
+
+- `DelegateCtx::schedule_wakeup(after: Duration, tag: &[u8]) -> Result<(), i64>`
+  — a **host function**, in the `freenet_delegate_management` namespace.
+- `InboundDelegateMsg::WakeupFired { tag: Vec<u8> }` — an inbound wire variant
+  at **tag 9**, delivered when a scheduled wakeup fires.
+- `MAX_WAKEUP_TAG_BYTES` (128) and `MIN_WAKEUP_DELAY` (1s).
+
+#### The outbound half is a host function, not a wire variant
+
+This is the asymmetry that matters, and it is deliberate.
+
+A delegate's outbound messages are serialized as **one batch** and decoded whole
+by the host. An outbound variant the host does not recognize therefore fails the
+**entire batch** — so a delegate built against this release, returning
+`[ApplicationMessage(reply), ScheduleWakeup{..}]` to a current-release node,
+would have **the reply discarded along with the wakeup**, and the user's action
+would silently do nothing. That is the direction ordinary rollout produces every
+time, because stdlib ships before core by policy.
+
+A host function fails the other way: an unimported function fails at
+**instantiation**, with a named missing import — loudly, once, at load, rather
+than silently and per message.
+
+`WakeupFired` stays an inbound variant because that direction has no equivalent
+hazard: a delegate that cannot schedule never receives one. The rule this
+follows is in `WIRE-FORMAT.md` — prefer a host function where the answer is
+synchronous, and add an inbound variant only where the host sends it strictly in
+reply to something an older delegate cannot have sent.
+
+#### `after` is a delay, not a deadline
+
+The host measures it from when it receives the call. A delay needs no clock on
+the delegate side, and if absolute scheduling is ever wanted it is `target - now`
+in terms of this same argument — so nothing is foreclosed. The guarantee is
+"not before"; nothing promises precision.
+
+`schedule_wakeup` **clamps `after` up to `MIN_WAKEUP_DELAY` itself**, so
+`Duration::ZERO` is a one-second delay rather than a tight wake loop — a delegate
+re-arming inside its own handler would otherwise spin the node.
+
+`tag` is capped at `MAX_WAKEUP_TAG_BYTES`, applied before the host call.
+
+**Both of those are fail-fast convenience for well-behaved callers, not bounds.**
+`__frnt__delegate__schedule_wakeup` is an ordinary WASM import: a delegate can
+declare its own `extern "C"` block and pass a 10 MB tag, or a zero delay, without
+ever constructing a `DelegateCtx`. The guest controls its own imports, so no
+guest-side check can bound what the host receives. **Only the host can enforce
+either, and no host does yet** — freenet-core#3972. The same is true of the
+per-delegate cap on how many wakeups may be pending, which is an obligation on
+#3972 and not something that exists today.
+
+That last point matters for reading the tag cap's rationale: a size cap is needed
+*in addition to* a count cap, and neither is in place yet.
+
+#### `WakeupFired` carries no context, and the cache explains why
+
+freenet-core's delegate context cache is keyed **per delegate**, not per
+conversation, and prunes after 10 minutes. Any wakeup worth scheduling outlives
+that, so the context that existed at scheduling time is gone; and if a live
+context happens to exist from another in-flight exchange, it belongs to that
+exchange. There is no coherent value to put in the field. State that must
+survive a wakeup belongs in the delegate's secrets.
+
+#### Durability is a requirement on the host, and is unimplemented
+
+A week-long delay is only useful if pending wakeups survive a node restart.
+**No host does this today**; freenet-core#3972 must implement it, and nothing in
+this crate can make it true. Stated as an obligation rather than a guarantee
+because the precedent runs the other way — `DELEGATE_SUBSCRIPTIONS`, the one
+comparable piece of per-delegate host state, is in-memory and a restart discards
+it entirely.
+
+#### Compatibility
+
+`WakeupFired` is **appended at tag 9**, behind the unsubscribe pair at tag 8, so
+no existing variant's bincode tag moves and every message a deployed delegate
+already understood still decodes. `inbound_wakeup_fired_wire_format_is_stable`
+pins its tag and full byte layout.
+
+The two directions are not symmetric:
+
+- **Old delegate -> new host**: safe, and now safe by construction rather than
+  by convention — the scheduling half is a host import, so an older delegate
+  simply does not import it. There is no outbound wire variant to mis-decode,
+  which is the whole point of the conversion above.
+- **New host -> old delegate**: `WakeupFired` at a tag an older delegate does not
+  know is a **hard bincode decode error**, not a skipped message. It is safe only
+  because the host sends it solely to a delegate that scheduled one, and a
+  delegate that cannot import `schedule_wakeup` cannot have scheduled. That
+  opt-in-by-construction property is a **requirement on freenet-core#3972**, not
+  a property of the wire format.
+- The host function itself is additive both ways: a delegate that does not import
+  it is unaffected, and one that does fails to **instantiate** on too old a node
+  with a named missing-import error.
+
 ### TypeScript SDK 0.4.0 — Breaking (npm package `@freenetorg/freenet-stdlib`)
 
 The npm package is versioned separately from the Rust crate. This release

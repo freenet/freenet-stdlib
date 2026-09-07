@@ -221,6 +221,85 @@ impl SubscribeOutcome {
         matches!(self, Self::Pinned)
     }
 }
+/// Largest `tag` [`DelegateCtx::schedule_wakeup`] will send, in bytes.
+///
+/// freenet-core#3972 is **expected to** bound how many wakeups a delegate may
+/// hold pending; **no host does today**, so that count cap is an obligation and
+/// not a premise. Even once it exists, a count cap alone does not bound memory:
+/// `tag` would be an unbounded byte channel sitting behind a limit that looks
+/// bounded, which is the same defect as a cache capped by entry count while
+/// holding caller-controlled values. Hence a size cap as well as a count cap.
+///
+/// Applied by [`DelegateCtx::schedule_wakeup`] before it calls the host. That
+/// is fail-fast convenience for well-behaved callers, **not** a bound: a
+/// delegate can declare the import itself and bypass the wrapper, so only the
+/// host can enforce this.
+///
+/// 128 bytes comfortably holds a purpose string, a UUID, or a hash. A tag is an
+/// identifier the delegate chose; it is not a place to carry state, which is
+/// what secrets are for.
+pub const MAX_WAKEUP_TAG_BYTES: usize = 128;
+
+/// Shortest delay [`DelegateCtx::schedule_wakeup`] will request.
+/// Anything below it is clamped **up** to it, by that function.
+///
+/// A delegate that re-arms inside its own `WakeupFired` handler with a zero or
+/// near-zero delay would otherwise spin the node in a tight wake loop — the
+/// same unbounded-work hazard a deadline in the past would have created, which
+/// is why moving to a relative delay did not remove the need for this floor.
+///
+/// **The host must clamp too, and does not yet.** A delegate can declare the
+/// import itself and bypass this wrapper, so the clamp here bounds only
+/// well-behaved callers; only the host can make this a limit. That host-side
+/// floor is an obligation on freenet-core#3972, not a property of anything
+/// shipped.
+///
+/// A second obligation in the same place: for a long delay to be useful the
+/// host must persist pending wakeups across a node restart. **No host does this
+/// today.** The precedent runs the wrong way — `DELEGATE_SUBSCRIPTIONS`, the
+/// one comparable piece of per-delegate host state, is in-memory and a restart
+/// discards it entirely.
+pub const MIN_WAKEUP_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Raise `after` to [`MIN_WAKEUP_DELAY`] if it is below it.
+///
+/// Pure, so host-side `cargo test` can exercise it. Used by
+/// [`prepare_wakeup`], which is where the boundary actually sits: everything
+/// up to and including the conversion to milliseconds runs on **both** targets,
+/// and only the `extern "C"` call beneath it is `cfg(target_family = "wasm")`
+/// and therefore never executed by CI — the wasm32 jobs build and lint but run
+/// nothing.
+pub fn clamp_wakeup_delay(after: std::time::Duration) -> std::time::Duration {
+    if after < MIN_WAKEUP_DELAY {
+        MIN_WAKEUP_DELAY
+    } else {
+        after
+    }
+}
+
+/// Validate and normalise the arguments to [`DelegateCtx::schedule_wakeup`],
+/// returning the delay in milliseconds for the host call.
+///
+/// This is the whole of that function except the FFI call itself, split out so
+/// the parts that CI can execute are executed. It covers the tag-size refusal,
+/// the [`MIN_WAKEUP_DELAY`] clamp, **the order of the two**, and the saturating
+/// conversion to milliseconds — the last of which otherwise lives inside the
+/// `cfg(target_family = "wasm")` block and would never run under test.
+///
+/// `schedule_wakeup` is a thin wrapper over this, so the wiring cannot be
+/// deleted without breaking compilation. That matters: an earlier arrangement
+/// clamped in the wrapper and discarded the result on the host target, so
+/// removing the clamp entirely left the suite green.
+fn prepare_wakeup(after: std::time::Duration, tag: &[u8]) -> Result<i64, i64> {
+    if tag.len() > MAX_WAKEUP_TAG_BYTES {
+        return Err(error_codes::ERR_INVALID_PARAM as i64);
+    }
+    let after = clamp_wakeup_delay(after);
+    // Saturate rather than wrap: `as_millis` is u128, and a delay past
+    // i64::MAX milliseconds is ~292 million years, so clamping loses nothing a
+    // caller could have meant.
+    Ok(i64::try_from(after.as_millis()).unwrap_or(i64::MAX))
+}
 
 // ============================================================================
 // Host function declarations (WASM only)
@@ -327,6 +406,14 @@ extern "C" {
 #[cfg(target_family = "wasm")]
 #[link(wasm_import_module = "freenet_delegate_management")]
 extern "C" {
+    /// Ask the host to deliver an `InboundDelegateMsg::WakeupFired` once
+    /// `after_millis` have elapsed, measured by the host from this call.
+    ///
+    /// `tag` is opaque to the host and echoed back on fire. Re-scheduling with
+    /// the same `tag` replaces any prior pending wakeup for this
+    /// `(delegate, tag)` pair. Returns 0 on success, negative on error.
+    fn __frnt__delegate__schedule_wakeup(after_millis: i64, tag_ptr: i64, tag_len: i32) -> i64;
+
     /// Create a new delegate from WASM code + parameters.
     /// Returns 0 on success, negative error code on failure.
     /// On success, writes 32 bytes to out_key_ptr and 32 bytes to out_hash_ptr.
@@ -998,6 +1085,91 @@ impl DelegateCtx {
         }
     }
 
+    /// Ask the host to wake this delegate once `after` has elapsed.
+    ///
+    /// The host delivers an `InboundDelegateMsg::WakeupFired` carrying `tag`
+    /// verbatim. `tag` is opaque to the host and is how a delegate tells its
+    /// own wakeups apart. Re-scheduling with the same `tag` **replaces** any
+    /// prior pending wakeup for this `(delegate, tag)` pair, which is also how
+    /// a wakeup is cancelled early — re-arm it far enough out.
+    ///
+    /// Lets an always-on delegate run periodic background work (key rotation,
+    /// TTL pruning, scheduled publication) with no UI attached, instead of
+    /// pushing it into a client sync loop that stops when the tab closes.
+    /// Driving use case: freenet/river#228.
+    ///
+    /// # Why this is a host function and not an outbound message
+    ///
+    /// A delegate's outbound messages are serialized as **one batch**
+    /// (`delegate_interface.rs`, `Result<Vec<OutboundDelegateMsg>, _>` in a
+    /// single `bincode::serialize`) and decoded whole by the host. An outbound
+    /// variant the host does not know therefore fails the **entire batch**, so
+    /// a delegate built against a newer stdlib, returning
+    /// `[ApplicationMessage(reply), ScheduleWakeup{..}]` to a current-release
+    /// node, would have **the reply discarded along with the wakeup** — the
+    /// user's action silently doing nothing.
+    ///
+    /// That is the direction ordinary rollout produces every time, because
+    /// stdlib ships before core by policy. A host function fails the other way:
+    /// an unimported function fails at **instantiation**, with a named missing
+    /// import, loudly and once, rather than silently and per message.
+    ///
+    /// `WakeupFired` remains an inbound wire variant, which has no equivalent
+    /// hazard: a delegate that cannot schedule never receives one.
+    ///
+    /// # Minimum delay
+    ///
+    /// `after` is clamped up to [`MIN_WAKEUP_DELAY`] **by this function**, so
+    /// `Duration::ZERO` is a one-second delay rather than a tight wake loop.
+    /// A delegate that re-arms inside its own `WakeupFired` handler would
+    /// otherwise spin the node — the same unbounded-work hazard a deadline in
+    /// the past would have created.
+    ///
+    /// The host is expected to clamp as well, and must, since a delegate can
+    /// bypass this wrapper entirely (see the note on [`MAX_WAKEUP_TAG_BYTES`]).
+    /// That host-side floor is **not implemented yet** — freenet-core#3972.
+    /// The clamp here is what makes the guarantee true of *this* API today.
+    ///
+    /// Nothing promises precision in the other direction: the guarantee is
+    /// "not before".
+    ///
+    /// # Errors
+    ///
+    /// `Err(code)` carries the negative host error code.
+    /// [`error_codes::ERR_INVALID_PARAM`] is returned without calling the host
+    /// if `tag` exceeds [`MAX_WAKEUP_TAG_BYTES`].
+    ///
+    /// Requires a node providing `__frnt__delegate__schedule_wakeup` in the
+    /// `freenet_delegate_management` namespace. No released node does yet; the
+    /// host half is freenet-core#3972, which must also persist pending wakeups
+    /// across a restart — see [`MIN_WAKEUP_DELAY`] for why that is stated as an
+    /// obligation rather than a guarantee.
+    pub fn schedule_wakeup(&mut self, after: std::time::Duration, tag: &[u8]) -> Result<(), i64> {
+        // Everything except the FFI call lives in `prepare_wakeup`, which runs
+        // on both targets and is unit-tested. Binding its result here is what
+        // wires it in: delete this line and the code does not compile.
+        let after_millis = prepare_wakeup(after, tag)?;
+        #[cfg(target_family = "wasm")]
+        {
+            let code = unsafe {
+                __frnt__delegate__schedule_wakeup(
+                    after_millis,
+                    tag.as_ptr() as i64,
+                    tag.len() as i32,
+                )
+            };
+            if code < 0 {
+                return Err(code);
+            }
+            Ok(())
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = after_millis;
+            Err(error_codes::ERR_NOT_IN_PROCESS as i64)
+        }
+    }
+
     /// Create a new child delegate from WASM bytecode and parameters.
     ///
     /// This V2 host function allows a delegate to spawn new delegates at runtime.
@@ -1503,5 +1675,159 @@ mod subscribe_outcome_tests {
             Err(error_codes::ERR_NOT_IN_PROCESS as i64),
             "the off-WASM stub must not fabricate a subscribe outcome"
         );
+    }
+}
+
+#[cfg(test)]
+mod schedule_wakeup_guard_tests {
+    use super::*;
+
+    /// The cap is applied before the host call so a well-behaved caller fails
+    /// fast with a clear error rather than a remote one.
+    ///
+    /// **This is convenience, not a bound, and the host must check too.**
+    /// `__frnt__delegate__schedule_wakeup` is an ordinary WASM import: any
+    /// delegate can declare its own `extern "C"` block for
+    /// `freenet_delegate_management` and pass a 10 MB tag without ever
+    /// constructing a `DelegateCtx`. The guest controls its own imports, so no
+    /// guest-side check can ever bound what the host receives. Only the host
+    /// can make 128 bytes a limit — freenet-core#3972.
+    ///
+    /// That holds for every bound this crate documents, not just this one.
+    #[test]
+    fn an_oversized_tag_is_refused_without_calling_the_host() {
+        // SAFETY: off-WASM every method on this handle is a stub touching no
+        // runtime state; the safety contract concerns the WASM environment.
+        let mut ctx = unsafe { DelegateCtx::__new() };
+        let too_big = vec![0u8; MAX_WAKEUP_TAG_BYTES + 1];
+        assert_eq!(
+            ctx.schedule_wakeup(std::time::Duration::from_secs(60), &too_big),
+            Err(error_codes::ERR_INVALID_PARAM as i64),
+            "a tag over the cap must be refused as an invalid parameter"
+        );
+    }
+
+    /// A tag exactly at the cap is legal. Pinned because an off-by-one here
+    /// silently narrows the usable tag space rather than failing loudly.
+    #[test]
+    fn a_tag_exactly_at_the_cap_is_not_refused_for_being_too_big() {
+        let mut ctx = unsafe { DelegateCtx::__new() };
+        let exactly = vec![0u8; MAX_WAKEUP_TAG_BYTES];
+        // Off-WASM this reaches the stub, so the error must be the stub's
+        // "not in process" and *not* the size rejection above.
+        assert_eq!(
+            ctx.schedule_wakeup(std::time::Duration::from_secs(60), &exactly),
+            Err(error_codes::ERR_NOT_IN_PROCESS as i64),
+            "a tag exactly at the cap must pass the size check"
+        );
+    }
+
+    /// Off-WASM the host function does not exist, so the stub must report an
+    /// error and never a plausible success — a stub returning `Ok(())` would
+    /// let a host-side test read "wakeup scheduled" out of a call that
+    /// scheduled nothing.
+    #[test]
+    fn the_off_wasm_stub_reports_an_error_not_success() {
+        let mut ctx = unsafe { DelegateCtx::__new() };
+        assert_eq!(
+            ctx.schedule_wakeup(std::time::Duration::from_secs(60), b"rotate"),
+            Err(error_codes::ERR_NOT_IN_PROCESS as i64),
+            "the off-WASM stub must not report a scheduled wakeup"
+        );
+    }
+
+    /// The prologue as one unit: cap, clamp, ordering, and the millisecond
+    /// conversion. `schedule_wakeup` is a thin wrapper over `prepare_wakeup`,
+    /// so these cover everything in that function except the `extern "C"` call.
+    #[test]
+    fn prepare_returns_the_clamped_delay_in_milliseconds() {
+        assert_eq!(
+            prepare_wakeup(std::time::Duration::ZERO, b"t"),
+            Ok(MIN_WAKEUP_DELAY.as_millis() as i64),
+            "a zero delay must reach the host as the floor, not as zero"
+        );
+        assert_eq!(
+            prepare_wakeup(std::time::Duration::from_secs(604_800), b"t"),
+            Ok(604_800_000),
+            "a week must survive the conversion unchanged"
+        );
+    }
+
+    /// An oversized tag is refused even when the delay *also* needs correcting,
+    /// so the two checks cannot mask each other.
+    ///
+    /// This deliberately does **not** claim to pin their order. Swapping them
+    /// is an equivalent mutant — verified: moving the tag check below the clamp
+    /// leaves all seven tests passing — because `clamp_wakeup_delay` is pure,
+    /// infallible, and its result is discarded on the error path. There is no
+    /// observation that distinguishes the two orders, so no test can, and an
+    /// ordering test here would be a name asserting coverage it does not have.
+    #[test]
+    fn an_oversized_tag_is_refused_even_when_the_delay_also_needs_clamping() {
+        let too_big = vec![0u8; MAX_WAKEUP_TAG_BYTES + 1];
+        assert_eq!(
+            prepare_wakeup(std::time::Duration::ZERO, &too_big),
+            Err(error_codes::ERR_INVALID_PARAM as i64),
+            "an oversized tag must be refused even when the delay also needs correcting"
+        );
+    }
+
+    /// `as_millis` is `u128`. Saturating rather than wrapping is what stops an
+    /// absurd delay becoming a small or negative one at the FFI boundary — a
+    /// wrap here would turn "never" into "immediately". This conversion sat
+    /// inside the `cfg(target_family = "wasm")` block before `prepare_wakeup`
+    /// existed, so nothing executed it.
+    #[test]
+    fn an_absurd_delay_saturates_rather_than_wrapping() {
+        assert_eq!(
+            prepare_wakeup(std::time::Duration::MAX, b"t"),
+            Ok(i64::MAX),
+            "a delay past i64::MAX ms must saturate, never wrap to a small value"
+        );
+    }
+
+    /// The floor is a documented host contract, so the constant is pinned:
+    /// a delegate author relies on it, and silently lowering it would let the
+    /// tight-wake-loop hazard back in without any test noticing.
+    #[test]
+    fn the_documented_bounds_are_pinned() {
+        assert_eq!(MAX_WAKEUP_TAG_BYTES, 128);
+        assert_eq!(MIN_WAKEUP_DELAY, std::time::Duration::from_secs(1));
+    }
+}
+
+#[cfg(test)]
+mod wakeup_delay_clamp_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// `Duration::ZERO` is the case the floor exists for: a delegate re-arming
+    /// inside its own `WakeupFired` handler with no delay spins the node.
+    #[test]
+    fn zero_is_raised_to_the_floor() {
+        assert_eq!(clamp_wakeup_delay(Duration::ZERO), MIN_WAKEUP_DELAY);
+    }
+
+    #[test]
+    fn anything_below_the_floor_is_raised() {
+        assert_eq!(
+            clamp_wakeup_delay(Duration::from_millis(1)),
+            MIN_WAKEUP_DELAY
+        );
+        assert_eq!(
+            clamp_wakeup_delay(MIN_WAKEUP_DELAY - Duration::from_nanos(1)),
+            MIN_WAKEUP_DELAY
+        );
+    }
+
+    /// The floor must not become a rounding-up of ordinary delays. A week is a
+    /// week, and exactly-the-floor is already legal — clamping is `<`, not
+    /// `<=`, so a caller asking for precisely the minimum is not perturbed.
+    #[test]
+    fn the_floor_and_anything_above_it_pass_through_unchanged() {
+        assert_eq!(clamp_wakeup_delay(MIN_WAKEUP_DELAY), MIN_WAKEUP_DELAY);
+        let week = Duration::from_secs(604_800);
+        assert_eq!(clamp_wakeup_delay(week), week);
+        assert_eq!(clamp_wakeup_delay(Duration::MAX), Duration::MAX);
     }
 }
