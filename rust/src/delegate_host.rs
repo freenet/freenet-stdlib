@@ -824,7 +824,12 @@ impl DelegateCtx {
     /// # Errors
     ///
     /// `Err(code)` carries the negative host error code and means the
-    /// subscription did not happen at all. A call that succeeded but did not
+    /// subscription did not happen at all. It is an `i64`, matching both the
+    /// host function's own return type and
+    /// [`list_subscriptions`](Self::list_subscriptions), rather than narrowing
+    /// to `i32`: the codes in [`error_codes`] all fit in `i32`, but a narrowing
+    /// conversion has to decide what to do with one that does not, and every
+    /// available answer invents a code the host never sent. A call that succeeded but did not
     /// pin is `Ok(SubscribeOutcome::NotPinned)`, **not** an error — collapsing
     /// those two is the defect this method exists to fix.
     ///
@@ -834,24 +839,21 @@ impl DelegateCtx {
     pub fn subscribe_contract_checked(
         &mut self,
         instance_id: &[u8; 32],
-    ) -> Result<SubscribeOutcome, i32> {
+    ) -> Result<SubscribeOutcome, i64> {
         #[cfg(target_family = "wasm")]
         {
             let code = unsafe {
                 __frnt__delegate__subscribe_contract_checked(instance_id.as_ptr() as i64, 32)
             };
             if code < 0 {
-                // Clamp rather than truncate: an i64 error code outside i32
-                // range is a host bug, and `as i32` would silently alias it
-                // onto a different, meaningful code.
-                return Err(i32::try_from(code).unwrap_or(i32::MIN));
+                return Err(code);
             }
             Ok(SubscribeOutcome::from_code(code))
         }
         #[cfg(not(target_family = "wasm"))]
         {
             let _ = instance_id;
-            Err(error_codes::ERR_NOT_IN_PROCESS)
+            Err(error_codes::ERR_NOT_IN_PROCESS as i64)
         }
     }
 
@@ -1430,6 +1432,27 @@ mod subscribe_outcome_tests {
         );
     }
 
+    /// The type must be re-exported from the prelude. `use
+    /// freenet_stdlib::prelude::*` is what a delegate writes, and the whole
+    /// point of this type is to be matched on — needing a second, differently
+    /// shaped import for the match arms would be a papercut on every consumer.
+    ///
+    /// The path is named in full, deliberately. A `use crate::prelude::*` here
+    /// would prove nothing: this module already has `use super::*` in scope, so
+    /// the name resolves whether or not the prelude re-exports it, and the test
+    /// passes with the re-export deleted. Verified — the first version of this
+    /// test did exactly that.
+    #[test]
+    fn the_type_is_re_exported_from_the_prelude() {
+        let outcome = crate::prelude::SubscribeOutcome::from_code(
+            crate::prelude::SubscribeOutcome::CODE_NOT_PINNED,
+        );
+        assert!(matches!(
+            outcome,
+            crate::prelude::SubscribeOutcome::NotPinned
+        ));
+    }
+
     #[test]
     fn only_pinned_reports_pinned() {
         assert!(SubscribeOutcome::Pinned.is_pinned());
@@ -1452,7 +1475,7 @@ mod subscribe_outcome_tests {
         let result = ctx.subscribe_contract_checked(&[0u8; 32]);
         assert_eq!(
             result,
-            Err(error_codes::ERR_NOT_IN_PROCESS),
+            Err(error_codes::ERR_NOT_IN_PROCESS as i64),
             "the off-WASM stub must not fabricate a subscribe outcome"
         );
     }
