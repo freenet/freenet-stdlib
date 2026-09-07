@@ -143,8 +143,8 @@ const _: () = assert!(MAX_SUBSCRIPTION_LIST_BYTES % 32 == 0);
 /// Returned by
 /// [`DelegateCtx::subscribe_contract_checked`](DelegateCtx::subscribe_contract_checked).
 /// It exists because `Result<(), _>` has only two states and the subscribe path
-/// has three: it can pin, it can register for notifications without pinning, or
-/// it can fail. Reusing `Err` for the middle case is wrong — delegates
+/// has three: it can register against state the node holds, it can register
+/// against nothing, or it can fail. Reusing `Err` for the middle case is wrong — delegates
 /// legitimately subscribe before the node has settled, and a usually-transient
 /// condition surfacing as a hard failure would break working delegates today.
 ///
@@ -156,17 +156,25 @@ const _: () = assert!(MAX_SUBSCRIPTION_LIST_BYTES % 32 == 0);
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubscribeOutcome {
-    /// Registered **and** pinned: the node holds durable demand for this
-    /// contract on the delegate's behalf, so it enters the renewal set and is
-    /// exempt from eviction.
+    /// **The node holds state for this contract, and has recorded the
+    /// delegate's interest in it.** Notifications have something to fire on.
+    ///
+    /// This is a statement about *now*, not a durability promise. Under
+    /// demand-driven hosting **no subscription of any kind is an absolute
+    /// pin** — a subscribed contract is ordered last for eviction, not exempt
+    /// from it — so a delegate must not read this as "the node will keep this
+    /// contract for me". It means the subscription is not vacuous today.
     Pinned,
-    /// Registered for notifications, but **not pinned**.
+    /// Registered, but the node holds **no state** for the contract.
     ///
     /// This is the case [`DelegateCtx::subscribe_contract`]'s doc describes at
-    /// length and cannot report: notifications are delivered only while some
-    /// *other* route keeps this node subscribed. Nothing holds the contract on
-    /// the delegate's behalf, so it can be evicted, after which notifications
-    /// stop with no further signal. Treat it as "retry later", not success.
+    /// length and cannot report. The subscription exists, and there is nothing
+    /// for it to fire on: notifications arrive only if some *other* route
+    /// causes this node to hold the contract. The common way to get here is
+    /// subscribing at startup, before the node has fetched the contract.
+    ///
+    /// Treat it as "retry later" — and unlike a pin promise, this one does
+    /// clear: it clears as soon as the node holds the state.
     NotPinned,
     /// The node reported an outcome this build of the stdlib does not know.
     ///
@@ -195,10 +203,15 @@ impl SubscribeOutcome {
         }
     }
 
-    /// Whether the node recorded durable demand for the contract.
+    /// Whether the node holds state for the contract and recorded the
+    /// delegate's interest — i.e. whether the subscription can fire.
     ///
     /// False for [`Self::NotPinned`] and for [`Self::Unrecognized`] — an
-    /// outcome this build cannot interpret is not evidence of a pin.
+    /// outcome this build cannot interpret is not evidence either way, and
+    /// treating it as affirmative is the over-claim this type removes.
+    ///
+    /// Not a durability check. See [`Self::Pinned`]: nothing here promises the
+    /// node keeps the contract.
     pub fn is_pinned(self) -> bool {
         matches!(self, Self::Pinned)
     }
@@ -768,9 +781,12 @@ impl DelegateCtx {
     ///
     /// # The `bool` cannot express the case above
     ///
-    /// Everything this doc says about demand is invisible in the return value:
-    /// `true` means "the node accepted the registration", not "the contract is
-    /// pinned". The `bool` also collapses every negative error code into
+    /// `true` means "the node accepted the registration", and says nothing
+    /// about whether there is anything for the subscription to fire on. A node
+    /// that knows the contract's code but holds no state for it registers the
+    /// interest and returns `true`, identically to one that holds the state —
+    /// which is the ordinary situation at startup, before the node has fetched
+    /// the contract. The `bool` also collapses every negative error code into
     /// `false`, so a transient failure is indistinguishable from an unknown
     /// contract.
     ///
@@ -793,15 +809,19 @@ impl DelegateCtx {
         }
     }
 
-    /// Subscribe to contract updates, and learn whether the subscription
-    /// actually pinned the contract.
+    /// Subscribe to contract updates, and learn whether the node actually
+    /// holds the contract the subscription is against.
     ///
     /// This is [`subscribe_contract`](Self::subscribe_contract) with the
     /// outcome preserved instead of collapsed into a `bool`. Use it whenever
-    /// the delegate's correctness depends on continuing to receive
-    /// notifications — a missed notification on a payment address is money, and
-    /// the failure is otherwise indistinguishable from "nothing has happened
-    /// yet".
+    /// the delegate's correctness depends on the subscription being live — a
+    /// missed notification on a payment address is money, and the failure is
+    /// otherwise indistinguishable from "nothing has happened yet".
+    ///
+    /// [`SubscribeOutcome::NotPinned`] is a *retryable* condition, and it is
+    /// the ordinary one at startup: it clears once the node holds the state.
+    /// It is not a statement about eviction — see [`SubscribeOutcome::Pinned`],
+    /// which is deliberately not a durability promise.
     ///
     /// # Compatibility
     ///

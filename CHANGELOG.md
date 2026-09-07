@@ -2,23 +2,27 @@
 
 ## [Unreleased]
 
-### Added — a delegate can learn whether its subscribe actually pinned
+### Added — a delegate can learn whether its subscribe has anything to fire on
 
-`DelegateCtx::subscribe_contract`'s doc now describes at length that a subscribe
-may register no demand, and that **a delegate cannot detect which it got**. This
-adds the way to detect it.
+`true` from `subscribe_contract` means "the node accepted the registration", and
+says nothing about whether the node holds the contract. A node that knows the
+contract's code but holds no state for it registers the interest and returns
+`true`, identically to one that holds it — which is the ordinary situation at
+startup, before the node has fetched the contract. The delegate believes it has
+a live subscription and does not, and the only signal is a notification that
+never arrives. On a payment address that is money. See freenet-core#5565.
 
-`true` from `subscribe_contract` means "the node accepted the registration", not
-"the contract is pinned". A registration accepted without durable demand is
-reported identically to one that pinned, so the delegate believes it holds
-durable interest and does not — the contract stays evictable and notifications
-later stop at a moment the delegate never observes. On a payment address that is
-money. See freenet-core#5565.
-
-- `DelegateCtx::subscribe_contract_checked(&[u8; 32]) -> Result<SubscribeOutcome, i32>`
+- `DelegateCtx::subscribe_contract_checked(&[u8; 32]) -> Result<SubscribeOutcome, i64>`
 - `SubscribeOutcome` — `Pinned`, `NotPinned`, or `Unrecognized(i64)`.
   `is_pinned()` is true only for `Pinned`: an outcome a given build cannot
-  interpret is not evidence of a pin.
+  interpret is not evidence either way.
+
+**`Pinned` is a statement about now, not a durability promise.** It means the
+node holds state for the contract and has recorded the delegate's interest.
+Under demand-driven hosting **no subscription of any kind is an absolute pin** —
+a subscribed contract is ordered last for eviction, not exempt from it — so the
+name describes a live subscription, not a retained one. `NotPinned` is
+correspondingly retryable, and it clears as soon as the node holds the state.
 
 `subscribe_contract` is left **behaviourally unchanged**, deliberately. Altering
 what it returns would change the behaviour of already-deployed delegate WASM.
