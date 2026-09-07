@@ -2,6 +2,60 @@
 
 ## [Unreleased]
 
+### Added — a delegate can learn whether its subscribe has anything to fire on
+
+`true` from `subscribe_contract` means "the node accepted the registration", and
+says nothing about whether the node holds the contract. A node that knows the
+contract's code but holds no state for it registers the interest and returns
+`true`, identically to one that holds it — which is the ordinary situation at
+startup, before the node has fetched the contract. The delegate believes it has
+a live subscription and does not, and the only signal is a notification that
+never arrives. On a payment address that is money. See freenet-core#5565.
+
+- `DelegateCtx::subscribe_contract_checked(&[u8; 32]) -> Result<SubscribeOutcome, i64>`
+- `SubscribeOutcome` — `Pinned`, `NotPinned`, or `Unrecognized(i64)`.
+  `is_pinned()` is true only for `Pinned`: an outcome a given build cannot
+  interpret is not evidence either way.
+
+**`Pinned` is a statement about now, not a durability promise.** It means the
+node holds state for the contract and has recorded the delegate's interest.
+Under demand-driven hosting **no subscription of any kind is an absolute pin**,
+and a delegate subscription is weaker still: it registers notification interest
+only. On freenet-core as it stands (pre-#4669) it contributes **no hosting
+demand**, and so does not affect eviction ordering at all — unlike a client
+subscription, which is a ranking dimension. freenet-core#5493 implements #4669
+and is open now, so that is current behaviour rather than a fixed property. The name
+describes a live subscription, not a retained one. `NotPinned` is correspondingly
+retryable, and clears as soon as the node holds the state.
+
+**This check happens at subscribe time and nowhere else**, so a subscription that
+was live can quietly stop being so. Re-checking without a UI attached needs a way
+to run later: `DelegateCtx::schedule_wakeup` (freenet-stdlib#82, same release) is
+that mechanism. Neither change alone closes the scenario in freenet-core#5565 —
+this one lets a delegate learn the truth, and that one lets it ask again. Do not
+read `Pinned` as fire-and-forget.
+
+`subscribe_contract` is left **behaviourally unchanged**, deliberately. Altering
+what it returns would change the behaviour of already-deployed delegate WASM.
+
+**This is not a wire-format change.** It adds a host function and a plain Rust
+type, so it consumes no bincode variant tag and cannot shift one — additive in
+both directions, which a new enum variant would not be. A delegate that does not
+import it is unaffected; one that does, on a node too old to provide it, fails to
+**instantiate** with a named missing-import error rather than failing
+mid-protocol at decode. Same reasoning as `list_subscriptions`.
+
+Note this does **not** duplicate `list_subscriptions`: that reads the
+subscription set, which contains accepted-but-unpinned registrations, so
+introspection answers "what did I register?" and this answers "what actually got
+pinned?".
+
+The two outcome discriminants (`Pinned = 0`, `NotPinned = 1`) are part of the
+host ABI once a node returns them, and are pinned by test. Requires a node
+providing `__frnt__delegate__subscribe_contract_checked` in the
+`freenet_delegate_contracts` namespace. **No released node does yet** — the host
+half is freenet-core#5565.
+
 ### Added
 
 - **`OutboundDelegateMsg::UnsubscribeContractRequest` and

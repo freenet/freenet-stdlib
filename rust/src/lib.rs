@@ -40,7 +40,7 @@ pub mod prelude {
     pub use crate::contract_interface::*;
     pub use crate::delegate_host::{
         decode_contract_id_list, decode_secret_key_list, encode_contract_id_list,
-        encode_secret_key_list, error_codes, DelegateCtx,
+        encode_secret_key_list, error_codes, DelegateCtx, SubscribeOutcome,
     };
     pub use crate::delegate_interface::wasm_interface::DelegateInterfaceResult;
     pub use crate::delegate_interface::*;
