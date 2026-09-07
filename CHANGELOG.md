@@ -25,8 +25,11 @@
 
   Also records that resolving a conflict in a **test module** by keeping both
   sides is safe for the content and not for the delimiters — a closing brace or
-  a `#[cfg(test)]` can sit in shared context and be dropped, and a lost
-  `#[cfg(test)]` compiles fine while silently removing the module from the run.
+  an attribute can sit in shared context and be dropped — with a measured table
+  of what the compiler does and does not catch. Losing `#[cfg(test)]` is *not* a
+  silent-loss mode: every test still runs and the build gets noisier. The
+  dangerous cases are a dropped `#[test]` (absent from the run, green with a
+  smaller count) and a function absorbed wholesale (no warning is possible).
 
   Linked from CONTRIBUTING.md, and at the repo root rather than `docs/` because
   a bare `docs` line in `.gitignore` makes that directory untracked and

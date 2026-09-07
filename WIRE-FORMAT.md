@@ -241,24 +241,46 @@ opposite.
 
 ## Resolving a conflict in a test module
 
-Two changes that both append to the same file — two PRs adding variants, or a
-wire change landing beside a doc change — conflict at the same anchors, and the
-resolution is almost always "keep both sides". That is right for the *content*
-and unsafe for the *delimiters*.
+Two changes appending at the same anchor conflict there, and the resolution is
+almost always "keep both sides". That is right for the *content* and unsafe for
+the *delimiters*.
 
 Git's conflict regions are line ranges. They do not respect syntactic
 boundaries, so a closing `}` or an attribute can sit in the shared trailing
-context rather than inside either side. Concatenating both sides then drops it.
+context rather than inside either side, and concatenating both sides drops it.
 Observed while merging two test modules: `mod a_tests { … }`'s closing brace and
 the following `#[cfg(test)]` both vanished, because the brace belonged to the
 context and not to either alternative.
 
-**The compiler caught that one, and it was luck.** An unclosed brace is a hard
-error. A dropped `#[cfg(test)]` alone is not — the module still compiles, and it
-is silently no longer a test module. Nothing fails. That is the same shape as the
-twelve `list_subscriptions` guards that were type-checked and never executed.
+### What the compiler actually catches, measured
 
-So after resolving a conflict that touches tests, do not stop at a green run:
+Do not guess at this — the intuitive answer is wrong in both directions.
+
+| What is lost | Does the test still run? | What you are told |
+|---|---|---|
+| `#[cfg(test)]` on the module | **Yes, all of them** | `cargo build` warns (`unused import`) — the module now compiles into the library |
+| `#[test]` on a function | **No** — silently absent from the run | `warning: function … is never used` (dead_code) |
+| The function or `mod` itself, absorbed into a neighbour | **No** | **Nothing.** There is no referent left to warn about |
+| A closing `}` | n/a | Hard error — but only because of where the token happened to sit |
+
+So `#[cfg(test)]` is **not** a silent-loss mode: `#[test]` functions are collected
+by the harness regardless of it, and the attribute governs whether the module
+compiles *outside* test builds, not whether its tests run *inside* one. Losing it
+makes the build noisier, not quieter.
+
+The genuinely dangerous rows are the middle two. A dropped `#[test]` does earn a
+`dead_code` warning, but the **test run itself stays green with a smaller count**,
+and that warning arrives in a wall of build output nobody reads on a green run. A
+function absorbed wholesale earns nothing at all.
+
+The real silent-exclusion mechanism in this repo is a **target** gate, not a test
+gate: the twelve `list_subscriptions` guards sat behind
+`cfg(target_family = "wasm")`, which genuinely excludes them, and CI's wasm32 jobs
+build and lint without executing anything. That is the shape to fear.
+
+### The check
+
+Because the failure is a smaller number rather than a red one:
 
 ```
 cargo test --features … <module_name>     # per module, and count them
