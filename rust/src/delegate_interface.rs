@@ -2121,4 +2121,160 @@ mod delegate_wire_compat {
             );
         }
     }
+
+    // ---------------------------------------------------------------------
+    // `#[serde(other)]` — the one rule in WIRE-FORMAT.md that contradicts the
+    // common advice, so it is the one a future reader will doubt and re-derive.
+    // These three tests are that derivation, kept where it cannot rot.
+    //
+    // Mock types, deliberately: the real enums must never grow a catch-all, so
+    // the property has to be demonstrated on stand-ins.
+    // ---------------------------------------------------------------------
+
+    // The appended variants sit at tag 2, and `OldMsgWithCatchAll` declares
+    // only 0 and 1. That gap is load-bearing: at tag 1 the catch-all's own
+    // declared index, a plain unit variant decodes identically and the
+    // attribute does no work at all — so mocks aligned that way pass with
+    // `#[serde(other)]` deleted, testing nothing. Verified: they did.
+    //
+    // Both cases occur on a real append. The FIRST new variant lands exactly at
+    // the catch-all's index, where the attribute is unnecessary; the SECOND is
+    // out of range, where it is the only thing between a hard error and silent
+    // corruption. The out-of-range case is the one the rule depends on, so it
+    // is the one the mocks must produce.
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    enum NewMsgWithPayload {
+        First(u32),
+        Second(bool),
+        Appended(String),
+    }
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    enum OldMsgWithCatchAll {
+        First(u32),
+        // Deliberately stops here: real variants 0 only, catch-all at 1. The
+        // appended variants above are at tag 2, which is OUT OF RANGE for this
+        // enum — that gap is what the attribute has to bridge.
+        #[serde(other)]
+        Unknown,
+    }
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    enum NewMsgUnitAppended {
+        First(u32),
+        Second(bool),
+        AppendedUnit,
+    }
+
+    /// The mocks' tag gap is asserted, not merely commented — and asserted
+    /// against **the two enums whose alignment actually matters**.
+    ///
+    /// The vacuity condition is precisely: the tag `Appended` encodes to is the
+    /// same as the index `OldMsgWithCatchAll` absorbs into `Unknown`. At that
+    /// index a plain unit variant behaves identically and `#[serde(other)]`
+    /// does no work, so the three tests below stop testing the attribute while
+    /// still passing.
+    ///
+    /// Both numbers are measured from the types rather than written down, so
+    /// this fires whichever side moves — adding a variant to the old enum, or
+    /// removing the filler from the new ones. An earlier version of this guard
+    /// compared against a separate no-attribute copy of the old enum and
+    /// **missed the first case entirely**, because that copy did not move when
+    /// the real one did. A control that can drift from what it controls is not
+    /// a control.
+    ///
+    /// This exists because the alignment has broken **three times** in this
+    /// file, twice at the hands of someone actively fixing it. A comment cannot
+    /// catch the fourth.
+    #[test]
+    fn the_attribute_is_what_bridges_the_gap() {
+        fn tag_of(bytes: &[u8]) -> u32 {
+            u32::from_le_bytes(
+                bytes[..4]
+                    .try_into()
+                    .expect("a bincode enum tag is 4 bytes"),
+            )
+        }
+
+        let appended =
+            tag_of(&bincode::serialize(&NewMsgWithPayload::Appended("x".into())).unwrap());
+
+        // The lowest tag `OldMsgWithCatchAll` absorbs into `Unknown` is its
+        // catch-all index; below it, real variants decode as themselves.
+        let absorbed_from = (0u32..16)
+            .find(|t| {
+                let mut probe = t.to_le_bytes().to_vec();
+                probe.extend_from_slice(&[0u8; 32]);
+                matches!(
+                    bincode::deserialize::<OldMsgWithCatchAll>(&probe),
+                    Ok(OldMsgWithCatchAll::Unknown)
+                )
+            })
+            .expect("OldMsgWithCatchAll must absorb some tag; it has #[serde(other)]");
+
+        assert!(
+            appended > absorbed_from,
+            "`Appended` is at tag {appended} and OldMsgWithCatchAll absorbs from tag \
+             {absorbed_from}: the mocks have re-aligned, so the serde(other) tests below \
+             are vacuous and pass with the attribute deleted. Move `Appended` above the \
+             catch-all index again rather than adjusting this test."
+        );
+    }
+
+    /// Contradicts the usual "self-describing formats only" claim: bincode 1.x
+    /// **does** let `#[serde(other)]` absorb an unknown variant tag.
+    ///
+    /// That is the trap, not a feature — see the next test for why.
+    #[test]
+    fn serde_other_does_absorb_an_unknown_tag_in_bincode() {
+        let encoded = bincode::serialize(&NewMsgWithPayload::Appended("x".into())).unwrap();
+        let decoded: OldMsgWithCatchAll =
+            bincode::deserialize(&encoded).expect("serde(other) absorbs the unknown tag");
+        assert_eq!(decoded, OldMsgWithCatchAll::Unknown);
+    }
+
+    /// The absorption consumes the **tag only**, never the unknown variant's
+    /// payload, so everything after it in the buffer is silently misread.
+    ///
+    /// A hard decode error would have been strictly better: this turns a loud,
+    /// immediate failure into a wrong value with no error anywhere.
+    #[test]
+    fn the_catch_all_silently_corrupts_trailing_data() {
+        let encoded =
+            bincode::serialize(&(NewMsgWithPayload::Appended("hello-future".into()), 4242u32))
+                .unwrap();
+
+        let (variant, trailing): (OldMsgWithCatchAll, u32) =
+            bincode::deserialize(&encoded).expect("decodes, which is the problem");
+
+        assert_eq!(variant, OldMsgWithCatchAll::Unknown);
+        assert_ne!(
+            trailing, 4242,
+            "if this ever equals 4242, serde(other) stopped eating the payload \
+             and this section of WIRE-FORMAT.md needs revisiting"
+        );
+    }
+
+    /// And the reason the trap works: against a **unit** unknown variant there
+    /// is no payload to leave behind, nothing after it is misread, and the
+    /// decode really is clean.
+    ///
+    /// So a developer who tries `#[serde(other)]` on a unit variant sees it
+    /// work and concludes the warning is overstated. The corruption is
+    /// conditional on a property of a variant that does not exist yet — you are
+    /// betting nobody ever gives a future variant a field.
+    #[test]
+    fn the_catch_all_is_clean_for_a_unit_variant() {
+        let encoded = bincode::serialize(&(NewMsgUnitAppended::AppendedUnit, 4242u32)).unwrap();
+
+        let (variant, trailing): (OldMsgWithCatchAll, u32) =
+            bincode::deserialize(&encoded).expect("unit variant leaves nothing behind");
+
+        assert_eq!(variant, OldMsgWithCatchAll::Unknown);
+        assert_eq!(
+            trailing, 4242,
+            "a unit unknown variant must NOT corrupt what follows — this is the \
+             case that misleads, and it is why the rule is unconditional"
+        );
+    }
 }

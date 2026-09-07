@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **`WIRE-FORMAT.md`** — what is safe to change on the host↔delegate wire and
+  what is not, established by running bincode rather than by reading its docs.
+  Records three results that contradict the common intuition: appending an enum
+  variant and appending a struct field break in *opposite* directions;
+  `#[non_exhaustive]` has **no effect** on the wire (byte-identical output) and
+  is purely a `match` attribute; and `#[serde(other)]` **does** absorb an unknown
+  tag in bincode 1.x, converting a clean decode error into silent corruption of
+  whatever follows it — though only once the unknown variant carries a payload,
+  which is exactly why it misleads.
+
+  Also covers rebasing a stacked branch after the PR below it is **squash**
+  merged (a plain `git rebase origin/main` replays the whole merged change —
+  use `--onto`), that a **stacked PR runs none of the Rust CI jobs** here
+  because `ci.yml` triggers only on PRs targeting `main`, and why a delegate
+  should prefer a relative delay to an absolute deadline: it *can* read a clock
+  (`freenet_time::__frnt__time__utc_now` is registered on the same linker as the
+  delegate namespaces), but a deadline bakes the delegate's reading of it into a
+  value only the host can act on.
+
+  Linked from CONTRIBUTING.md, and at the repo root rather than `docs/` because
+  a bare `docs` line in `.gitignore` makes that directory untracked and
+  `ci.yml`'s `paths-ignore` skips it.
+
 ### Added — a delegate can learn whether its subscribe has anything to fire on
 
 `true` from `subscribe_contract` means "the node accepted the registration", and
