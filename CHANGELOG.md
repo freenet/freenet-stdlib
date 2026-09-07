@@ -211,15 +211,66 @@ pruning, scheduled publication) without a connected UI, instead of pushing that
 work into a client sync loop that stops when the tab closes.
 Driving use case: freenet/river#228. Host half: freenet/freenet-core#3972.
 
-- `OutboundDelegateMsg::ScheduleWakeup { after: Duration, tag: Vec<u8> }` — the
-  delegate asks the host to deliver a wakeup once `after` has elapsed, measured
-  by the **host** from when it receives the message. `tag` is opaque to the host
-  and echoed back on fire. Re-scheduling with the same `tag` replaces the prior
-  pending wakeup for that `(delegate, tag)` pair.
-- `InboundDelegateMsg::WakeupFired { tag: Vec<u8> }` — delivered when a
-  scheduled wakeup fires.
+- `DelegateCtx::schedule_wakeup(after: Duration, tag: &[u8]) -> Result<(), i64>`
+  — a **host function**, in the `freenet_delegate_management` namespace.
+- `InboundDelegateMsg::WakeupFired { tag: Vec<u8> }` — an inbound wire variant
+  at **tag 9**, delivered when a scheduled wakeup fires.
+- `MAX_WAKEUP_TAG_BYTES` (128) and `MIN_WAKEUP_DELAY` (1s).
 
-##### Why a delay and not a deadline
+#### The outbound half is a host function, not a wire variant
+
+This is the asymmetry that matters, and it is deliberate.
+
+A delegate's outbound messages are serialized as **one batch** and decoded whole
+by the host. An outbound variant the host does not recognize therefore fails the
+**entire batch** — so a delegate built against this release, returning
+`[ApplicationMessage(reply), ScheduleWakeup{..}]` to a current-release node,
+would have **the reply discarded along with the wakeup**, and the user's action
+would silently do nothing. That is the direction ordinary rollout produces every
+time, because stdlib ships before core by policy.
+
+A host function fails the other way: an unimported function fails at
+**instantiation**, with a named missing import — loudly, once, at load, rather
+than silently and per message.
+
+`WakeupFired` stays an inbound variant because that direction has no equivalent
+hazard: a delegate that cannot schedule never receives one. The rule this
+follows is in `WIRE-FORMAT.md` — prefer a host function where the answer is
+synchronous, and add an inbound variant only where the host sends it strictly in
+reply to something an older delegate cannot have sent.
+
+#### `after` is a delay, not a deadline
+
+The host measures it from when it receives the call. A delay needs no clock on
+the delegate side, and if absolute scheduling is ever wanted it is `target - now`
+in terms of this same argument — so nothing is foreclosed. Delays below
+`MIN_WAKEUP_DELAY` are clamped up to it, because a delegate re-arming inside its
+own handler with a zero delay would otherwise spin the node in a tight wake loop.
+The guarantee is "not before"; nothing promises precision.
+
+`tag` is capped at `MAX_WAKEUP_TAG_BYTES`, enforced before the host call. The
+host bounds how many wakeups a delegate may hold pending, but a count cap alone
+does not bound memory while the per-item size is caller-chosen.
+
+#### `WakeupFired` carries no context, and the cache explains why
+
+freenet-core's delegate context cache is keyed **per delegate**, not per
+conversation, and prunes after 10 minutes. Any wakeup worth scheduling outlives
+that, so the context that existed at scheduling time is gone; and if a live
+context happens to exist from another in-flight exchange, it belongs to that
+exchange. There is no coherent value to put in the field. State that must
+survive a wakeup belongs in the delegate's secrets.
+
+#### Durability is a requirement on the host, and is unimplemented
+
+A week-long delay is only useful if pending wakeups survive a node restart.
+**No host does this today**; freenet-core#3972 must implement it, and nothing in
+this crate can make it true. Stated as an obligation rather than a guarantee
+because the precedent runs the other way — `DELEGATE_SUBSCRIPTIONS`, the one
+comparable piece of per-delegate host state, is in-memory and a restart discards
+it entirely.
+
+### Why a delay and not a deadline
 
 An earlier draft used `at: SystemTime`. **A delegate cannot fill that field.**
 Delegates compile to `wasm32-unknown-unknown`, where `SystemTime::now()` compiles
