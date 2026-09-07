@@ -162,9 +162,11 @@ pub enum SubscribeOutcome {
     /// This is a statement about *now*, not a durability promise. Under
     /// demand-driven hosting **no subscription of any kind is an absolute
     /// pin**, and a delegate subscription is weaker still: it registers
-    /// notification interest only. It contributes **no hosting demand**, so it
-    /// does not affect eviction ordering at all — unlike a client subscription,
-    /// which is a ranking dimension. A delegate must not read this as "the node
+    /// notification interest only. On freenet-core as it stands (pre-#4669) it
+    /// contributes **no hosting demand**, so it does not affect eviction
+    /// ordering at all — unlike a client subscription, which is a ranking
+    /// dimension. freenet-core#5493 implements #4669 and is open now, so treat
+    /// the "no demand" half as current behaviour rather than a fixed property. A delegate must not read this as "the node
     /// will keep this contract for me"; it means the subscription is not
     /// vacuous today.
     Pinned,

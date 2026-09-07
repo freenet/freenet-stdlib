@@ -21,8 +21,10 @@ never arrives. On a payment address that is money. See freenet-core#5565.
 node holds state for the contract and has recorded the delegate's interest.
 Under demand-driven hosting **no subscription of any kind is an absolute pin**,
 and a delegate subscription is weaker still: it registers notification interest
-only, contributes **no hosting demand**, and so does not affect eviction ordering
-at all — unlike a client subscription, which is a ranking dimension. The name
+only. On freenet-core as it stands (pre-#4669) it contributes **no hosting
+demand**, and so does not affect eviction ordering at all — unlike a client
+subscription, which is a ranking dimension. freenet-core#5493 implements #4669
+and is open now, so that is current behaviour rather than a fixed property. The name
 describes a live subscription, not a retained one. `NotPinned` is correspondingly
 retryable, and clears as soon as the node holds the state.
 
