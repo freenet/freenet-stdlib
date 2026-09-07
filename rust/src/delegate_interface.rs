@@ -564,7 +564,7 @@ pub enum InboundDelegateMsg<'a> {
     SubscribeContractResponse(SubscribeContractResponse),
     ContractNotification(ContractNotification),
     DelegateMessage(DelegateMessage),
-    // Appended in 0.9.0 at tag 8. New variants go at the END, never inserted —
+    // Appended in 0.10.0 at tag 8. New variants go at the END, never inserted —
     // see the wire-format note on this enum.
     UnsubscribeContractResponse(UnsubscribeContractResponse),
 }
@@ -784,7 +784,7 @@ impl UserInputResponse<'_> {
 ///
 /// - **It forces an arm to exist, not a handler to be correct.** This crate's
 ///   own FlatBuffers encoder (`client_api::client_events`) has explicit arms
-///   for five outbound variants that log an error and drop the message. The
+///   for six outbound variants that log an error and drop the message. The
 ///   compile error made someone write those arms deliberately; it could not
 ///   make them do anything useful.
 /// - **It is not the bug behind this workstream.** A delegate
@@ -852,7 +852,7 @@ pub enum OutboundDelegateMsg {
     UpdateContractRequest(UpdateContractRequest),
     SubscribeContractRequest(SubscribeContractRequest),
     SendDelegateMessage(DelegateMessage),
-    // Appended in 0.9.0 at tag 8. New variants go at the END, never inserted —
+    // Appended in 0.10.0 at tag 8. New variants go at the END, never inserted —
     // see the wire-format note on this enum. freenet-stdlib#82 also appends
     // here (ScheduleWakeup) and must therefore move to tag 9; at the time of
     // writing that PR still declares tag 8, so whichever lands second will trip
@@ -1132,7 +1132,7 @@ pub struct SubscribeContractResponse {
 
 /// Request to stop receiving a contract's state changes, from within a delegate.
 ///
-/// The counterpart of [`SubscribeContractRequest`]. Before 0.9.0 a delegate had
+/// The counterpart of [`SubscribeContractRequest`]. Before 0.10.0 a delegate had
 /// no way to drop a subscription it had taken: the only release path was the
 /// implicit cleanup when the delegate itself was unregistered, so a delegate
 /// that had finished with a contract went on holding interest in it for as long
@@ -1863,10 +1863,10 @@ mod delegate_wire_compat {
         );
     }
 
-    /// The unsubscribe pair added in 0.9.0 round-trips, and adding it did not
+    /// The unsubscribe pair added in 0.10.0 round-trips, and adding it did not
     /// disturb any payload that predates it.
     ///
-    /// The pre-0.9.0 byte string is hand-built rather than produced by this
+    /// The pre-0.10.0 byte string is hand-built rather than produced by this
     /// crate, so it stands in for bytes from a delegate compiled before the
     /// pair existed. Both halves matter: the new variant must work, and the old
     /// ones must be untouched by its arrival.
@@ -1950,7 +1950,7 @@ mod delegate_wire_compat {
             other => panic!("error response round-tripped into {other:?}"),
         }
 
-        // A ContractNotification encoded before 0.9.0 existed: tag 6, the 32
+        // A ContractNotification encoded before 0.10.0 existed: tag 6, the 32
         // raw id bytes, an empty state and an empty context. Appending at 8
         // must leave it decoding exactly as it always did.
         let mut pre_0_9_0 = vec![6u8, 0, 0, 0];
@@ -1958,10 +1958,10 @@ mod delegate_wire_compat {
         pre_0_9_0.extend_from_slice(&0u64.to_le_bytes());
         pre_0_9_0.extend_from_slice(&0u64.to_le_bytes());
         match bincode::deserialize::<InboundDelegateMsg<'_>>(&pre_0_9_0)
-            .expect("a pre-0.9.0 payload must still decode")
+            .expect("a pre-0.10.0 payload must still decode")
         {
             InboundDelegateMsg::ContractNotification(n) => assert_eq!(n.contract_id, id),
-            other => panic!("a pre-0.9.0 ContractNotification decoded as {other:?}"),
+            other => panic!("a pre-0.10.0 ContractNotification decoded as {other:?}"),
         }
     }
 

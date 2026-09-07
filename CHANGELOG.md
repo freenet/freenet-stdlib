@@ -57,7 +57,7 @@
   **none** of them, only the four secrets functions and one logger it actually
   calls. The linker drops unreferenced externs, so declaring two more changes
   nothing for a delegate that does not call them. Had that not held, every
-  delegate merely *rebuilt* against 0.9.0 would have acquired imports no
+  delegate merely *rebuilt* against 0.10.0 would have acquired imports no
   deployed node provides and failed to instantiate everywhere.
 
   A delegate that *does* call it fails to **load** on a node that does not
