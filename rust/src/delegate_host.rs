@@ -161,9 +161,12 @@ pub enum SubscribeOutcome {
     ///
     /// This is a statement about *now*, not a durability promise. Under
     /// demand-driven hosting **no subscription of any kind is an absolute
-    /// pin** — a subscribed contract is ordered last for eviction, not exempt
-    /// from it — so a delegate must not read this as "the node will keep this
-    /// contract for me". It means the subscription is not vacuous today.
+    /// pin**, and a delegate subscription is weaker still: it registers
+    /// notification interest only. It contributes **no hosting demand**, so it
+    /// does not affect eviction ordering at all — unlike a client subscription,
+    /// which is a ranking dimension. A delegate must not read this as "the node
+    /// will keep this contract for me"; it means the subscription is not
+    /// vacuous today.
     Pinned,
     /// Registered, but the node holds **no state** for the contract.
     ///

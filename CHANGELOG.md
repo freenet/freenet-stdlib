@@ -19,10 +19,19 @@ never arrives. On a payment address that is money. See freenet-core#5565.
 
 **`Pinned` is a statement about now, not a durability promise.** It means the
 node holds state for the contract and has recorded the delegate's interest.
-Under demand-driven hosting **no subscription of any kind is an absolute pin** —
-a subscribed contract is ordered last for eviction, not exempt from it — so the
-name describes a live subscription, not a retained one. `NotPinned` is
-correspondingly retryable, and it clears as soon as the node holds the state.
+Under demand-driven hosting **no subscription of any kind is an absolute pin**,
+and a delegate subscription is weaker still: it registers notification interest
+only, contributes **no hosting demand**, and so does not affect eviction ordering
+at all — unlike a client subscription, which is a ranking dimension. The name
+describes a live subscription, not a retained one. `NotPinned` is correspondingly
+retryable, and clears as soon as the node holds the state.
+
+**This check happens at subscribe time and nowhere else**, so a subscription that
+was live can quietly stop being so. Re-checking without a UI attached needs a way
+to run later: `DelegateCtx::schedule_wakeup` (freenet-stdlib#82, same release) is
+that mechanism. Neither change alone closes the scenario in freenet-core#5565 —
+this one lets a delegate learn the truth, and that one lets it ask again. Do not
+read `Pinned` as fire-and-forget.
 
 `subscribe_contract` is left **behaviourally unchanged**, deliberately. Altering
 what it returns would change the behaviour of already-deployed delegate WASM.
