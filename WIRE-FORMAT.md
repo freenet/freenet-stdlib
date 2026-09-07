@@ -239,6 +239,35 @@ your diff, you rebased onto the wrong base — the branch is fine, the rebase wa
 wrong. That is worth knowing in advance, because the natural reading is the
 opposite.
 
+## Resolving a conflict in a test module
+
+Two changes that both append to the same file — two PRs adding variants, or a
+wire change landing beside a doc change — conflict at the same anchors, and the
+resolution is almost always "keep both sides". That is right for the *content*
+and unsafe for the *delimiters*.
+
+Git's conflict regions are line ranges. They do not respect syntactic
+boundaries, so a closing `}` or an attribute can sit in the shared trailing
+context rather than inside either side. Concatenating both sides then drops it.
+Observed while merging two test modules: `mod a_tests { … }`'s closing brace and
+the following `#[cfg(test)]` both vanished, because the brace belonged to the
+context and not to either alternative.
+
+**The compiler caught that one, and it was luck.** An unclosed brace is a hard
+error. A dropped `#[cfg(test)]` alone is not — the module still compiles, and it
+is silently no longer a test module. Nothing fails. That is the same shape as the
+twelve `list_subscriptions` guards that were type-checked and never executed.
+
+So after resolving a conflict that touches tests, do not stop at a green run:
+
+```
+cargo test --features … <module_name>     # per module, and count them
+```
+
+Confirm each affected module still **executes**, by name and by count. A total
+that looks plausible is not evidence; the number you are checking against moved
+too.
+
 ## A stacked PR gets no CI here, silently
 
 Wire changes often arrive as a stack — one PR appends a variant, the next appends

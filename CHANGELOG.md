@@ -23,6 +23,11 @@
   delegate namespaces), but a deadline bakes the delegate's reading of it into a
   value only the host can act on.
 
+  Also records that resolving a conflict in a **test module** by keeping both
+  sides is safe for the content and not for the delimiters — a closing brace or
+  a `#[cfg(test)]` can sit in shared context and be dropped, and a lost
+  `#[cfg(test)]` compiles fine while silently removing the module from the run.
+
   Linked from CONTRIBUTING.md, and at the repo root rather than `docs/` because
   a bare `docs` line in `.gitignore` makes that directory untracked and
   `ci.yml`'s `paths-ignore` skips it.
