@@ -243,14 +243,26 @@ reply to something an older delegate cannot have sent.
 
 The host measures it from when it receives the call. A delay needs no clock on
 the delegate side, and if absolute scheduling is ever wanted it is `target - now`
-in terms of this same argument — so nothing is foreclosed. Delays below
-`MIN_WAKEUP_DELAY` are clamped up to it, because a delegate re-arming inside its
-own handler with a zero delay would otherwise spin the node in a tight wake loop.
-The guarantee is "not before"; nothing promises precision.
+in terms of this same argument — so nothing is foreclosed. The guarantee is
+"not before"; nothing promises precision.
 
-`tag` is capped at `MAX_WAKEUP_TAG_BYTES`, enforced before the host call. The
-host bounds how many wakeups a delegate may hold pending, but a count cap alone
-does not bound memory while the per-item size is caller-chosen.
+`schedule_wakeup` **clamps `after` up to `MIN_WAKEUP_DELAY` itself**, so
+`Duration::ZERO` is a one-second delay rather than a tight wake loop — a delegate
+re-arming inside its own handler would otherwise spin the node.
+
+`tag` is capped at `MAX_WAKEUP_TAG_BYTES`, applied before the host call.
+
+**Both of those are fail-fast convenience for well-behaved callers, not bounds.**
+`__frnt__delegate__schedule_wakeup` is an ordinary WASM import: a delegate can
+declare its own `extern "C"` block and pass a 10 MB tag, or a zero delay, without
+ever constructing a `DelegateCtx`. The guest controls its own imports, so no
+guest-side check can bound what the host receives. **Only the host can enforce
+either, and no host does yet** — freenet-core#3972. The same is true of the
+per-delegate cap on how many wakeups may be pending, which is an obligation on
+#3972 and not something that exists today.
+
+That last point matters for reading the tag cap's rationale: a size cap is needed
+*in addition to* a count cap, and neither is in place yet.
 
 #### `WakeupFired` carries no context, and the cache explains why
 
@@ -270,63 +282,28 @@ because the precedent runs the other way — `DELEGATE_SUBSCRIPTIONS`, the one
 comparable piece of per-delegate host state, is in-memory and a restart discards
 it entirely.
 
-### Why a delay and not a deadline
-
-An earlier draft used `at: SystemTime`. **A delegate cannot fill that field.**
-Delegates compile to `wasm32-unknown-unknown`, where `SystemTime::now()` compiles
-and then panics at runtime, and freenet-core registers no temporal host function
-in any of the four delegate namespaces — so there is no value the delegate could
-compute for an absolute deadline, including the "one week from now" that motivates
-this primitive.
-
-A delay is also strictly more capable. If a clock host function is ever added,
-absolute scheduling becomes `target - now`, expressed with this same field;
-an absolute field would gain nothing it did not already need that clock for. And
-a delegate re-arming inside its `WakeupFired` handler simply asks for the same
-delay again, so the recurring case needs neither a clock nor a timestamp on the
-fire.
-
-It removes two failure modes rather than merely an ambiguity: a pre-epoch
-`SystemTime` fails to serialize on the *sender*, and wall-clock steps (NTP, a
-manual change) are now the host scheduler's business rather than a semantic left
-undefined on the wire. `Duration` encodes identically to `SystemTime` — u64
-seconds LE + u32 nanos — so the wire size is unchanged, and the pin test asserts
-the whole byte layout rather than round-tripping through this crate's own encoder.
-
-##### Durability is a requirement on the host, and is unimplemented
-
-A week-long delay is only useful if pending wakeups survive a node restart.
-**No host does this today.** freenet-core#3972 must implement it; nothing in this
-crate can make it true. Said as an obligation rather than a guarantee because the
-precedent runs the other way — `DELEGATE_SUBSCRIPTIONS`, the one comparable piece
-of per-delegate host state, is an in-memory `LazyLock<DashMap>` that a restart
-discards entirely.
-
 #### Compatibility
 
-Both variants are **appended at tag 9**, behind the unsubscribe pair at tag 8,
-so no existing variant's bincode tag moves and
-every message a deployed delegate already understood still decodes. The two
-directions are not symmetric, and the asymmetry is the part that matters:
+`WakeupFired` is **appended at tag 9**, behind the unsubscribe pair at tag 8, so
+no existing variant's bincode tag moves and every message a deployed delegate
+already understood still decodes. `inbound_wakeup_fired_wire_format_is_stable`
+pins its tag and full byte layout.
 
-- **Old delegate -> new host** (outbound): safe. An older delegate never emits
-  `ScheduleWakeup`, and every tag it does emit is unchanged.
-- **New host -> old delegate** (inbound): `WakeupFired` at a tag an older
-  delegate does not know is a **hard bincode decode error**, not a skipped
-  message. It is safe here only because the host sends `WakeupFired` solely to a
-  delegate that asked for it by emitting `ScheduleWakeup` — a delegate built
-  against an older stdlib cannot have asked, so it can never be sent one. That
-  opt-in-by-construction property is a **requirement on the host
-  implementation**, not a property of the wire format, and freenet-core#3972
-  must preserve it.
-- Adding `ScheduleWakeup` is a **source-level break for exhaustive `match`
-  sites on `OutboundDelegateMsg`**, which is intentionally *not*
-  `#[non_exhaustive]` so the host is forced to handle every outbound variant.
-  `InboundDelegateMsg` stays `#[non_exhaustive]`.
+The two directions are not symmetric:
 
-New wire-format pin tests (`inbound_wakeup_fired_wire_format_is_stable`,
-`outbound_schedule_wakeup_wire_format_is_stable`) freeze both tags.
-
+- **Old delegate -> new host**: safe, and now safe by construction rather than
+  by convention — the scheduling half is a host import, so an older delegate
+  simply does not import it. There is no outbound wire variant to mis-decode,
+  which is the whole point of the conversion above.
+- **New host -> old delegate**: `WakeupFired` at a tag an older delegate does not
+  know is a **hard bincode decode error**, not a skipped message. It is safe only
+  because the host sends it solely to a delegate that scheduled one, and a
+  delegate that cannot import `schedule_wakeup` cannot have scheduled. That
+  opt-in-by-construction property is a **requirement on freenet-core#3972**, not
+  a property of the wire format.
+- The host function itself is additive both ways: a delegate that does not import
+  it is unaffected, and one that does fails to **instantiate** on too old a node
+  with a named missing-import error.
 
 ### TypeScript SDK 0.4.0 — Breaking (npm package `@freenetorg/freenet-stdlib`)
 

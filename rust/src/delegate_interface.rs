@@ -656,25 +656,12 @@ impl InboundDelegateMsg<'_> {
                 ..
             }) => Some(context),
             // `WakeupFired` carries no `DelegateContext`, so `None` here is
-            // the honest answer rather than a missing arm. The distinction:
-            // `DelegateContext` is per-conversation working state, secrets are
-            // durable state. Every variant that carries a context is a *reply*
-            // -- the host handing back the context it was threading through a
-            // multi-message exchange the delegate started. A wakeup is not a
-            // reply; it opens a new conversation, and `tag` supplies the
-            // correlation instead.
-            //
-            // The stronger reason is what a context here would commit the host
-            // to: persisting per-delegate context across arbitrary wall-clock
-            // time -- a week, for the River rotation case that motivates this
-            // primitive. That is a storage subsystem, not a field, and it is
-            // #5467 Phase 3. Adding the field now would either promise
-            // persistence that does not exist or ship an always-empty context
-            // that reads as a bug for the life of the wire format.
-            //
-            // The use case confirms the primitive is complete without it:
-            // River's weekly rotation needs to know *which rooms* to rotate,
-            // which is durable state it already holds in its secrets.
+            // the honest answer rather than a missing arm. The reasoning lives
+            // on the variant itself -- see `InboundDelegateMsg::WakeupFired`,
+            // which explains both why a wakeup is not a reply and why the
+            // context cache could not supply a coherent value anyway. Kept in
+            // one place deliberately: a maintainer editing this accessor should
+            // not meet a second, older version of the argument.
             InboundDelegateMsg::WakeupFired { .. } => None,
             // No wildcard, deliberately. The `_ => None` that used to sit here
             // is what let UserResponse go unhandled and silently report "no
