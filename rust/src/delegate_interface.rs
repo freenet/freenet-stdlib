@@ -880,13 +880,16 @@ impl UserInputResponse<'_> {
 /// the blunt one: **a delegate that emits a variant introduced in stdlib
 /// version X requires a host built against stdlib >= X.**
 ///
-/// A delegate that must work against older hosts has one good alternative: the
-/// V2 host-function API (the `freenet_delegate_contracts` import namespace).
-/// Host functions are resolved **by name at module instantiation**, so an
-/// import an old host does not provide fails at load time with a named
-/// missing-import error, instead of mid-protocol on a decode. That is the
-/// better failure mode, and it is why new capabilities should prefer a host
-/// function over a new variant where there is a choice.
+/// Where a host function exists for the same capability, it is the better
+/// choice against older hosts. Host functions are resolved **by name at module
+/// instantiation**, so an import an old host does not provide fails at load
+/// time with a named missing-import error, instead of mid-protocol on a decode.
+///
+/// That said, the `freenet_delegate_contracts` namespace holds only
+/// `get_contract_state(_len)` — a local read. There is no host function for
+/// writing or subscribing, so `PutContractRequest`, `UpdateContractRequest` and
+/// `SubscribeContractRequest` below are the only route for those, and the
+/// variant rule above governs them.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OutboundDelegateMsg {
     // for the apps

@@ -2,6 +2,83 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-21
+
+### Removed — seven delegate host imports no released freenet-core provides
+
+`rust/src/delegate_host.rs` declared seven `extern "C"` host imports that
+freenet-core 0.2.136 does not register. A delegate that **calls** one compiles
+and links normally, then fails at module instantiation with a missing-import
+error. Removing the declarations turns that into a compile error instead, at the
+call site, before anything is published.
+
+Three were withdrawn from the node in freenet-core#5638:
+
+| removed import | removed wrapper |
+|---|---|
+| `__frnt__delegate__put_contract_state` | `DelegateCtx::put_contract_state` |
+| `__frnt__delegate__update_contract_state` | `DelegateCtx::update_contract_state` |
+| `__frnt__delegate__subscribe_contract` | `DelegateCtx::subscribe_contract` |
+
+Four were never registered by any released freenet-core:
+
+| removed import | removed wrapper |
+|---|---|
+| `__frnt__delegate__subscribe_contract_checked` | `DelegateCtx::subscribe_contract_checked` |
+| `__frnt__delegate__list_subscriptions_len` | *(internal to `list_subscriptions`)* |
+| `__frnt__delegate__list_subscriptions` | `DelegateCtx::list_subscriptions` |
+| `__frnt__delegate__schedule_wakeup` | `DelegateCtx::schedule_wakeup` |
+
+`subscribe_contract_checked` and `schedule_wakeup` were added in 0.10.0 and
+never worked on any node. 0.10.0's own documentation told delegate authors to
+**prefer** `subscribe_contract_checked` over `subscribe_contract`.
+
+Also removed, because they existed only to serve the above:
+
+- `SubscribeOutcome` (with `CODE_PINNED`, `CODE_NOT_PINNED`, `from_code`,
+  `is_pinned`) and its prelude re-export
+- `MAX_SUBSCRIPTION_LIST_BYTES`, `MAX_WAKEUP_TAG_BYTES`, `MIN_WAKEUP_DELAY`,
+  `clamp_wakeup_delay`
+- `encode_contract_id_list` / `decode_contract_id_list` and their prelude
+  re-exports — the wire codec for the subscription list, which now has no
+  producer or consumer
+
+**Breaking.** Source-breaking for any crate naming those items; a minor bump
+signals it on 0.x. Delegate WASM already built against 0.10.0 is unaffected —
+it keeps whatever imports it compiled with, and those that call a removed
+function fail to instantiate exactly as they do today. 0.10.0 is **not yanked**.
+
+**What to use instead.** Write and subscribe by emitting the corresponding
+`OutboundDelegateMsg` — `PutContractRequest`, `UpdateContractRequest`,
+`SubscribeContractRequest` — which go through the node's normal contract path
+and, since freenet-core#5615, reach the network. There is no replacement for
+`list_subscriptions` or `schedule_wakeup`; neither ever had a host
+implementation to replace.
+
+`DelegateCtx::get_contract_state` and `get_contract_state_len` are **unchanged
+and still supported** — `freenet_delegate_contracts` now holds only that read.
+
+`InboundDelegateMsg::WakeupFired` is left in place at bincode variant tag 9.
+Nothing can request a wakeup now, so it is unreachable rather than harmful, and
+removing it would be a wire-format change.
+
+### Added — a guard against declaring imports the host does not provide
+
+New module `freenet_stdlib::host_imports`.
+
+`DECLARED_HOST_IMPORTS` is a checked-in list of every WASM host import this
+crate declares, as `(module, name)` pairs. A test parses the crate's own
+`extern "C"` blocks and fails if the list and the source disagree, so adding or
+removing an import is a deliberate edit a reviewer sees rather than a silent
+divergence. It matches only a `fn` declaration line inside an extern block, not
+a mention of the name in prose, and a companion test walks `src/` so a new file
+with an extern block cannot escape the scan.
+
+Nothing previously detected this class of drift, which is how seven imports
+accumulated. The constant is **public** so freenet-core can assert its own
+linker registration set against it without cross-repo file plumbing; that half
+is tracked separately.
+
 ### Documentation
 
 - **`WIRE-FORMAT.md`** — what is safe to change on the host↔delegate wire and
@@ -34,6 +111,12 @@
   Linked from CONTRIBUTING.md, and at the repo root rather than `docs/` because
   a bare `docs` line in `.gitignore` makes that directory untracked and
   `ci.yml`'s `paths-ignore` skips it.
+
+## [0.10.0] - 2026-09-07
+
+*Section boundaries below were reconstructed after the fact: 0.9.0 and 0.10.0
+were both published without their changelog entries being moved out of
+`[Unreleased]`.*
 
 ### Added — a delegate can learn whether its subscribe has anything to fire on
 
@@ -426,6 +509,8 @@ contract key, or retries one after a timeout, should treat a response as
 "an answer for this contract" rather than "the answer to this call": re-check
 whatever the result is used for, and prefer idempotent retries. Requests for
 *different* contracts are correlated correctly and need no such care.
+
+## [0.9.0] - 2026-08-05
 
 ### Breaking (next release must be 0.9.0, not a patch)
 - **`DelegateRequest::RegisterDelegateWithPredecessors`** removed (added in

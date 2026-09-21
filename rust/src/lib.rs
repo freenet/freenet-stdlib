@@ -27,6 +27,7 @@ pub(crate) mod common_generated {
 }
 
 pub mod client_api;
+pub mod host_imports;
 pub mod log;
 #[cfg(feature = "contract")]
 pub mod rand;
@@ -39,8 +40,7 @@ pub mod prelude {
     pub use crate::contract_interface::wasm_interface::ContractInterfaceResult;
     pub use crate::contract_interface::*;
     pub use crate::delegate_host::{
-        decode_contract_id_list, decode_secret_key_list, encode_contract_id_list,
-        encode_secret_key_list, error_codes, DelegateCtx, SubscribeOutcome,
+        decode_secret_key_list, encode_secret_key_list, error_codes, DelegateCtx,
     };
     pub use crate::delegate_interface::wasm_interface::DelegateInterfaceResult;
     pub use crate::delegate_interface::*;
