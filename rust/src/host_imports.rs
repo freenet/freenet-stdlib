@@ -123,17 +123,10 @@ mod host_import_manifest_tests {
         ("memory/buf.rs", include_str!("memory/buf.rs")),
     ];
 
-    /// Parse `#[link(wasm_import_module = "M")] ... extern "C" { fn NAME(..) }`
-    /// out of Rust source.
-    ///
-    /// Deliberately matches only a `fn` **declaration line inside an extern
-    /// block**, never a bare occurrence of the name. This file and
-    /// `delegate_host.rs` mention these identifiers dozens of times in prose,
-    /// and a check satisfied by its own doc comments is not a check.
     /// Drop everything from the first `#[cfg(test)]` onward.
     ///
     /// A host import is never declared inside a test module, but a *fixture*
-    /// for this parser is — the tests below contain `extern "C"` blocks as
+    /// for this parser is: the tests below contain `extern "C"` blocks as
     /// string literals, and this very file would otherwise be read as
     /// declaring `__frnt__delegate__real` and friends. Stripping test code
     /// first is what lets the guard scan its own source honestly rather than
@@ -145,11 +138,63 @@ mod host_import_manifest_tests {
         }
     }
 
+    /// A line inside an `extern "C"` block that the parser did not understand.
+    ///
+    /// Recorded as an entry rather than ignored, so it can never match
+    /// [`DECLARED_HOST_IMPORTS`] and therefore turns the guard **red**. A
+    /// parser that silently skips what it cannot read is the failure mode this
+    /// whole module exists to prevent, one level down: it would be a check that
+    /// passes because it saw nothing.
+    const UNPARSED: &str = "<unparsed-extern-line>";
+
+    /// Strip a leading visibility qualifier, returning the rest of the line.
+    ///
+    /// Handles `pub`, `pub(crate)`, `pub(super)`, `pub(in some::path)` and any
+    /// other parenthesised restriction. An earlier version matched only the
+    /// literal prefixes `fn `, `pub fn ` and `pub(crate) fn `, so a
+    /// `pub(super) fn` import was skipped entirely — and because the
+    /// whole-tree scan uses this same parser, such an import stayed invisible
+    /// even in a new file. Found by an external reviewer on PR #134.
+    fn strip_visibility(t: &str) -> &str {
+        let Some(rest) = t.strip_prefix("pub") else {
+            return t;
+        };
+        // `pub` must be a whole word: `pubfn` is not a visibility.
+        let rest = match rest.chars().next() {
+            Some('(') => match rest.find(')') {
+                Some(i) => &rest[i + 1..],
+                // An unterminated `pub(` is not something we can read; hand
+                // back the original so it is reported as unparsed rather than
+                // quietly treated as a bare `fn`.
+                None => return t,
+            },
+            Some(c) if c.is_whitespace() => rest,
+            _ => return t,
+        };
+        rest.trim_start()
+    }
+
+    /// Parse `#[link(wasm_import_module = "M")] ... extern "C" { fn NAME(..) }`
+    /// out of Rust source.
+    ///
+    /// Deliberately matches only a `fn` **declaration line inside an extern
+    /// block**, never a bare occurrence of the name. This file and
+    /// `delegate_host.rs` mention these identifiers dozens of times in prose,
+    /// and a check satisfied by its own doc comments is not a check.
+    ///
+    /// Inside an extern block the parser is **fail-closed**: blank lines, doc
+    /// comments, attributes and the continuation lines of a multi-line
+    /// signature are skipped, a `fn` declaration is recorded, and anything else
+    /// is recorded as [`UNPARSED`] so the guard fails loudly instead of missing
+    /// a declaration it did not recognise.
     fn parse_imports(src: &str) -> Vec<(String, String)> {
         let mut out = Vec::new();
         let mut pending_module: Option<String> = None;
         let mut current_module: Option<String> = None;
         let mut in_extern = false;
+        // True while we are inside a signature spread over several lines, i.e.
+        // after a `fn ...(` whose line did not terminate with `;`.
+        let mut in_signature = false;
 
         for line in src.lines() {
             let t = line.trim();
@@ -157,38 +202,86 @@ mod host_import_manifest_tests {
             if in_extern {
                 if t == "}" || t.starts_with("} ") {
                     in_extern = false;
+                    in_signature = false;
                     current_module = None;
                     continue;
                 }
-                if let Some(rest) = t.strip_prefix("fn ").or_else(|| {
-                    t.strip_prefix("pub fn ")
-                        .or_else(|| t.strip_prefix("pub(crate) fn "))
+                if in_signature {
+                    if t.ends_with(';') {
+                        in_signature = false;
+                    }
+                    continue;
+                }
+                if t.is_empty() || t.starts_with("//") || t.starts_with("#[") {
+                    continue;
+                }
+
+                let decl = strip_visibility(t);
+                if let Some(rest) = decl.strip_prefix("fn ").or_else(|| {
+                    // `fn` with no trailing space, e.g. `fn__` is not valid, but
+                    // `unsafe fn` inside extern is.
+                    decl.strip_prefix("unsafe fn ")
                 }) {
                     let name: String = rest
                         .chars()
                         .take_while(|c| c.is_alphanumeric() || *c == '_')
                         .collect();
-                    if !name.is_empty() {
+                    if name.is_empty() {
+                        out.push((UNPARSED.to_string(), t.to_string()));
+                    } else {
                         // An extern block with no `#[link]` resolves in "env".
                         // Recording it as such makes an unattributed block show
                         // up as a mismatch rather than vanish.
                         let module = current_module.clone().unwrap_or_else(|| "env".to_string());
                         out.push((module, name));
+                        if !t.ends_with(';') {
+                            in_signature = true;
+                        }
+                    }
+                } else {
+                    // Could be a `static`, a `type`, or a declaration shape this
+                    // parser has never seen. Either way it is not something to
+                    // pass over in silence.
+                    out.push((UNPARSED.to_string(), t.to_string()));
+                }
+                continue;
+            }
+
+            if t.starts_with("#[link(") && t.contains("wasm_import_module") {
+                // Take the first quoted string after the `=`.
+                if let Some(eq) = t.find('=') {
+                    let after = &t[eq + 1..];
+                    if let Some(open) = after.find('"') {
+                        let rest = &after[open + 1..];
+                        if let Some(close) = rest.find('"') {
+                            pending_module = Some(rest[..close].to_string());
+                        }
                     }
                 }
                 continue;
             }
 
-            if let Some(rest) = t.strip_prefix("#[link(wasm_import_module = \"") {
-                if let Some(end) = rest.find('"') {
-                    pending_module = Some(rest[..end].to_string());
+            // `unsafe extern "C"` is the Rust 2024 spelling of the same thing.
+            //
+            // Only a BLOCK opens here. `extern "C" fn name(..) {` is a
+            // definition of a function this crate exports, not a declaration of
+            // one it imports, and reading its body as if it were a block is how
+            // a stray `0` from `buf.rs`'s off-wasm stub first appeared as a
+            // phantom import. So require that nothing but the brace follows.
+            let opener = t
+                .strip_prefix("unsafe extern \"C\"")
+                .or_else(|| t.strip_prefix("extern \"C\""));
+            if let Some(rest) = opener {
+                let rest = rest.trim();
+                if rest.is_empty() || rest == "{" {
+                    in_extern = true;
+                    in_signature = false;
+                    current_module = pending_module.take();
+                } else {
+                    // A definition, e.g. `extern "C" fn foo() {`. Not an import
+                    // block, and it must not consume the pending `#[link]`.
+                    pending_module = None;
                 }
-                continue;
-            }
-
-            if t.starts_with("extern \"C\"") {
-                in_extern = true;
-                current_module = pending_module.take();
                 continue;
             }
 
@@ -329,6 +422,106 @@ fn __frnt__delegate__local_definition() -> i64 { 0 }
                 "__frnt__delegate__real".to_string()
             )],
             "only a `fn` declaration line inside an extern block is an import"
+        );
+    }
+
+    /// A restricted visibility must not hide an import.
+    ///
+    /// The parser originally matched only `fn `, `pub fn ` and `pub(crate) fn `,
+    /// so `pub(super) fn` was skipped — and since the whole-tree scan shares
+    /// this parser, an import declared that way was invisible to every check
+    /// here. A guard with a blind spot is worse than no guard, because it is
+    /// trusted. Found by an external reviewer on PR #134.
+    #[test]
+    fn every_visibility_spelling_is_recognised() {
+        for vis in [
+            "",
+            "pub ",
+            "pub(crate) ",
+            "pub(super) ",
+            "pub(self) ",
+            "pub(in crate::memory) ",
+        ] {
+            let src = format!(
+                "#[link(wasm_import_module = \"freenet_m\")]\nextern \"C\" {{\n    {vis}fn __frnt__x() -> i32;\n}}\n"
+            );
+            assert_eq!(
+                parse_imports(&src),
+                vec![("freenet_m".to_string(), "__frnt__x".to_string())],
+                "visibility {vis:?} was not recognised"
+            );
+        }
+    }
+
+    /// Anything inside an extern block the parser cannot read is reported, not
+    /// skipped.
+    ///
+    /// This is what makes the guard fail-closed. A parser that silently passes
+    /// over a declaration shape it has never seen is a check that succeeds
+    /// because it looked at nothing — the same defect one level down from the
+    /// one this module exists to catch.
+    #[test]
+    fn an_unreadable_declaration_is_reported_rather_than_skipped() {
+        let src = "#[link(wasm_import_module = \"freenet_m\")]\nextern \"C\" {\n    static SOMETHING: i32;\n}\n";
+        let parsed = parse_imports(src);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].0, UNPARSED, "unreadable line must be flagged");
+
+        // And it must make the real guard red, not merely be recorded.
+        assert!(
+            !DECLARED_HOST_IMPORTS.iter().any(|i| i.module == UNPARSED),
+            "UNPARSED must never be a legitimate manifest module"
+        );
+    }
+
+    /// A signature spread over several lines yields one import, and its
+    /// argument lines are not mistaken for declarations.
+    #[test]
+    fn a_multi_line_signature_is_one_import_and_its_arguments_are_not() {
+        let src = "#[link(wasm_import_module = \"freenet_m\")]\nextern \"C\" {\n    fn __frnt__wide(\n        a: i64,\n        b: i32,\n    ) -> i64;\n    fn __frnt__narrow() -> i32;\n}\n";
+        assert_eq!(
+            parse_imports(src),
+            vec![
+                ("freenet_m".to_string(), "__frnt__wide".to_string()),
+                ("freenet_m".to_string(), "__frnt__narrow".to_string()),
+            ]
+        );
+    }
+
+    /// An `extern "C" fn` DEFINITION is not an import block.
+    ///
+    /// `memory/buf.rs` defines an off-wasm stub as
+    /// `unsafe extern "C" fn __frnt__fill_buffer(..) { .. }`. Reading that as a
+    /// block opener walks into the function body, where a bare `0` was briefly
+    /// reported as a phantom import. Exporting a function and importing one are
+    /// opposite things and must not share a code path.
+    #[test]
+    fn an_extern_c_function_definition_is_not_an_import_block() {
+        let src = "#[no_mangle]\nunsafe extern \"C\" fn __frnt__stub(_a: i64) -> u32 {\n    0\n}\n";
+        assert_eq!(parse_imports(src), vec![]);
+
+        let src = "#[no_mangle]\nextern \"C\" fn __frnt__stub2() -> u32 {\n    0\n}\n";
+        assert_eq!(parse_imports(src), vec![]);
+
+        // And the real file must contain exactly its one declared import.
+        let buf = strip_test_modules(include_str!("memory/buf.rs"));
+        assert_eq!(
+            parse_imports(buf),
+            vec![(
+                "freenet_contract_io".to_string(),
+                "__frnt__fill_buffer".to_string()
+            )],
+            "buf.rs declares one import and defines one stub of the same name"
+        );
+    }
+
+    /// `unsafe extern "C"` is the Rust 2024 spelling and must parse the same.
+    #[test]
+    fn the_rust_2024_unsafe_extern_spelling_is_recognised() {
+        let src = "#[link(wasm_import_module = \"freenet_m\")]\nunsafe extern \"C\" {\n    fn __frnt__x() -> i32;\n}\n";
+        assert_eq!(
+            parse_imports(src),
+            vec![("freenet_m".to_string(), "__frnt__x".to_string())]
         );
     }
 
