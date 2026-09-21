@@ -572,6 +572,36 @@ pub enum InboundDelegateMsg<'a> {
     /// value the delegate supplied when scheduling, echoed back verbatim so
     /// the delegate can identify which wakeup fired. Owned (`'static`).
     ///
+    /// # Currently unreachable, and deliberately kept — do not delete it
+    ///
+    /// This is the *delivery* half of scheduled wakeup. Its *request* half,
+    /// `DelegateCtx::schedule_wakeup`, was removed in 0.11.0 because no
+    /// released freenet-core ever registered the
+    /// `__frnt__delegate__schedule_wakeup` host import it called. Nothing can
+    /// ask for a wakeup today, so this variant never arrives.
+    ///
+    /// That makes it an orphan, and an orphan invites tidying. Three reasons
+    /// not to:
+    ///
+    /// - **Unreachable is not harmful.** The removed externs were removed
+    ///   because a delegate calling one compiles and then fails at module
+    ///   instantiation, leaving a healthy-looking node running a broken app.
+    ///   A variant that never arrives does none of that. Only the first
+    ///   problem justifies a breaking change.
+    /// - **This one is on the wire.** Deleting it is a wire-format change on a
+    ///   pinned enum, which is a much heavier act than deleting an unused
+    ///   `extern` declaration — and the tag-pinning test below exists to stop
+    ///   it happening casually.
+    /// - **The feature is expected back.** freenet-core's host-side
+    ///   implementation exists on the unmerged branch
+    ///   `feat/3972-delegate-wakeup-core`. Removing the delivery half now buys
+    ///   nothing and costs a second wire change when it lands.
+    ///
+    /// Restoring the feature means landing **both halves together**: the host
+    /// registration in freenet-core and the stdlib extern plus its
+    /// `host_imports::DECLARED_HOST_IMPORTS` entry. See freenet-core#5717 for
+    /// the check that makes that ordering visible.
+    ///
     /// # What the context cache holds during a wakeup
     ///
     /// Nothing the delegate should read. freenet-core's delegate context cache

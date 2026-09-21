@@ -58,9 +58,13 @@ implementation to replace.
 `DelegateCtx::get_contract_state` and `get_contract_state_len` are **unchanged
 and still supported** — `freenet_delegate_contracts` now holds only that read.
 
-`InboundDelegateMsg::WakeupFired` is left in place at bincode variant tag 9.
-Nothing can request a wakeup now, so it is unreachable rather than harmful, and
-removing it would be a wire-format change.
+`InboundDelegateMsg::WakeupFired` is **left in place** at bincode variant tag 9,
+and is documented at the variant so it is not tidied away later. It is the
+delivery half of scheduled wakeup; with the request half gone nothing can ask
+for a wakeup, so it is unreachable rather than harmful. Deleting it would be a
+wire-format change on a pinned enum, and freenet-core's host-side
+implementation exists on an unmerged branch, so the feature is expected to
+return — restoring it means landing both halves together.
 
 ### Added — a guard against declaring imports the host does not provide
 

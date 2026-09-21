@@ -31,7 +31,11 @@
 //! cannot see what the host registers. freenet-core should assert its own
 //! linker registration set against this constant — it is `pub`, and compiled
 //! into the crate freenet-core already depends on, precisely so that check
-//! needs no cross-repo file plumbing. Tracked in freenet-core#5655.
+//! needs no cross-repo file plumbing. Tracked in freenet-core#5717.
+//!
+//! As of this release the two sets agree exactly: the 13 `__frnt__delegate__*`
+//! entries below are the 13 registered by `WasmtimeEngine::register_host_functions`
+//! at freenet-core 0.2.136.
 
 /// One WASM host import: the import module it is resolved in, and its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -77,14 +81,20 @@ pub const DECLARED_HOST_IMPORTS: &[HostImport] = &[
         "__frnt__delegate__create_delegate",
     ),
     HostImport::new("freenet_delegate_secrets", "__frnt__delegate__get_secret"),
-    HostImport::new("freenet_delegate_secrets", "__frnt__delegate__get_secret_len"),
+    HostImport::new(
+        "freenet_delegate_secrets",
+        "__frnt__delegate__get_secret_len",
+    ),
     HostImport::new("freenet_delegate_secrets", "__frnt__delegate__has_secret"),
     HostImport::new("freenet_delegate_secrets", "__frnt__delegate__list_secrets"),
     HostImport::new(
         "freenet_delegate_secrets",
         "__frnt__delegate__list_secrets_len",
     ),
-    HostImport::new("freenet_delegate_secrets", "__frnt__delegate__remove_secret"),
+    HostImport::new(
+        "freenet_delegate_secrets",
+        "__frnt__delegate__remove_secret",
+    ),
     HostImport::new("freenet_delegate_secrets", "__frnt__delegate__set_secret"),
     HostImport::new("freenet_log", "__frnt__logger__info"),
     HostImport::new("freenet_rand", "__frnt__rand__rand_bytes"),
@@ -363,7 +373,7 @@ extern "C" {
 
         let known: Vec<String> = SCANNED
             .iter()
-            .map(|(p, _)| p.replace('/', &std::path::MAIN_SEPARATOR.to_string()))
+            .map(|(p, _)| p.replace('/', std::path::MAIN_SEPARATOR_STR))
             .collect();
 
         let mut unscanned = Vec::new();
