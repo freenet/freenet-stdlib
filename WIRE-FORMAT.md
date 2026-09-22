@@ -193,10 +193,19 @@ checked first.
 
 They also cost no tag, so they cannot collide with a concurrent change.
 
-`DelegateCtx::list_subscriptions` and `subscribe_contract_checked` are both this
-shape. Note the tradeoff: a host function's return channel is an `i64`, so design
-it to carry outcomes rather than a `bool` — collapsing it is how
+`DelegateCtx::get_contract_state` and `list_secrets` are both this shape. Note
+the tradeoff: a host function's return channel is an `i64`, so design it to carry
+outcomes rather than a `bool` — collapsing it is how the withdrawn
 `subscribe_contract` came to report "registered but not pinned" as success.
+
+**The shape has a second, harder obligation: the host must actually register it.**
+A host function that no node provides is *worse* than a new variant, because the
+declaration costs nothing until something calls it, so both repos compile,
+publish and stay green while the SDK advertises a function that cannot work.
+freenet-stdlib 0.10.0 shipped seven such imports; 0.11.0 removed them and added
+`freenet_stdlib::host_imports::DECLARED_HOST_IMPORTS` plus a test that pins the
+declared set, so the two sides can be checked against each other. Adding a host
+function means landing the host half first, or at least in the same breath.
 
 ## If you are adding a variant
 
@@ -295,9 +304,12 @@ real but arrives in build output nobody reads on a green run, and the signal tha
 matters — the test result — stays green. The number just gets smaller.
 
 The other genuine silent-exclusion mechanism in this repo is a **target** gate
-rather than a test gate: the twelve `list_subscriptions` guards sat behind
-`cfg(target_family = "wasm")`, which really does exclude them, and CI's wasm32
-jobs build and lint without executing anything.
+rather than a test gate: anything behind `cfg(target_family = "wasm")` really is
+excluded from every test run, because CI's wasm32 jobs build and lint without
+executing anything. The wasm-only bodies in `delegate_host.rs` are all of this
+kind. The remedy is the one used there: split the decisions out into a plain
+function that both targets compile, so the part worth testing is reachable from
+`cargo test`, and leave only the `extern "C"` call itself inside the gate.
 
 ### The check
 

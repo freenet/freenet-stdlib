@@ -572,6 +572,36 @@ pub enum InboundDelegateMsg<'a> {
     /// value the delegate supplied when scheduling, echoed back verbatim so
     /// the delegate can identify which wakeup fired. Owned (`'static`).
     ///
+    /// # Currently unreachable, and deliberately kept — do not delete it
+    ///
+    /// This is the *delivery* half of scheduled wakeup. Its *request* half,
+    /// `DelegateCtx::schedule_wakeup`, was removed in 0.11.0 because no
+    /// released freenet-core ever registered the
+    /// `__frnt__delegate__schedule_wakeup` host import it called. Nothing can
+    /// ask for a wakeup today, so this variant never arrives.
+    ///
+    /// That makes it an orphan, and an orphan invites tidying. Three reasons
+    /// not to:
+    ///
+    /// - **Unreachable is not harmful.** The removed externs were removed
+    ///   because a delegate calling one compiles and then fails at module
+    ///   instantiation, leaving a healthy-looking node running a broken app.
+    ///   A variant that never arrives does none of that. Only the first
+    ///   problem justifies a breaking change.
+    /// - **This one is on the wire.** Deleting it is a wire-format change on a
+    ///   pinned enum, which is a much heavier act than deleting an unused
+    ///   `extern` declaration — and the tag-pinning test below exists to stop
+    ///   it happening casually.
+    /// - **The feature is expected back.** freenet-core's host-side
+    ///   implementation exists on the unmerged branch
+    ///   `feat/3972-delegate-wakeup-core`. Removing the delivery half now buys
+    ///   nothing and costs a second wire change when it lands.
+    ///
+    /// Restoring the feature means landing **both halves together**: the host
+    /// registration in freenet-core and the stdlib extern plus its
+    /// `host_imports::DECLARED_HOST_IMPORTS` entry. See freenet-core#5717 for
+    /// the check that makes that ordering visible.
+    ///
     /// # What the context cache holds during a wakeup
     ///
     /// Nothing the delegate should read. freenet-core's delegate context cache
@@ -880,13 +910,16 @@ impl UserInputResponse<'_> {
 /// the blunt one: **a delegate that emits a variant introduced in stdlib
 /// version X requires a host built against stdlib >= X.**
 ///
-/// A delegate that must work against older hosts has one good alternative: the
-/// V2 host-function API (the `freenet_delegate_contracts` import namespace).
-/// Host functions are resolved **by name at module instantiation**, so an
-/// import an old host does not provide fails at load time with a named
-/// missing-import error, instead of mid-protocol on a decode. That is the
-/// better failure mode, and it is why new capabilities should prefer a host
-/// function over a new variant where there is a choice.
+/// Where a host function exists for the same capability, it is the better
+/// choice against older hosts. Host functions are resolved **by name at module
+/// instantiation**, so an import an old host does not provide fails at load
+/// time with a named missing-import error, instead of mid-protocol on a decode.
+///
+/// That said, the `freenet_delegate_contracts` namespace holds only
+/// `get_contract_state(_len)` — a local read. There is no host function for
+/// writing or subscribing, so `PutContractRequest`, `UpdateContractRequest` and
+/// `SubscribeContractRequest` below are the only route for those, and the
+/// variant rule above governs them.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OutboundDelegateMsg {
     // for the apps
