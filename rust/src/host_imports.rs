@@ -174,6 +174,24 @@ mod host_import_manifest_tests {
         rest.trim_start()
     }
 
+    /// True if `t`, ignoring a trailing `//` line comment, ends with `;`.
+    ///
+    /// Used to detect where a declaration's signature closes. A trailing
+    /// comment after the closing `;` (`fn __frnt__x() -> i32; // deprecated`)
+    /// is ordinary Rust, but matching the raw line's `ends_with(';')` treats
+    /// it as still open: `in_signature` never clears, so every following
+    /// line up to the block's `}` — including a genuine `fn` declaration —
+    /// is silently swallowed as "part of this signature" instead of being
+    /// read or reported as [`UNPARSED`]. That is exactly the failure mode
+    /// this module exists to not have. Found in review of PR #134.
+    fn ends_with_semicolon_ignoring_trailing_comment(t: &str) -> bool {
+        let core = match t.find("//") {
+            Some(i) => t[..i].trim_end(),
+            None => t,
+        };
+        core.ends_with(';')
+    }
+
     /// Parse `#[link(wasm_import_module = "M")] ... extern "C" { fn NAME(..) }`
     /// out of Rust source.
     ///
@@ -207,7 +225,7 @@ mod host_import_manifest_tests {
                     continue;
                 }
                 if in_signature {
-                    if t.ends_with(';') {
+                    if ends_with_semicolon_ignoring_trailing_comment(t) {
                         in_signature = false;
                     }
                     continue;
@@ -234,7 +252,7 @@ mod host_import_manifest_tests {
                         // up as a mismatch rather than vanish.
                         let module = current_module.clone().unwrap_or_else(|| "env".to_string());
                         out.push((module, name));
-                        if !t.ends_with(';') {
+                        if !ends_with_semicolon_ignoring_trailing_comment(t) {
                             in_signature = true;
                         }
                     }
@@ -512,6 +530,39 @@ fn __frnt__delegate__local_definition() -> i64 { 0 }
                 "__frnt__fill_buffer".to_string()
             )],
             "buf.rs declares one import and defines one stub of the same name"
+        );
+    }
+
+    /// A trailing line comment after the semicolon that closes a
+    /// declaration must not be mistaken for the signature still being open.
+    ///
+    /// Two independent review lenses on PR #134 found the same latent gap:
+    /// `ends_with(';')` on the raw line failed for
+    /// `fn __frnt__first() -> i32; // trailing comment`, leaving
+    /// `in_signature` stuck and silently swallowing every following line —
+    /// including a genuine `fn` — up to the block's `}`. Covers both the
+    /// single-line declaration case and the multi-line-signature closing
+    /// line, since the bug lived in both call sites of the same check.
+    #[test]
+    fn a_trailing_comment_after_the_closing_semicolon_does_not_swallow_the_next_declaration() {
+        let src = "#[link(wasm_import_module = \"freenet_m\")]\nextern \"C\" {\n    fn __frnt__first() -> i32; // trailing comment\n    fn __frnt__second() -> i32;\n}\n";
+        assert_eq!(
+            parse_imports(src),
+            vec![
+                ("freenet_m".to_string(), "__frnt__first".to_string()),
+                ("freenet_m".to_string(), "__frnt__second".to_string()),
+            ],
+            "a trailing comment on the closing line must not hide the next import"
+        );
+
+        let src = "#[link(wasm_import_module = \"freenet_m\")]\nextern \"C\" {\n    fn __frnt__wide(\n        a: i64,\n    ) -> i64; // trailing comment\n    fn __frnt__narrow() -> i32;\n}\n";
+        assert_eq!(
+            parse_imports(src),
+            vec![
+                ("freenet_m".to_string(), "__frnt__wide".to_string()),
+                ("freenet_m".to_string(), "__frnt__narrow".to_string()),
+            ],
+            "a trailing comment on a multi-line signature's closing line must not hide the next import"
         );
     }
 
