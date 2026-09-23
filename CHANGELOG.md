@@ -47,7 +47,7 @@ release changes its WASM and therefore its delegate key. A minor bump keeps
 app's migration path (freenet-migrate) in place. Declaring a manifest changes
 the key again, since the section is part of the module.
 
-Requires `freenet-macros` 0.3.0 (the `manifest(...)` argument). `#[delegate]`
+Requires `freenet-macros` 0.3.0 (the `manifest(...)` argument); publish it first. `#[delegate]`
 now rejects arguments it does not understand instead of ignoring them, which is
 why the macros crate takes a minor bump. The macro checks at compile time that
 it agrees with the stdlib on the section name and format version. One manifest

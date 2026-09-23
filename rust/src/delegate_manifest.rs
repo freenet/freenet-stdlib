@@ -106,7 +106,8 @@ pub enum LifecycleKind {
     /// [`LifecycleEvent::NodeStarted`].
     NodeStarted,
     /// A name this stdlib does not know, written by a newer one. Readers
-    /// ignore it. Never written by this stdlib.
+    /// ignore it. The macro never writes it; re-serializing a manifest read
+    /// from a newer stdlib does (as `"unknown"`).
     #[serde(other)]
     Unknown,
 }
@@ -124,7 +125,8 @@ pub enum Capability {
     /// manifest that lists a lifecycle kind (the macro enforces it).
     Background,
     /// A name this stdlib does not know, written by a newer one. Readers
-    /// ignore it. Never written by this stdlib.
+    /// ignore it. The macro never writes it; re-serializing a manifest read
+    /// from a newer stdlib does (as `"unknown"`).
     #[serde(other)]
     Unknown,
 }
@@ -237,7 +239,8 @@ impl DelegateManifest {
     /// Parse a section payload.
     ///
     /// Tolerant of manifests written by newer stdlibs: unknown fields are
-    /// ignored, a `null` list reads as empty, and a list entry that is not a
+    /// ignored, a list field that is not an array (`null`, or any other shape)
+    /// reads as empty, and a list entry that is not a
     /// name this reader knows (an unknown name, or a non-string value) reads as
     /// `Unknown` rather than failing the manifest, so the known entries next
     /// to it still count.
@@ -281,9 +284,12 @@ where
     D: serde::Deserializer<'de>,
     T: serde::de::DeserializeOwned + Unknownable,
 {
-    let raw: Option<Vec<serde_json::Value>> = Option::deserialize(d)?;
+    // Anything but an array (`null`, or a shape a later format might use)
+    // reads as an empty list: asking for nothing is the safe direction.
+    let serde_json::Value::Array(raw) = serde_json::Value::deserialize(d)? else {
+        return Ok(Vec::new());
+    };
     Ok(raw
-        .unwrap_or_default()
         .into_iter()
         .map(|v| serde_json::from_value(v).unwrap_or_else(|_| T::unknown()))
         .collect())
@@ -485,6 +491,11 @@ mod tests {
         assert!(m.lifecycle.is_empty() && m.capabilities.is_empty());
         let m = DelegateManifest::from_bytes(
             br#"{"manifest_version":1,"lifecycle":null,"capabilities":null}"#,
+        )
+        .unwrap();
+        assert!(m.lifecycle.is_empty() && m.capabilities.is_empty());
+        let m = DelegateManifest::from_bytes(
+            br#"{"manifest_version":1,"lifecycle":"installed","capabilities":{"background":{}}}"#,
         )
         .unwrap();
         assert!(m.lifecycle.is_empty() && m.capabilities.is_empty());
