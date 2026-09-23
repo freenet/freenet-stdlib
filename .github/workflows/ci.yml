@@ -66,6 +66,38 @@ jobs:
         working-directory: rust
         run: cargo build --target ${{ matrix.targets }}
 
+  wasm_manifest:
+    name: Delegate manifest survives a wasm32 release build
+
+    runs-on: ubuntu-latest
+    env:
+      FREENET_LOG: error
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            tests/wasm-manifest-fixture
+
+      - name: Build the fixture delegate (strip + LTO, like real delegates)
+        working-directory: tests/wasm-manifest-fixture
+        run: cargo build --release --target wasm32-unknown-unknown
+
+      - name: Read the manifest back from the module
+        working-directory: rust
+        run: >
+          cargo run --example read_manifest --
+          ../tests/wasm-manifest-fixture/target/wasm32-unknown-unknown/release/wasm_manifest_fixture.wasm
+          '{"manifest_version":1,"lifecycle":["installed","node_started"],"capabilities":["background"]}'
+
   clippy_check:
     name: Clippy
 

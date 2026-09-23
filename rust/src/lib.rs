@@ -5,6 +5,7 @@ pub mod contract_composition;
 mod contract_interface;
 pub mod delegate_host;
 mod delegate_interface;
+mod delegate_manifest;
 pub(crate) mod global;
 pub mod memory;
 mod parameters;
@@ -44,6 +45,7 @@ pub mod prelude {
     };
     pub use crate::delegate_interface::wasm_interface::DelegateInterfaceResult;
     pub use crate::delegate_interface::*;
+    pub use crate::delegate_manifest::*;
     pub use crate::parameters::*;
     pub use crate::typed_contract::{
         BincodeEncoder, Encoder, EncodingAdapter, JsonEncoder, RelatedContractsContainer,

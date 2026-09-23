@@ -74,15 +74,41 @@ pub fn contract(
     }
 }
 
-/// Generate the necessary code for the WASM runtime to interact with your contract ergonomically and safely.
+/// Generate the necessary code for the WASM runtime to interact with your delegate ergonomically and safely.
+///
+/// # Declaring a manifest
+///
+/// A delegate that wants lifecycle events or node-enforced capabilities
+/// declares them, and the macro embeds a manifest in the WASM
+/// (see `freenet_stdlib::prelude::DelegateManifest`):
+///
+/// ```ignore
+/// #[delegate(manifest(lifecycle = [Installed, NodeStarted], capabilities = [Background]))]
+/// impl DelegateInterface for MyDelegate { /* ... */ }
+/// ```
+///
+/// Without `manifest(...)` nothing is embedded and the delegate behaves as
+/// delegates always have. Adding one changes the WASM, and so the delegate key.
+///
+/// Listing any lifecycle kind requires `capabilities = [Background]`. Only one
+/// manifest per crate: the section is per WASM module. Custom sections must
+/// survive any post-processing of the module (`wasm-opt --strip-*`,
+/// `wasm-strip` remove them); a missing section means "no manifest", silently.
 #[proc_macro_attribute]
 pub fn delegate(
     args: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    let _args = syn::parse_macro_input!(args as AttributeArgs);
+    let args = syn::parse_macro_input!(args as AttributeArgs);
     let input = syn::parse_macro_input!(input as ItemImpl);
-    let output = delegate_impl::ffi_impl_wrap(&input);
+    let manifest = match delegate_impl::parse_manifest_args(&args.args) {
+        Ok(m) => m,
+        Err(err) => return proc_macro::TokenStream::from(err.to_compile_error()),
+    };
+    let mut output = delegate_impl::ffi_impl_wrap(&input);
+    if let Some(manifest) = manifest {
+        output.extend(delegate_impl::manifest_section(&input, &manifest));
+    }
     // println!("{}", quote!(#input));
     // println!("{output}");
     proc_macro::TokenStream::from(quote! {

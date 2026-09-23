@@ -55,7 +55,12 @@ only if the host sends it **strictly in reply to something an older delegate
 cannot have sent**. `WakeupFired` is safe because only a delegate that emitted
 `ScheduleWakeup` ever receives one. A hypothetical "your run was truncated"
 notice would **not** be safe, because nothing stops the host emitting it to a
-delegate that never opted in.
+delegate that never opted in. `Lifecycle` (tag 10) is the opt-in done right: the
+host sends it only to a delegate whose embedded manifest lists that lifecycle
+kind, and the `#[delegate(manifest(...))]` macro names each listed kind through
+the delegate's own stdlib, so it cannot list one that stdlib does not define. (A
+hand-assembled section can list anything; that only hurts the delegate that
+does it.)
 
 That opt-in property is a property of the *host implementation*, not of the wire
 format. Nothing here enforces it. If you add an inbound variant, say in the PR
