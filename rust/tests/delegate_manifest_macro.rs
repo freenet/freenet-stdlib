@@ -3,6 +3,10 @@
 //! (a proc-macro crate cannot depend on the types it describes), and the node
 //! reads it with `DelegateManifest::from_bytes`.
 
+// `#[delegate]` emits `cfg(feature = "freenet-main-delegate")`, a feature a
+// delegate crate defines and this test crate does not.
+#![allow(unexpected_cfgs)]
+
 use freenet_stdlib::prelude::*;
 
 struct WithManifest;
@@ -19,10 +23,10 @@ impl DelegateInterface for WithManifest {
     }
 }
 
-struct LifecycleOnly;
+struct BackgroundOnly;
 
-#[delegate(manifest(lifecycle = [NodeStarted]))]
-impl DelegateInterface for LifecycleOnly {
+#[delegate(manifest(capabilities = [Background]))]
+impl DelegateInterface for BackgroundOnly {
     fn process(
         _ctx: &mut DelegateCtx,
         _parameters: Parameters<'static>,
@@ -50,14 +54,14 @@ fn macro_json_matches_the_stdlib_serializer() {
     );
 
     let only =
-        DelegateManifest::from_bytes(LifecycleOnly::__FREENET_DELEGATE_MANIFEST_JSON.as_bytes())
+        DelegateManifest::from_bytes(BackgroundOnly::__FREENET_DELEGATE_MANIFEST_JSON.as_bytes())
             .unwrap();
     assert_eq!(
         only,
-        DelegateManifest::new(vec![LifecycleKind::NodeStarted], vec![])
+        DelegateManifest::new(vec![], vec![Capability::Background])
     );
     assert_eq!(
-        LifecycleOnly::__FREENET_DELEGATE_MANIFEST_JSON.as_bytes(),
+        BackgroundOnly::__FREENET_DELEGATE_MANIFEST_JSON.as_bytes(),
         only.to_bytes().as_slice()
     );
 }

@@ -634,8 +634,10 @@ pub enum InboundDelegateMsg<'a> {
     /// the wire-format note on this enum). The host sends it **only** to a
     /// delegate whose embedded [`DelegateManifest`](crate::prelude::DelegateManifest)
     /// lists the event's [`LifecycleKind`](crate::prelude::LifecycleKind), and
-    /// a delegate can only list a kind its stdlib defines. That is a property
-    /// of the host implementation, not of the format; freenet-core pins it.
+    /// the manifest macro only lists kinds the delegate's own stdlib defines
+    /// (it names each one through the stdlib, so anything else fails to
+    /// compile). The first half is a property of the host implementation, not
+    /// of the format; freenet-core pins it.
     ///
     /// Carries no `DelegateContext`, for the same reason as `WakeupFired`: it
     /// opens a conversation rather than continuing one.

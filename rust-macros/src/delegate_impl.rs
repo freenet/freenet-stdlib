@@ -4,13 +4,18 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Expr, ItemImpl, Meta, Token, Type, TypePath};
 
-/// Must match `freenet_stdlib::prelude::MANIFEST_SECTION_NAME`.
+/// Must match `freenet_stdlib::prelude::MANIFEST_SECTION_NAME`. Checked at
+/// compile time in every delegate that declares a manifest (see
+/// `manifest_section`).
 const MANIFEST_SECTION_NAME: &str = "freenet-manifest";
-/// Must match `freenet_stdlib::prelude::MANIFEST_VERSION`.
+/// Must match `freenet_stdlib::prelude::MANIFEST_VERSION`; checked the same way.
 const MANIFEST_VERSION: u16 = 1;
 
 /// `(source name, JSON name)` for each lifecycle kind this macro accepts.
-/// Must match the serde names of `freenet_stdlib::prelude::LifecycleKind`.
+/// The source name must be a `freenet_stdlib::prelude::LifecycleKind`
+/// variant (the generated code names it, so a stdlib without the variant
+/// fails to compile) and the JSON name its serde name (pinned by the stdlib
+/// test `macro_json_matches_the_stdlib_serializer`).
 const LIFECYCLE_KINDS: &[(&str, &str)] =
     &[("Installed", "installed"), ("NodeStarted", "node_started")];
 /// Same, for `freenet_stdlib::prelude::Capability`.
@@ -19,9 +24,9 @@ const CAPABILITIES: &[(&str, &str)] = &[("Background", "background")];
 /// A parsed `manifest(...)` argument.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ManifestArgs {
-    /// JSON names, deduplicated, in declaration order.
-    pub lifecycle: Vec<&'static str>,
-    pub capabilities: Vec<&'static str>,
+    /// `(source name, JSON name)`, deduplicated, in declaration order.
+    pub lifecycle: Vec<(&'static str, &'static str)>,
+    pub capabilities: Vec<(&'static str, &'static str)>,
 }
 
 impl ManifestArgs {
@@ -29,10 +34,10 @@ impl ManifestArgs {
     /// `DelegateManifest::to_bytes` produces for the same manifest; the
     /// stdlib test `macro_json_matches_the_stdlib_serializer` pins that.
     pub fn to_json(&self) -> String {
-        fn list(items: &[&str]) -> String {
+        fn list(items: &[(&str, &str)]) -> String {
             items
                 .iter()
-                .map(|s| format!("\"{s}\""))
+                .map(|(_, s)| format!("\"{s}\""))
                 .collect::<Vec<_>>()
                 .join(",")
         }
@@ -114,10 +119,10 @@ pub fn parse_manifest_args(
                     Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
                     _ => None,
                 };
-                let json = name
+                let entry = name
                     .as_deref()
                     .and_then(|n| table.iter().find(|(src, _)| *src == n))
-                    .map(|(_, json)| *json)
+                    .copied()
                     .ok_or_else(|| {
                         let known: Vec<_> = table.iter().map(|(s, _)| *s).collect();
                         syn::Error::new(
@@ -125,10 +130,20 @@ pub fn parse_manifest_args(
                             format!("unknown {what}; known: {}", known.join(", ")),
                         )
                     })?;
-                if !out.contains(&json) {
-                    out.push(json);
+                if !out.contains(&entry) {
+                    out.push(entry);
                 }
             }
+        }
+        // A lifecycle event is a run with no app open, which is exactly what
+        // `Background` grants. Without it the node never delivers the event,
+        // so a manifest listing one without the other is a silent no-op.
+        if !m.lifecycle.is_empty() && !m.capabilities.iter().any(|(s, _)| *s == "Background") {
+            return Err(syn::Error::new(
+                list.span(),
+                "lifecycle events are only delivered to a delegate whose app holds the \
+                 Background grant; add `capabilities = [Background]`",
+            ));
         }
         manifest = Some(m);
     }
@@ -145,7 +160,29 @@ pub fn manifest_section(item: &ItemImpl, manifest: &ManifestArgs) -> TokenStream
     let len = bytes.len();
     let byte_lits = bytes.iter().map(|b| quote!(#b));
     let section = syn::LitStr::new(MANIFEST_SECTION_NAME, Span::call_site());
+    // Name every listed kind and capability through the stdlib, so a delegate
+    // whose stdlib lacks one fails to compile instead of advertising an event
+    // its `InboundDelegateMsg` cannot decode. (The macros crate can be newer
+    // than the stdlib it is paired with.)
+    let kind_refs = manifest.lifecycle.iter().map(|(src, _)| {
+        let v = syn::Ident::new(src, Span::call_site());
+        quote!(const _: ::freenet_stdlib::prelude::LifecycleKind = ::freenet_stdlib::prelude::LifecycleKind::#v;)
+    });
+    let cap_refs = manifest.capabilities.iter().map(|(src, _)| {
+        let v = syn::Ident::new(src, Span::call_site());
+        quote!(const _: ::freenet_stdlib::prelude::Capability = ::freenet_stdlib::prelude::Capability::#v;)
+    });
+    let version = MANIFEST_VERSION;
     quote! {
+        #(#kind_refs)*
+        #(#cap_refs)*
+        const _: () = ::core::assert!(
+            ::freenet_stdlib::prelude::__manifest_macro_agrees(#section, #version),
+            "freenet-macros and freenet-stdlib disagree on the delegate manifest section; use matching versions"
+        );
+
+        // One manifest per WASM module: a second `manifest(...)` in the same
+        // crate is a duplicate definition of this static.
         // WASM-only: on other targets a custom link section is either
         // meaningless or, on Mach-O, a hard error about the section name.
         #[cfg(all(feature = "freenet-main-delegate", target_family = "wasm"))]
@@ -262,8 +299,11 @@ mod tests {
         let m = parse("manifest(lifecycle = [NodeStarted, Installed, NodeStarted], capabilities = [Background])")
             .unwrap()
             .unwrap();
-        assert_eq!(m.lifecycle, vec!["node_started", "installed"]);
-        assert_eq!(m.capabilities, vec!["background"]);
+        assert_eq!(
+            m.lifecycle,
+            vec![("NodeStarted", "node_started"), ("Installed", "installed")]
+        );
+        assert_eq!(m.capabilities, vec![("Background", "background")]);
         assert_eq!(
             m.to_json(),
             r#"{"manifest_version":1,"lifecycle":["node_started","installed"],"capabilities":["background"]}"#
@@ -293,5 +333,14 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad} should be rejected");
         }
+    }
+
+    #[test]
+    fn lifecycle_requires_background() {
+        let err = parse("manifest(lifecycle = [Installed])").unwrap_err();
+        assert!(err.to_string().contains("Background"), "{err}");
+        assert!(parse("manifest(lifecycle = [Installed], capabilities = [Background])").is_ok());
+        // Background alone is fine: later capabilities build on it.
+        assert!(parse("manifest(capabilities = [Background])").is_ok());
     }
 }

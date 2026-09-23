@@ -56,9 +56,17 @@ pub const MANIFEST_SECTION_NAME: &str = "freenet-manifest";
 
 /// The manifest format version this stdlib writes.
 ///
-/// Readers accept any version `>= 1`. Fields added in later versions are
-/// ignored by older readers (the encoding is JSON), so a version bump is only
-/// needed if the *meaning* of an existing field changes.
+/// Informational only. Readers accept any version `>= 1` and never gate on it,
+/// because a reader that refused newer versions would drop every capability it
+/// does understand the moment one it does not is added. That works only under
+/// two rules, which are permanent:
+///
+/// - the meaning of an existing field or name never changes; a changed meaning
+///   gets a new field or a new name;
+/// - `lifecycle` and `capabilities` entries are what a reader looks up by
+///   name. A later format that needs parameters for a capability adds a new
+///   top-level field for them. (A reader still tolerates a non-string entry:
+///   it decodes as `Unknown`, see [`DelegateManifest::from_bytes`].)
 pub const MANIFEST_VERSION: u16 = 1;
 
 /// Largest manifest payload a reader accepts, in bytes. A manifest is a
@@ -76,10 +84,10 @@ pub struct DelegateManifest {
     pub manifest_version: u16,
     /// Lifecycle events the delegate wants delivered. The node never sends a
     /// [`LifecycleEvent`] of a kind that is not listed here.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_list")]
     pub lifecycle: Vec<LifecycleKind>,
     /// Node-enforced capabilities the delegate asks the user for.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_list")]
     pub capabilities: Vec<Capability>,
 }
 
@@ -105,15 +113,15 @@ pub enum LifecycleKind {
 
 /// A node-enforced capability, granted by the user once per app.
 ///
-/// The node refuses the capability until the user has granted it, and
-/// remembers the answer: a grant is keyed by the app's identity, so it
-/// survives delegate and UI upgrades and is never asked for again.
+/// A node that implements capabilities refuses one until the user has granted
+/// it, and remembers the answer per app, so the user is asked once. How a node
+/// identifies an app is the node's business, not part of this format.
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
-    /// Run without an open app: receive lifecycle events (and, in later
-    /// releases, scheduled wake-ups and durable subscriptions).
+    /// Run without an open app: receive lifecycle events. Required by any
+    /// manifest that lists a lifecycle kind (the macro enforces it).
     Background,
     /// A name this stdlib does not know, written by a newer one. Readers
     /// ignore it. Never written by this stdlib.
@@ -125,9 +133,9 @@ pub enum Capability {
 /// [`InboundDelegateMsg::Lifecycle`](crate::prelude::InboundDelegateMsg::Lifecycle).
 ///
 /// Only sent to a delegate whose manifest lists the matching
-/// [`LifecycleKind`], and only while the delegate's app holds the
-/// [`Capability::Background`] grant. The run gets the delegate's registered
-/// parameters and no origin.
+/// [`LifecycleKind`]. A node that implements delivery also requires the user's
+/// [`Capability::Background`] grant for the delegate's app. The run gets the
+/// delegate's registered parameters and no origin.
 ///
 /// # Wire format
 ///
@@ -146,8 +154,8 @@ pub enum LifecycleEvent {
     /// A delegate typically uses it to subscribe to the contracts it watches
     /// and to do any one-time setup.
     Installed,
-    /// The node started. Delivered once per node start, after the node's
-    /// restore work (such as durable subscriptions) is done.
+    /// The node started. Delivered once per node start, after the node has
+    /// finished whatever restore work it does at start-up.
     ///
     /// Contract notifications that arrived while the node was down were not
     /// delivered and are never replayed, so a delegate should re-read any
@@ -227,6 +235,12 @@ impl DelegateManifest {
     }
 
     /// Parse a section payload.
+    ///
+    /// Tolerant of manifests written by newer stdlibs: unknown fields are
+    /// ignored, a `null` list reads as empty, and a list entry that is not a
+    /// name this reader knows (an unknown name, or a non-string value) reads as
+    /// `Unknown` rather than failing the manifest, so the known entries next
+    /// to it still count.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ManifestError> {
         if bytes.len() > MAX_MANIFEST_BYTES {
             return Err(ManifestError::TooLarge(bytes.len()));
@@ -260,10 +274,61 @@ impl DelegateManifest {
     }
 }
 
-/// Iterate `(name, payload)` over a WASM module's custom sections.
+/// Decode a list whose entries are enum names, mapping any entry this reader
+/// cannot decode to the enum's `#[serde(other)]` variant.
+fn lenient_list<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Unknownable,
+{
+    let raw: Option<Vec<serde_json::Value>> = Option::deserialize(d)?;
+    Ok(raw
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| serde_json::from_value(v).unwrap_or_else(|_| T::unknown()))
+        .collect())
+}
+
+trait Unknownable {
+    fn unknown() -> Self;
+}
+impl Unknownable for LifecycleKind {
+    fn unknown() -> Self {
+        LifecycleKind::Unknown
+    }
+}
+impl Unknownable for Capability {
+    fn unknown() -> Self {
+        Capability::Unknown
+    }
+}
+
+/// Used by `#[delegate(manifest(...))]` to check, at compile time, that the
+/// section name and version it writes are the ones this stdlib reads. Not
+/// part of the public API.
+#[doc(hidden)]
+pub const fn __manifest_macro_agrees(section: &str, version: u16) -> bool {
+    let (a, b) = (section.as_bytes(), MANIFEST_SECTION_NAME.as_bytes());
+    if a.len() != b.len() || version != MANIFEST_VERSION {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// A custom section's `(name, payload)`.
+type CustomSection<'a> = (&'a [u8], &'a [u8]);
+
+/// Iterate over a WASM module's custom sections.
 fn custom_sections(
     module: &[u8],
-) -> Result<impl Iterator<Item = Result<(&[u8], &[u8]), ManifestError>>, ManifestError> {
+) -> Result<impl Iterator<Item = Result<CustomSection<'_>, ManifestError>>, ManifestError> {
     const HEADER: [u8; 8] = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
     if module.len() < HEADER.len() || module[..HEADER.len()] != HEADER {
         return Err(ManifestError::NotWasm);
@@ -418,6 +483,50 @@ mod tests {
     fn missing_lists_default_to_empty() {
         let m = DelegateManifest::from_bytes(br#"{"manifest_version":1}"#).unwrap();
         assert!(m.lifecycle.is_empty() && m.capabilities.is_empty());
+        let m = DelegateManifest::from_bytes(
+            br#"{"manifest_version":1,"lifecycle":null,"capabilities":null}"#,
+        )
+        .unwrap();
+        assert!(m.lifecycle.is_empty() && m.capabilities.is_empty());
+    }
+
+    /// A later format might write an entry that is not a bare name. That entry
+    /// is unknown to this reader; the known ones next to it must still count.
+    #[test]
+    fn a_non_string_entry_reads_as_unknown_not_as_an_error() {
+        let json = br#"{"manifest_version":2,
+            "lifecycle":[{"woke_up":{"every_s":60}},"node_started",7],
+            "capabilities":[{"notify":{"max_per_hour":4}},"background",null]}"#;
+        let m = DelegateManifest::from_bytes(json).unwrap();
+        assert_eq!(
+            m.lifecycle,
+            vec![
+                LifecycleKind::Unknown,
+                LifecycleKind::NodeStarted,
+                LifecycleKind::Unknown
+            ]
+        );
+        assert_eq!(m.known_capabilities(), vec![Capability::Background]);
+    }
+
+    #[test]
+    fn macro_agreement_check() {
+        assert!(__manifest_macro_agrees(
+            MANIFEST_SECTION_NAME,
+            MANIFEST_VERSION
+        ));
+        assert!(!__manifest_macro_agrees(
+            "freenet-manifesT",
+            MANIFEST_VERSION
+        ));
+        assert!(!__manifest_macro_agrees(
+            "freenet-manifest2",
+            MANIFEST_VERSION
+        ));
+        assert!(!__manifest_macro_agrees(
+            MANIFEST_SECTION_NAME,
+            MANIFEST_VERSION + 1
+        ));
     }
 
     #[test]

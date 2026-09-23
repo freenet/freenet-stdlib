@@ -89,6 +89,11 @@ pub fn contract(
 ///
 /// Without `manifest(...)` nothing is embedded and the delegate behaves as
 /// delegates always have. Adding one changes the WASM, and so the delegate key.
+///
+/// Listing any lifecycle kind requires `capabilities = [Background]`. Only one
+/// manifest per crate: the section is per WASM module. Custom sections must
+/// survive any post-processing of the module (`wasm-opt --strip-*`,
+/// `wasm-strip` remove them); a missing section means "no manifest", silently.
 #[proc_macro_attribute]
 pub fn delegate(
     args: proc_macro::TokenStream,
