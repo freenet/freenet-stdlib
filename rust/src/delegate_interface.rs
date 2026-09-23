@@ -625,6 +625,26 @@ pub enum InboundDelegateMsg<'a> {
     WakeupFired {
         tag: Vec<u8>,
     },
+    /// A lifecycle event: the delegate was installed on this node, or the
+    /// node started. See [`LifecycleEvent`](crate::prelude::LifecycleEvent).
+    ///
+    /// # What keeps this safe for deployed delegates
+    ///
+    /// A delegate built against an older stdlib cannot decode this tag (see
+    /// the wire-format note on this enum). The host sends it **only** to a
+    /// delegate whose embedded [`DelegateManifest`](crate::prelude::DelegateManifest)
+    /// lists the event's [`LifecycleKind`](crate::prelude::LifecycleKind), and
+    /// a delegate can only list a kind its stdlib defines. That is a property
+    /// of the host implementation, not of the format; freenet-core pins it.
+    ///
+    /// Carries no `DelegateContext`, for the same reason as `WakeupFired`: it
+    /// opens a conversation rather than continuing one.
+    ///
+    /// A client cannot send this variant: the host delivers it itself and
+    /// refuses it in a client's `ApplicationMessages`.
+    ///
+    /// Appended at tag **10**, after `WakeupFired` at tag 9.
+    Lifecycle(crate::delegate_manifest::LifecycleEvent),
 }
 
 impl InboundDelegateMsg<'_> {
@@ -652,6 +672,7 @@ impl InboundDelegateMsg<'_> {
                 InboundDelegateMsg::UnsubscribeContractResponse(r)
             }
             InboundDelegateMsg::WakeupFired { tag } => InboundDelegateMsg::WakeupFired { tag },
+            InboundDelegateMsg::Lifecycle(e) => InboundDelegateMsg::Lifecycle(e),
         }
     }
 
@@ -693,6 +714,8 @@ impl InboundDelegateMsg<'_> {
             // one place deliberately: a maintainer editing this accessor should
             // not meet a second, older version of the argument.
             InboundDelegateMsg::WakeupFired { .. } => None,
+            // `Lifecycle` carries no context either; see the variant.
+            InboundDelegateMsg::Lifecycle(_) => None,
             // No wildcard, deliberately. The `_ => None` that used to sit here
             // is what let UserResponse go unhandled and silently report "no
             // context". Exhaustive means a new variant is a compile error here
@@ -741,8 +764,9 @@ impl InboundDelegateMsg<'_> {
                 context,
                 ..
             }) => Some(context),
-            // `WakeupFired` carries no context; see `get_context`.
+            // `WakeupFired` and `Lifecycle` carry no context; see `get_context`.
             InboundDelegateMsg::WakeupFired { .. } => None,
+            InboundDelegateMsg::Lifecycle(_) => None,
             // No wildcard, deliberately. The `_ => None` that used to sit here
             // is what let UserResponse go unhandled and silently report "no
             // context". Exhaustive means a new variant is a compile error here
@@ -1591,7 +1615,7 @@ mod delegate_wire_compat {
     /// The number of variants each enum has **today**. These are not free
     /// parameters: see `an_unpinned_variant_fails_this_test`, which is what
     /// makes them fail closed rather than drift.
-    const INBOUND_VARIANT_COUNT: u32 = 10;
+    const INBOUND_VARIANT_COUNT: u32 = 11;
     const OUTBOUND_VARIANT_COUNT: u32 = 9;
 
     fn instance_id() -> ContractInstanceId {
@@ -1641,6 +1665,7 @@ mod delegate_wire_compat {
             InboundDelegateMsg::DelegateMessage(_) => 7,
             InboundDelegateMsg::UnsubscribeContractResponse(_) => 8,
             InboundDelegateMsg::WakeupFired { .. } => 9,
+            InboundDelegateMsg::Lifecycle(_) => 10,
         }
     }
 
@@ -1709,6 +1734,7 @@ mod delegate_wire_compat {
             InboundDelegateMsg::WakeupFired {
                 tag: vec![0xAA, 0xBB],
             },
+            InboundDelegateMsg::Lifecycle(crate::delegate_manifest::LifecycleEvent::Installed),
         ]
     }
 
@@ -2106,10 +2132,13 @@ mod delegate_wire_compat {
             // variant carries a context" was already false of this accessor in
             // 0.8.5, where it omitted `UserResponse` behind a `_ => None`
             // wildcard. Pin the behaviour, not the shape.
-            if matches!(msg, InboundDelegateMsg::WakeupFired { .. }) {
+            if matches!(
+                msg,
+                InboundDelegateMsg::WakeupFired { .. } | InboundDelegateMsg::Lifecycle(_)
+            ) {
                 assert!(
                     msg.get_context().is_none() && msg.get_mut_context().is_none(),
-                    "WakeupFired is documented as carrying no context; if it grew one,                      remove this exemption rather than widening it"
+                    "WakeupFired and Lifecycle are documented as carrying no context; if one grew one,                      remove this exemption rather than widening it"
                 );
                 continue;
             }

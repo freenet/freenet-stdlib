@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+## [0.12.0] - unreleased
+
+### Added — delegate manifests and lifecycle events
+
+A delegate can now declare, inside its own WASM, what it wants from the node:
+
+```rust
+#[delegate(manifest(lifecycle = [Installed, NodeStarted], capabilities = [Background]))]
+impl DelegateInterface for MyDelegate { /* ... */ }
+```
+
+- `DelegateManifest`, `LifecycleKind`, `Capability` and `LifecycleEvent`
+  (new module, re-exported from the prelude). The macro writes the manifest as
+  JSON into a WASM custom section named `freenet-manifest`;
+  `DelegateManifest::from_wasm` reads it back without running any code.
+- `InboundDelegateMsg::Lifecycle(LifecycleEvent)`, appended at wire tag **10**.
+  `LifecycleEvent::Installed` arrives once when the delegate is installed on a
+  node; `LifecycleEvent::NodeStarted { down_since_ms }` after each node start.
+
+**Compatibility.** A delegate built against an older stdlib cannot decode tag
+10, so the node sends `Lifecycle` only to delegates whose manifest lists the
+event's kind; a delegate without a manifest never receives one. The node also
+requires the delegate's app to hold the user's `Background` grant. Delivery
+needs a freenet-core release that implements it; older nodes ignore the
+manifest section, and a delegate with a manifest keeps working there in the
+foreground-only mode it has today.
+
+The manifest is JSON rather than bincode so that nodes can read manifests
+written by *newer* stdlib releases: unknown fields are ignored and unknown
+capability or lifecycle names decode as `Unknown` instead of rejecting the
+manifest.
+
+**Why a minor bump.** Nothing here is source-breaking, but the new variant
+changes every delegate's decoder, so rebuilding any delegate against this
+release changes its WASM and therefore its delegate key. A minor bump keeps
+`cargo update` from doing that silently; adopt it deliberately, with the
+app's migration path (freenet-migrate) in place. Declaring a manifest changes
+the key again, since the section is part of the module.
+
+Requires `freenet-macros` 0.2.1 (the `manifest(...)` argument). `#[delegate]`
+now rejects arguments it does not understand instead of ignoring them.
+
 ## [0.11.0] - 2026-09-21
 
 ### Removed — seven delegate host imports no released freenet-core provides
