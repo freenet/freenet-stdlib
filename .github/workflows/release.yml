@@ -30,7 +30,7 @@ jobs:
       run:
         working-directory: typescript
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -69,7 +69,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/rust-macros-v') || (github.event_name == 'workflow_dispatch' && inputs.target == 'rust-macros')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -98,7 +98,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/rust-v') || (github.event_name == 'workflow_dispatch' && inputs.target == 'rust-stdlib')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
