@@ -22,7 +22,7 @@ chrono = { version = "0.4", default-features = false, features = ["serde"] }
 # resolves to a single version for consumers as well as for CI. The previous
 # "24.3" also admitted OLDER 24.x releases, which would have compiled
 # 24.12.23-generated bindings against a runtime they were not generated for.
-flatbuffers = "24.12.23"
+flatbuffers = "25.12.19"
 futures = { version = "0.3", default-features = false }
 semver = { version = "1", default-features = false }
 serde = { version = "1", features = ["derive"] }
