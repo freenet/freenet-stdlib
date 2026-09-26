@@ -2,7 +2,11 @@ use freenet_stdlib::prelude::*;
 
 pub struct Fixture;
 
-#[delegate(manifest(lifecycle = [Installed, NodeStarted], capabilities = [Background]))]
+#[delegate(manifest(
+    lifecycle = [Installed, NodeStarted],
+    capabilities = [Background],
+    wakeups = [heartbeat = 300]
+))]
 impl DelegateInterface for Fixture {
     fn process(
         _ctx: &mut DelegateCtx,

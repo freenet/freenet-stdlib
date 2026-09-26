@@ -96,7 +96,7 @@ jobs:
         run: >
           cargo run --example read_manifest --
           ../tests/wasm-manifest-fixture/target/wasm32-unknown-unknown/release/wasm_manifest_fixture.wasm
-          '{"manifest_version":1,"lifecycle":["installed","node_started"],"capabilities":["background"]}'
+          '{"manifest_version":1,"lifecycle":["installed","node_started"],"capabilities":["background"],"wakeups":[{"tag":"heartbeat","every_secs":300}]}'
 
   clippy_check:
     name: Clippy
