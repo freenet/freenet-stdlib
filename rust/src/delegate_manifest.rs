@@ -112,11 +112,23 @@ pub struct DelegateManifest {
     /// Periodic wake-ups the delegate asks for; see [`WakeupSchedule`].
     ///
     /// Added after the first manifest release (stdlib 0.12.1). Omitted from
-    /// the JSON when empty, so a manifest without wake-ups is byte-identical to
-    /// what 0.12.0 wrote and upgrading stdlib does not re-key a delegate. A
-    /// reader that predates the field ignores it (unknown JSON fields are
-    /// skipped), so a delegate declaring wake-ups still loads, and still gets
-    /// its lifecycle events, on a node that cannot deliver them.
+    /// the JSON when empty, so the manifest SECTION of a delegate without
+    /// wake-ups is byte-identical to what 0.12.0 wrote. (Rebuilding a delegate
+    /// against a different stdlib still changes its WASM, and so its key, for
+    /// the usual reasons, e.g. version strings in panic locations; plan a
+    /// migration as for any rebuild.) A reader that predates the field ignores
+    /// it (unknown JSON fields are skipped), so a delegate declaring wake-ups
+    /// still loads, and still gets its lifecycle events, on a node that cannot
+    /// deliver them.
+    ///
+    /// Such a reader also DROPS the field if it re-serializes the manifest
+    /// ([`DelegateManifest::to_bytes`] writes only the fields it knows). A
+    /// node that keeps a re-serialized copy must re-read the manifest from the
+    /// delegate's code after it learns a new field, or it will not see what
+    /// delegates registered under the older version declared. And a node that
+    /// predates wake-ups asks for `Background` only when a lifecycle kind is
+    /// listed: declare one alongside `wakeups` (e.g. `NodeStarted`) so the user
+    /// is asked, and the delegate recorded, on those nodes too.
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
@@ -144,6 +156,25 @@ pub struct DelegateManifest {
 /// provide it, and a new `OutboundDelegateMsg` variant makes older nodes fail
 /// to decode the whole batch it is in. A manifest field is ignored by older
 /// nodes, so ONE delegate build works on nodes with and without wake-ups.
+///
+/// Timing is the node's business; freenet-core arms a schedule when the
+/// delegate is registered, when its app is granted `Background`, and at each
+/// node start (the first fire comes within about a minute), then fires every
+/// `every_secs` plus a little jitter. Missed fires (node down, delegate busy)
+/// are not caught up: the next one simply comes on schedule.
+///
+/// # Rules for this struct's fields (permanent)
+///
+/// Readers ignore fields they do not know, INCLUDING inside an entry. So:
+///
+/// - a new field must be advisory: a reader that ignores it must still do
+///   something acceptable. A field that RESTRICTS the schedule (a quiet
+///   window, a cap) would be silently ignored by older nodes; put such a
+///   thing in a new top-level manifest field instead, whose absence older
+///   readers cannot misread as consent;
+/// - a new field must carry `#[serde(default)]`, or every entry written
+///   without it (every existing delegate) fails to decode and is dropped;
+/// - `tag` and `every_secs` keep their meaning forever.
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WakeupSchedule {
@@ -294,6 +325,10 @@ impl DelegateManifest {
     /// `[MIN_WAKEUP_INTERVAL_SECS, MAX_WAKEUP_INTERVAL_SECS]`, and only the
     /// first [`MAX_WAKEUPS`] survivors count.
     ///
+    /// This is only the manifest's side. It does not check the `Background`
+    /// grant (the node's state, not the manifest's): a node must also require
+    /// that before firing any of these.
+    ///
     /// Clamped rather than refused: a node that later lowers the floor must
     /// not make delegates built for it dead on older nodes, and a longer
     /// interval than asked is the safe direction.
@@ -409,9 +444,10 @@ where
         .collect())
 }
 
-/// Decode the wake-up list, dropping any entry this reader cannot decode (a
-/// later format might add a shape this one does not know) instead of failing
-/// the manifest.
+/// Decode the wake-up list, dropping any entry that is valid JSON but not a
+/// schedule this reader knows (a later format might add a shape it does not)
+/// instead of failing the manifest. JSON that is not valid at all still fails
+/// the whole manifest, as it always has.
 fn lenient_wakeups<'de, D>(d: D) -> Result<Vec<WakeupSchedule>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -668,6 +704,16 @@ mod tests {
             .with_wakeup(long_tag, 120)
             .with_wakeup(max_tag.clone(), 120);
         assert_eq!(secs(&m), vec![(max_tag, 120)]);
+
+        // The limit is in BYTES, not characters: 32 two-byte chars is exactly
+        // the limit, one more ASCII byte is over it.
+        let utf8_max = "é".repeat(MAX_WAKEUP_TAG_BYTES / 2);
+        assert_eq!(utf8_max.len(), MAX_WAKEUP_TAG_BYTES);
+        let utf8_over = format!("{utf8_max}a");
+        let m = sample()
+            .with_wakeup(utf8_over, 120)
+            .with_wakeup(utf8_max.clone(), 120);
+        assert_eq!(secs(&m), vec![(utf8_max, 120)]);
 
         // A repeated tag keeps its first entry.
         let m = sample().with_wakeup("a", 120).with_wakeup("a", 600);

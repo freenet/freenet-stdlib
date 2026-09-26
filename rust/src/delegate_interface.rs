@@ -602,8 +602,9 @@ pub enum InboundDelegateMsg<'a> {
     /// after `DELEGATE_CONTEXT_TTL` (10 minutes). Two consequences, both
     /// arguing the same way:
     ///
-    /// - Any wakeup worth scheduling is far longer than 10 minutes, so whatever
-    ///   context existed when it was scheduled is **gone** by the time it fires.
+    /// - A wake-up is periodic and not tied to any one exchange, so whatever
+    ///   context exists when it fires belongs to something else or has
+    ///   expired; with intervals of 10 minutes or more it is simply **gone**.
     /// - If the delegate happens to have a live context from some *other*
     ///   in-flight exchange inside that window, it belongs to that exchange.
     ///   Reading it during a wakeup would be reading another conversation's

@@ -1,5 +1,6 @@
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
+use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Expr, ItemImpl, Meta, Token, Type, TypePath};
@@ -24,7 +25,12 @@ const CAPABILITIES: &[(&str, &str)] = &[("Background", "background")];
 /// Mirror `freenet_stdlib::prelude::{MIN_WAKEUP_INTERVAL_SECS,
 /// MAX_WAKEUP_INTERVAL_SECS, MAX_WAKEUP_TAG_BYTES, MAX_WAKEUPS}`, for readable
 /// errors. The generated code also asserts each entry against the stdlib's own
-/// constants, so a drift here fails to compile rather than disagreeing.
+/// constants. That catches this macro being LOOSER than its stdlib (it would
+/// accept something the stdlib's bounds reject); a macro stricter than its
+/// stdlib only refuses more, which is harmless. Against a stdlib without
+/// wake-ups (< 0.12.1) the generated code fails to compile because the
+/// constants do not exist, which is the intended outcome with a less friendly
+/// message.
 const MIN_WAKEUP_INTERVAL_SECS: u64 = 60;
 const MAX_WAKEUP_INTERVAL_SECS: u64 = 7 * 24 * 3600;
 const MAX_WAKEUP_TAG_BYTES: usize = 64;
@@ -216,8 +222,9 @@ fn parse_wakeups(value: &Expr) -> syn::Result<Vec<(String, u64)>> {
                 "expected `tag = seconds`, e.g. `heartbeat = 300`",
             ));
         };
+        // `unraw`: `r#loop = 60` means the tag "loop", not "r#loop".
         let tag = match &*assign.left {
-            Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
+            Expr::Path(p) => p.path.get_ident().map(|i| i.unraw().to_string()),
             _ => None,
         }
         .ok_or_else(|| {
@@ -534,6 +541,9 @@ mod tests {
             assert!(ok(bad).is_err(), "{bad} should be rejected");
         }
         assert!(parse("manifest(capabilities = [Background], wakeups = a)").is_err());
+        // A raw identifier is the plain name.
+        let m = ok("r#loop = 60").unwrap().unwrap();
+        assert_eq!(m.wakeups, vec![("loop".to_string(), 60)]);
         assert!(parse(
             "manifest(capabilities = [Background], wakeups = [a = 60], wakeups = [b = 60])"
         )

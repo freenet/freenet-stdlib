@@ -52,8 +52,10 @@ written to that suggestion would have failed permanently while looking correct.
 **The consequence that matters.** A new *inbound* variant is sent by the host, so
 the host can break every deployed delegate the moment it sends one. That is safe
 only if the host sends it **strictly in reply to something an older delegate
-cannot have sent**. `WakeupFired` is safe because only a delegate that emitted
-`ScheduleWakeup` ever receives one. A hypothetical "your run was truncated"
+cannot have sent**. `WakeupFired` is safe because only a delegate whose manifest
+declares a wake-up (`wakeups = [..]`, 0.12.1) ever receives one, and declaring
+one needs a stdlib that defines the variant. (Its original request half, a
+`ScheduleWakeup` host call, was removed in 0.11.0; see `WakeupFired`'s docs.) A hypothetical "your run was truncated"
 notice would **not** be safe, because nothing stops the host emitting it to a
 delegate that never opted in. `Lifecycle` (tag 10) is the opt-in done right: the
 host sends it only to a delegate whose embedded manifest lists that lifecycle
@@ -365,7 +367,9 @@ nothing about whether the code compiles.
 ## Time: prefer a delay to a deadline
 
 Relevant to any wire field carrying a deadline, and easy to get wrong in both
-directions.
+directions. (It was written for the run-time wake-up request removed in 0.11.0.
+Wake-ups returned in 0.12.1 as a fixed interval declared in the manifest, which
+follows the same rule: an interval the host resolves against its own clock.)
 
 **A delegate can read a clock.** `freenet_stdlib::time::now()` imports
 `freenet_time::__frnt__time__utc_now`, and freenet-core registers it on the
@@ -391,8 +395,8 @@ availability:
   scheduler's business rather than a semantic left undefined on the wire.
 - A delay is strictly more capable: absolute scheduling is `target - now`,
   expressible in terms of a delay, while a deadline gains nothing a delay lacks.
-- A delegate re-arming a recurring wakeup asks for the same delay again, so it
-  needs no timestamp echoed back to it.
+- A recurring schedule is naturally a delay ("every N seconds"), so nothing
+  needs a timestamp echoed back.
 - `SystemTime` has an encoding hazard a `Duration` does not: a **pre-epoch**
   value fails to serialize outright (`SystemTime must be later than
   UNIX_EPOCH`), and that is an error on the *sender*, at a point where the

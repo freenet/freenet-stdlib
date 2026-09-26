@@ -104,7 +104,9 @@ pub fn contract(
 /// ```
 ///
 /// A node that predates wake-ups ignores the `wakeups` entry and still honours
-/// the rest, so one build works on both.
+/// the rest, so one build works on both. Such a node asks the user for
+/// `Background` only when a lifecycle kind is listed, so list one (as above)
+/// if the delegate should be granted there too.
 ///
 /// Listing any lifecycle kind or wake-up requires `capabilities = [Background]`. Only one
 /// manifest per crate: the section is per WASM module. Custom sections must

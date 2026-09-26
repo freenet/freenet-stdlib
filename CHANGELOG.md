@@ -39,10 +39,23 @@ reader skips unknown JSON fields), so one delegate build works on nodes with
 and without wake-ups: it loads and gets its lifecycle events everywhere, and
 receives `WakeupFired` only where the node supports it.
 
-**Compatibility.** Patch release. A manifest without wake-ups serializes
-byte-identically to 0.12.0 (the field is omitted when empty), so upgrading does
-not change any delegate's WASM or key. No new host import and no wire-format
-change. Requires `freenet-macros` 0.3.1 for the `wakeups` argument.
+**Compatibility.** Patch release. No new host import and no wire-format change.
+A manifest without wake-ups serializes byte-identically to 0.12.0 (the field is
+omitted when empty), so upgrading changes nothing about the manifest SECTION.
+Rebuilding a delegate against a different stdlib still changes its WASM, and so
+its key, as any rebuild does (stdlib version strings end up in the module);
+plan the usual migration. Requires `freenet-macros` 0.3.1 for the `wakeups`
+argument.
+
+Two things for authors targeting nodes that predate wake-ups (freenet-core
+v0.2.138 and earlier): such a node asks for `Background` only when a lifecycle
+kind is listed, so declare one (e.g. `NodeStarted`) alongside `wakeups`; and it
+stores the manifest re-serialized without `wakeups`, so the node that adds
+wake-ups must re-read the manifest from the delegate's code (freenet-core does
+this at start-up).
+
+The tag limit is 64 bytes. (The removed 0.10.0 run-time request allowed 128;
+nothing that used it ever ran, since no node provided it.)
 
 ## [0.12.0]
 
