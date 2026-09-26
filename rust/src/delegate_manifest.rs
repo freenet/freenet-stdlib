@@ -2,8 +2,8 @@
 //! its own WASM.
 //!
 //! A delegate that wants more than the request/response model it has always
-//! had (today: lifecycle events; later: wake-ups, notifications) says so in a
-//! manifest. The `#[delegate(manifest(...))]` attribute writes it into a WASM
+//! had (lifecycle events, periodic wake-ups; later perhaps notifications) says
+//! so in a manifest. The `#[delegate(manifest(...))]` attribute writes it into a WASM
 //! custom section named [`MANIFEST_SECTION_NAME`]. The node reads that section
 //! when the delegate is registered, without running any delegate code.
 //!
@@ -73,6 +73,26 @@ pub const MANIFEST_VERSION: u16 = 1;
 /// handful of short names; anything bigger is not a manifest.
 pub const MAX_MANIFEST_BYTES: usize = 4096;
 
+/// Shortest wake-up interval a node honours, in seconds. A manifest asking for
+/// less is treated as asking for this (see [`DelegateManifest::effective_wakeups`]).
+///
+/// The floor is what stops a delegate waking itself into a storm: a wake-up is
+/// work nothing outside the node asked for, on an idle node, forever.
+pub const MIN_WAKEUP_INTERVAL_SECS: u64 = 60;
+
+/// Longest wake-up interval, in seconds (7 days). A longer one is treated as
+/// this. Wake-ups are re-armed when a node starts rather than remembered across
+/// restarts, so a very long interval would mostly measure node uptime anyway.
+pub const MAX_WAKEUP_INTERVAL_SECS: u64 = 7 * 24 * 3600;
+
+/// Longest wake-up tag, in bytes. Entries with a longer (or empty) tag are
+/// ignored.
+pub const MAX_WAKEUP_TAG_BYTES: usize = 64;
+
+/// Most wake-up schedules one delegate may declare. Entries past this are
+/// ignored.
+pub const MAX_WAKEUPS: usize = 4;
+
 /// What a delegate declares it wants from the node.
 ///
 /// `#[non_exhaustive]` so fields can be added without a source break; build one
@@ -89,6 +109,58 @@ pub struct DelegateManifest {
     /// Node-enforced capabilities the delegate asks the user for.
     #[serde(default, deserialize_with = "lenient_list")]
     pub capabilities: Vec<Capability>,
+    /// Periodic wake-ups the delegate asks for; see [`WakeupSchedule`].
+    ///
+    /// Added after the first manifest release (stdlib 0.12.1). Omitted from
+    /// the JSON when empty, so a manifest without wake-ups is byte-identical to
+    /// what 0.12.0 wrote and upgrading stdlib does not re-key a delegate. A
+    /// reader that predates the field ignores it (unknown JSON fields are
+    /// skipped), so a delegate declaring wake-ups still loads, and still gets
+    /// its lifecycle events, on a node that cannot deliver them.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "lenient_wakeups"
+    )]
+    pub wakeups: Vec<WakeupSchedule>,
+}
+
+/// One periodic wake-up a delegate asks for.
+///
+/// The node delivers
+/// [`InboundDelegateMsg::WakeupFired`](crate::prelude::InboundDelegateMsg::WakeupFired)
+/// with `tag`'s bytes about every `every_secs` seconds, with no app open,
+/// under the same conditions as lifecycle events: the manifest lists it and
+/// the delegate's app holds the user's [`Capability::Background`] grant. The
+/// run gets the delegate's registered parameters and no origin.
+///
+/// A node honours an interval between [`MIN_WAKEUP_INTERVAL_SECS`] and
+/// [`MAX_WAKEUP_INTERVAL_SECS`] (clamping one outside that range), a tag of 1
+/// to [`MAX_WAKEUP_TAG_BYTES`] bytes, and at most [`MAX_WAKEUPS`] entries; see
+/// [`DelegateManifest::effective_wakeups`], which is the node's reading.
+///
+/// Why a manifest entry and not a call the delegate makes at run time: a new
+/// host import makes the WASM fail to instantiate on every node that does not
+/// provide it, and a new `OutboundDelegateMsg` variant makes older nodes fail
+/// to decode the whole batch it is in. A manifest field is ignored by older
+/// nodes, so ONE delegate build works on nodes with and without wake-ups.
+#[non_exhaustive]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WakeupSchedule {
+    /// Echoed back as the `tag` of `WakeupFired`, so a delegate with several
+    /// schedules can tell them apart.
+    pub tag: String,
+    /// Interval between wake-ups, in seconds.
+    pub every_secs: u64,
+}
+
+impl WakeupSchedule {
+    pub fn new(tag: impl Into<String>, every_secs: u64) -> Self {
+        Self {
+            tag: tag.into(),
+            every_secs,
+        }
+    }
 }
 
 /// A kind of [`LifecycleEvent`] a delegate can ask to receive.
@@ -206,7 +278,49 @@ impl DelegateManifest {
             manifest_version: MANIFEST_VERSION,
             lifecycle,
             capabilities,
+            wakeups: Vec::new(),
         }
+    }
+
+    /// This manifest plus a wake-up schedule.
+    pub fn with_wakeup(mut self, tag: impl Into<String>, every_secs: u64) -> Self {
+        self.wakeups.push(WakeupSchedule::new(tag, every_secs));
+        self
+    }
+
+    /// The wake-ups a node honours, as `(tag bytes, interval)`: entries with an
+    /// empty or over-long tag are dropped, a repeated tag keeps its first
+    /// entry, intervals are clamped to
+    /// `[MIN_WAKEUP_INTERVAL_SECS, MAX_WAKEUP_INTERVAL_SECS]`, and only the
+    /// first [`MAX_WAKEUPS`] survivors count.
+    ///
+    /// Clamped rather than refused: a node that later lowers the floor must
+    /// not make delegates built for it dead on older nodes, and a longer
+    /// interval than asked is the safe direction.
+    pub fn effective_wakeups(&self) -> Vec<(Vec<u8>, std::time::Duration)> {
+        let mut out: Vec<(Vec<u8>, std::time::Duration)> = Vec::new();
+        for w in &self.wakeups {
+            if out.len() >= MAX_WAKEUPS {
+                break;
+            }
+            let tag = w.tag.as_bytes();
+            if tag.is_empty() || tag.len() > MAX_WAKEUP_TAG_BYTES {
+                continue;
+            }
+            if out.iter().any(|(t, _)| t.as_slice() == tag) {
+                continue;
+            }
+            let secs = w
+                .every_secs
+                .clamp(MIN_WAKEUP_INTERVAL_SECS, MAX_WAKEUP_INTERVAL_SECS);
+            out.push((tag.to_vec(), std::time::Duration::from_secs(secs)));
+        }
+        out
+    }
+
+    /// Whether the manifest asks for at least one wake-up a node honours.
+    pub fn wants_wakeups(&self) -> bool {
+        !self.effective_wakeups().is_empty()
     }
 
     /// Whether the manifest asks for lifecycle events of this kind.
@@ -292,6 +406,22 @@ where
     Ok(raw
         .into_iter()
         .map(|v| serde_json::from_value(v).unwrap_or_else(|_| T::unknown()))
+        .collect())
+}
+
+/// Decode the wake-up list, dropping any entry this reader cannot decode (a
+/// later format might add a shape this one does not know) instead of failing
+/// the manifest.
+fn lenient_wakeups<'de, D>(d: D) -> Result<Vec<WakeupSchedule>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let serde_json::Value::Array(raw) = serde_json::Value::deserialize(d)? else {
+        return Ok(Vec::new());
+    };
+    Ok(raw
+        .into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
         .collect())
 }
 
@@ -483,6 +613,126 @@ mod tests {
         assert!(!m.wants_lifecycle(LifecycleKind::Unknown));
         assert!(!m.wants_capability(Capability::Unknown));
         assert_eq!(m.known_capabilities(), vec![Capability::Background]);
+    }
+
+    /// With wake-ups the JSON gains one trailing field, and only then: the
+    /// no-wake-up form above stays byte-identical to 0.12.0's.
+    #[test]
+    fn json_shape_with_wakeups_is_pinned() {
+        let m = sample().with_wakeup("heartbeat", 300);
+        assert_eq!(
+            String::from_utf8(m.to_bytes()).unwrap(),
+            r#"{"manifest_version":1,"lifecycle":["installed","node_started"],"capabilities":["background"],"wakeups":[{"tag":"heartbeat","every_secs":300}]}"#
+        );
+        assert_eq!(DelegateManifest::from_bytes(&m.to_bytes()).unwrap(), m);
+    }
+
+    /// What a node honours, at every boundary.
+    #[test]
+    fn effective_wakeups_clamp_and_filter_at_the_boundaries() {
+        let secs = |m: &DelegateManifest| {
+            m.effective_wakeups()
+                .into_iter()
+                .map(|(t, d)| (String::from_utf8(t).unwrap(), d.as_secs()))
+                .collect::<Vec<_>>()
+        };
+        let one = |every: u64| secs(&sample().with_wakeup("t", every));
+        assert_eq!(one(0), vec![("t".into(), MIN_WAKEUP_INTERVAL_SECS)]);
+        assert_eq!(
+            one(MIN_WAKEUP_INTERVAL_SECS - 1),
+            vec![("t".into(), MIN_WAKEUP_INTERVAL_SECS)]
+        );
+        assert_eq!(
+            one(MIN_WAKEUP_INTERVAL_SECS),
+            vec![("t".into(), MIN_WAKEUP_INTERVAL_SECS)]
+        );
+        assert_eq!(
+            one(MIN_WAKEUP_INTERVAL_SECS + 1),
+            vec![("t".into(), MIN_WAKEUP_INTERVAL_SECS + 1)]
+        );
+        assert_eq!(
+            one(MAX_WAKEUP_INTERVAL_SECS),
+            vec![("t".into(), MAX_WAKEUP_INTERVAL_SECS)]
+        );
+        assert_eq!(
+            one(MAX_WAKEUP_INTERVAL_SECS + 1),
+            vec![("t".into(), MAX_WAKEUP_INTERVAL_SECS)]
+        );
+        assert_eq!(one(u64::MAX), vec![("t".into(), MAX_WAKEUP_INTERVAL_SECS)]);
+
+        // Tags: empty and over-long are dropped, the longest allowed is kept.
+        let max_tag = "x".repeat(MAX_WAKEUP_TAG_BYTES);
+        let long_tag = "x".repeat(MAX_WAKEUP_TAG_BYTES + 1);
+        let m = sample()
+            .with_wakeup("", 120)
+            .with_wakeup(long_tag, 120)
+            .with_wakeup(max_tag.clone(), 120);
+        assert_eq!(secs(&m), vec![(max_tag, 120)]);
+
+        // A repeated tag keeps its first entry.
+        let m = sample().with_wakeup("a", 120).with_wakeup("a", 600);
+        assert_eq!(secs(&m), vec![("a".into(), 120)]);
+
+        // At most MAX_WAKEUPS, counting only entries that survive the filter.
+        let mut m = sample().with_wakeup("", 60);
+        for i in 0..MAX_WAKEUPS + 1 {
+            m = m.with_wakeup(format!("w{i}"), 60);
+        }
+        let got = secs(&m);
+        assert_eq!(got.len(), MAX_WAKEUPS);
+        assert_eq!(got[0].0, "w0");
+        assert_eq!(got[MAX_WAKEUPS - 1].0, format!("w{}", MAX_WAKEUPS - 1));
+
+        assert!(!sample().wants_wakeups());
+        assert!(!sample().with_wakeup("", 60).wants_wakeups());
+        assert!(sample().with_wakeup("a", 60).wants_wakeups());
+    }
+
+    /// A malformed or future-shaped wake-up entry is dropped, not fatal: the
+    /// lifecycle kinds and capabilities next to it must still count.
+    #[test]
+    fn a_malformed_wakeup_entry_is_dropped_not_fatal() {
+        let json = br#"{"manifest_version":2,"lifecycle":["node_started"],
+            "capabilities":["background"],
+            "wakeups":[{"tag":"ok","every_secs":90},{"tag":7},"junk",{"cron":"* * *"},
+                       {"tag":"extra","every_secs":120,"jitter":5}]}"#;
+        let m = DelegateManifest::from_bytes(json).unwrap();
+        assert!(m.wants_lifecycle(LifecycleKind::NodeStarted));
+        assert_eq!(m.known_capabilities(), vec![Capability::Background]);
+        assert_eq!(
+            m.wakeups,
+            vec![
+                WakeupSchedule::new("ok", 90),
+                WakeupSchedule::new("extra", 120)
+            ]
+        );
+        for shape in [r#"null"#, r#""heartbeat""#, r#"{"heartbeat":300}"#] {
+            let json = format!(r#"{{"manifest_version":1,"wakeups":{shape}}}"#);
+            let m = DelegateManifest::from_bytes(json.as_bytes()).unwrap();
+            assert!(m.wakeups.is_empty(), "{shape}");
+        }
+    }
+
+    /// The reader that shipped in 0.12.0 (and so in every node that
+    /// understands manifests but not wake-ups) has no `wakeups` field. This
+    /// replicates its schema exactly and shows it reads a wake-up manifest,
+    /// keeping everything else: the property that lets one delegate build run
+    /// on nodes with and without wake-ups.
+    #[test]
+    fn a_reader_without_the_wakeups_field_still_reads_the_manifest() {
+        #[derive(Deserialize)]
+        struct ReaderV0120 {
+            manifest_version: u16,
+            #[serde(default, deserialize_with = "lenient_list")]
+            lifecycle: Vec<LifecycleKind>,
+            #[serde(default, deserialize_with = "lenient_list")]
+            capabilities: Vec<Capability>,
+        }
+        let m = sample().with_wakeup("heartbeat", 300);
+        let old: ReaderV0120 = serde_json::from_slice(&m.to_bytes()).unwrap();
+        assert_eq!(old.manifest_version, 1);
+        assert_eq!(old.lifecycle, m.lifecycle);
+        assert_eq!(old.capabilities, m.capabilities);
     }
 
     #[test]

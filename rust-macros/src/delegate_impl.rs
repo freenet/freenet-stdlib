@@ -21,12 +21,23 @@ const LIFECYCLE_KINDS: &[(&str, &str)] =
 /// Same, for `freenet_stdlib::prelude::Capability`.
 const CAPABILITIES: &[(&str, &str)] = &[("Background", "background")];
 
+/// Mirror `freenet_stdlib::prelude::{MIN_WAKEUP_INTERVAL_SECS,
+/// MAX_WAKEUP_INTERVAL_SECS, MAX_WAKEUP_TAG_BYTES, MAX_WAKEUPS}`, for readable
+/// errors. The generated code also asserts each entry against the stdlib's own
+/// constants, so a drift here fails to compile rather than disagreeing.
+const MIN_WAKEUP_INTERVAL_SECS: u64 = 60;
+const MAX_WAKEUP_INTERVAL_SECS: u64 = 7 * 24 * 3600;
+const MAX_WAKEUP_TAG_BYTES: usize = 64;
+const MAX_WAKEUPS: usize = 4;
+
 /// A parsed `manifest(...)` argument.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ManifestArgs {
     /// `(source name, JSON name)`, deduplicated, in declaration order.
     pub lifecycle: Vec<(&'static str, &'static str)>,
     pub capabilities: Vec<(&'static str, &'static str)>,
+    /// `(tag, every_secs)`, in declaration order, tags unique.
+    pub wakeups: Vec<(String, u64)>,
 }
 
 impl ManifestArgs {
@@ -41,8 +52,23 @@ impl ManifestArgs {
                 .collect::<Vec<_>>()
                 .join(",")
         }
+        // `wakeups` is omitted when empty, exactly as the stdlib serializer
+        // does, so a manifest without wake-ups is byte-identical to the one
+        // stdlib 0.12.0 wrote (no re-key on upgrade).
+        let wakeups = if self.wakeups.is_empty() {
+            String::new()
+        } else {
+            // Tags are Rust identifiers, so they need no JSON escaping.
+            let entries = self
+                .wakeups
+                .iter()
+                .map(|(tag, secs)| format!("{{\"tag\":\"{tag}\",\"every_secs\":{secs}}}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(",\"wakeups\":[{entries}]")
+        };
         format!(
-            "{{\"manifest_version\":{MANIFEST_VERSION},\"lifecycle\":[{}],\"capabilities\":[{}]}}",
+            "{{\"manifest_version\":{MANIFEST_VERSION},\"lifecycle\":[{}],\"capabilities\":[{}]{wakeups}}}",
             list(&self.lifecycle),
             list(&self.capabilities)
         )
@@ -79,8 +105,19 @@ pub fn parse_manifest_args(
         let entries =
             list.parse_args_with(Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated)?;
         let mut m = ManifestArgs::default();
-        let (mut seen_lifecycle, mut seen_caps) = (false, false);
+        let (mut seen_lifecycle, mut seen_caps, mut seen_wakeups) = (false, false, false);
         for entry in entries {
+            if entry.path.is_ident("wakeups") {
+                if seen_wakeups {
+                    return Err(syn::Error::new(
+                        entry.path.span(),
+                        "manifest key given more than once",
+                    ));
+                }
+                seen_wakeups = true;
+                m.wakeups = parse_wakeups(&entry.value)?;
+                continue;
+            }
             let (table, out, seen, what) = if entry.path.is_ident("lifecycle") {
                 (
                     LIFECYCLE_KINDS,
@@ -98,7 +135,7 @@ pub fn parse_manifest_args(
             } else {
                 return Err(syn::Error::new(
                     entry.path.span(),
-                    "unknown manifest key; expected `lifecycle` or `capabilities`",
+                    "unknown manifest key; expected `lifecycle`, `capabilities` or `wakeups`",
                 ));
             };
             if *seen {
@@ -145,9 +182,92 @@ pub fn parse_manifest_args(
                  Background grant; add `capabilities = [Background]`",
             ));
         }
+        // Same for wake-ups: they are runs with no app open.
+        if !m.wakeups.is_empty() && !m.capabilities.iter().any(|(s, _)| *s == "Background") {
+            return Err(syn::Error::new(
+                list.span(),
+                "wake-ups are only delivered to a delegate whose app holds the \
+                 Background grant; add `capabilities = [Background]`",
+            ));
+        }
         manifest = Some(m);
     }
     Ok(manifest)
+}
+
+/// Parse `wakeups = [tag = seconds, ...]`.
+///
+/// Stricter than the node, on purpose: the node clamps an out-of-range
+/// interval and drops a bad entry (it must read manifests written by any
+/// tool), while the macro refuses them, because a delegate author who wrote
+/// `heartbeat = 10` wants to know it will not run every ten seconds.
+fn parse_wakeups(value: &Expr) -> syn::Result<Vec<(String, u64)>> {
+    let Expr::Array(array) = value else {
+        return Err(syn::Error::new(
+            value.span(),
+            "expected a list, e.g. `[heartbeat = 300]` (tag = interval in seconds)",
+        ));
+    };
+    let mut out: Vec<(String, u64)> = Vec::new();
+    for elem in &array.elems {
+        let Expr::Assign(assign) = elem else {
+            return Err(syn::Error::new(
+                elem.span(),
+                "expected `tag = seconds`, e.g. `heartbeat = 300`",
+            ));
+        };
+        let tag = match &*assign.left {
+            Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
+            _ => None,
+        }
+        .ok_or_else(|| {
+            syn::Error::new(
+                assign.left.span(),
+                "a wake-up tag must be a plain identifier, e.g. `heartbeat`",
+            )
+        })?;
+        let secs = match &*assign.right {
+            Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Int(i),
+                ..
+            }) => i.base10_parse::<u64>()?,
+            other => {
+                return Err(syn::Error::new(
+                    other.span(),
+                    "a wake-up interval must be an integer number of seconds",
+                ))
+            }
+        };
+        if tag.len() > MAX_WAKEUP_TAG_BYTES {
+            return Err(syn::Error::new(
+                assign.left.span(),
+                format!("wake-up tag is longer than {MAX_WAKEUP_TAG_BYTES} bytes"),
+            ));
+        }
+        if !(MIN_WAKEUP_INTERVAL_SECS..=MAX_WAKEUP_INTERVAL_SECS).contains(&secs) {
+            return Err(syn::Error::new(
+                assign.right.span(),
+                format!(
+                    "wake-up interval must be between {MIN_WAKEUP_INTERVAL_SECS} and \
+                     {MAX_WAKEUP_INTERVAL_SECS} seconds"
+                ),
+            ));
+        }
+        if out.iter().any(|(t, _)| *t == tag) {
+            return Err(syn::Error::new(
+                assign.left.span(),
+                "wake-up tag given more than once",
+            ));
+        }
+        out.push((tag, secs));
+    }
+    if out.len() > MAX_WAKEUPS {
+        return Err(syn::Error::new(
+            array.span(),
+            format!("at most {MAX_WAKEUPS} wake-ups per delegate"),
+        ));
+    }
+    Ok(out)
 }
 
 /// The custom section carrying the manifest, plus a hidden associated const
@@ -172,10 +292,36 @@ pub fn manifest_section(item: &ItemImpl, manifest: &ManifestArgs) -> TokenStream
         let v = syn::Ident::new(src, Span::call_site());
         quote!(const _: ::freenet_stdlib::prelude::Capability = ::freenet_stdlib::prelude::Capability::#v;)
     });
+    // Check each wake-up against the stdlib's OWN bounds too, so a macro and
+    // stdlib that disagree fail to compile instead of emitting a manifest the
+    // node reads differently. (This also requires a stdlib that knows
+    // wake-ups, i.e. >= 0.12.1.)
+    let wakeup_count = manifest.wakeups.len();
+    let wakeup_checks = manifest.wakeups.iter().map(|(tag, secs)| {
+        let tag_len = tag.len();
+        quote! {
+            const _: () = ::core::assert!(
+                #secs >= ::freenet_stdlib::prelude::MIN_WAKEUP_INTERVAL_SECS
+                    && #secs <= ::freenet_stdlib::prelude::MAX_WAKEUP_INTERVAL_SECS
+                    && #tag_len <= ::freenet_stdlib::prelude::MAX_WAKEUP_TAG_BYTES,
+                "a wake-up is outside the bounds of this freenet-stdlib; use matching freenet-macros and freenet-stdlib versions"
+            );
+        }
+    });
+    let wakeup_count_check = (wakeup_count > 0).then(|| {
+        quote! {
+            const _: () = ::core::assert!(
+                #wakeup_count <= ::freenet_stdlib::prelude::MAX_WAKEUPS,
+                "more wake-ups than this freenet-stdlib allows"
+            );
+        }
+    });
     let version = MANIFEST_VERSION;
     quote! {
         #(#kind_refs)*
         #(#cap_refs)*
+        #(#wakeup_checks)*
+        #wakeup_count_check
         const _: () = ::core::assert!(
             ::freenet_stdlib::prelude::__manifest_macro_agrees(#section, #version),
             "freenet-macros and freenet-stdlib disagree on the delegate manifest section; use matching versions"
@@ -333,6 +479,71 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad} should be rejected");
         }
+    }
+
+    #[test]
+    fn parses_wakeups_and_appends_them_to_the_json() {
+        let m = parse(
+            "manifest(lifecycle = [NodeStarted], capabilities = [Background], \
+             wakeups = [heartbeat = 300, renew = 86400])",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            m.wakeups,
+            vec![("heartbeat".to_string(), 300), ("renew".to_string(), 86400)]
+        );
+        assert_eq!(
+            m.to_json(),
+            r#"{"manifest_version":1,"lifecycle":["node_started"],"capabilities":["background"],"wakeups":[{"tag":"heartbeat","every_secs":300},{"tag":"renew","every_secs":86400}]}"#
+        );
+        // An empty list writes nothing, like the stdlib serializer.
+        let m = parse("manifest(capabilities = [Background], wakeups = [])")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            m.to_json(),
+            r#"{"manifest_version":1,"lifecycle":[],"capabilities":["background"]}"#
+        );
+    }
+
+    #[test]
+    fn wakeup_bounds_are_enforced_at_their_boundaries() {
+        let ok = |w: &str| {
+            parse(&format!(
+                "manifest(capabilities = [Background], wakeups = [{w}])"
+            ))
+        };
+        assert!(ok("a = 59").is_err());
+        assert!(ok("a = 60").is_ok());
+        assert!(ok("a = 604800").is_ok());
+        assert!(ok("a = 604801").is_err());
+        assert!(ok(&format!("{} = 60", "t".repeat(MAX_WAKEUP_TAG_BYTES))).is_ok());
+        assert!(ok(&format!("{} = 60", "t".repeat(MAX_WAKEUP_TAG_BYTES + 1))).is_err());
+        assert!(ok("a = 60, b = 60, c = 60, d = 60").is_ok());
+        assert!(ok("a = 60, b = 60, c = 60, d = 60, e = 60").is_err());
+        assert!(ok("a = 60, a = 120").is_err());
+        for bad in [
+            "a",
+            "\"a\" = 60",
+            "a = \"60\"",
+            "a = 60.0",
+            "a::b = 60",
+            "a = -1",
+        ] {
+            assert!(ok(bad).is_err(), "{bad} should be rejected");
+        }
+        assert!(parse("manifest(capabilities = [Background], wakeups = a)").is_err());
+        assert!(parse(
+            "manifest(capabilities = [Background], wakeups = [a = 60], wakeups = [b = 60])"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn wakeups_require_background() {
+        let err = parse("manifest(wakeups = [heartbeat = 300])").unwrap_err();
+        assert!(err.to_string().contains("Background"), "{err}");
     }
 
     #[test]

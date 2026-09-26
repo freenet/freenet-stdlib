@@ -567,40 +567,33 @@ pub enum InboundDelegateMsg<'a> {
     // Appended in 0.10.0 at tag 8. New variants go at the END, never inserted —
     // see the wire-format note on this enum.
     UnsubscribeContractResponse(UnsubscribeContractResponse),
-    /// Delivered by the host when a wakeup previously requested via
-    /// `DelegateCtx::schedule_wakeup` fires. `tag` is the opaque
-    /// value the delegate supplied when scheduling, echoed back verbatim so
-    /// the delegate can identify which wakeup fired. Owned (`'static`).
+    /// Delivered by the host when a periodic wake-up the delegate declared in
+    /// its manifest falls due (see
+    /// [`WakeupSchedule`](crate::prelude::WakeupSchedule) and
+    /// `#[delegate(manifest(wakeups = [tag = seconds]))]`). `tag` is the
+    /// declared tag's bytes, so a delegate with several schedules can tell
+    /// them apart. Owned (`'static`).
     ///
-    /// # Currently unreachable, and deliberately kept — do not delete it
+    /// # History: why the request half is a manifest entry
     ///
-    /// This is the *delivery* half of scheduled wakeup. Its *request* half,
-    /// `DelegateCtx::schedule_wakeup`, was removed in 0.11.0 because no
-    /// released freenet-core ever registered the
-    /// `__frnt__delegate__schedule_wakeup` host import it called. Nothing can
-    /// ask for a wakeup today, so this variant never arrives.
+    /// This variant (tag 9) shipped in 0.10.0 with a run-time request half,
+    /// `DelegateCtx::schedule_wakeup`, backed by the host import
+    /// `__frnt__delegate__schedule_wakeup`. No released freenet-core ever
+    /// provided that import, and a delegate that imports a function the node
+    /// does not provide fails to INSTANTIATE, so 0.11.0 removed it (pinned by
+    /// `host_imports`'s `the_imports_removed_in_0_11_0_have_not_come_back`).
     ///
-    /// That makes it an orphan, and an orphan invites tidying. Three reasons
-    /// not to:
+    /// 0.12.1 restores the feature with the request in the manifest instead.
+    /// That is not a stylistic choice: a manifest field is ignored by a node
+    /// that does not know it, so ONE delegate build loads everywhere and
+    /// simply receives no `WakeupFired` on a node without the feature. An
+    /// import, or a new `OutboundDelegateMsg` variant (older nodes fail to
+    /// decode the whole outbound batch it sits in), would make that same build
+    /// dead or lossy on every node that predates the host side.
     ///
-    /// - **Unreachable is not harmful.** The removed externs were removed
-    ///   because a delegate calling one compiles and then fails at module
-    ///   instantiation, leaving a healthy-looking node running a broken app.
-    ///   A variant that never arrives does none of that. Only the first
-    ///   problem justifies a breaking change.
-    /// - **This one is on the wire.** Deleting it is a wire-format change on a
-    ///   pinned enum, which is a much heavier act than deleting an unused
-    ///   `extern` declaration — and the tag-pinning test below exists to stop
-    ///   it happening casually.
-    /// - **The feature is expected back.** freenet-core's host-side
-    ///   implementation exists on the unmerged branch
-    ///   `feat/3972-delegate-wakeup-core`. Removing the delivery half now buys
-    ///   nothing and costs a second wire change when it lands.
-    ///
-    /// Restoring the feature means landing **both halves together**: the host
-    /// registration in freenet-core and the stdlib extern plus its
-    /// `host_imports::DECLARED_HOST_IMPORTS` entry. See freenet-core#5717 for
-    /// the check that makes that ordering visible.
+    /// A delegate only receives this if its manifest declares a wake-up, which
+    /// requires a stdlib that defines this variant, so no deployed delegate
+    /// can be sent a tag it cannot decode.
     ///
     /// # What the context cache holds during a wakeup
     ///

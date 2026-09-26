@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+## [0.12.1]
+
+### Added — periodic wake-ups, declared in the manifest
+
+```rust
+#[delegate(manifest(
+    lifecycle = [NodeStarted],
+    capabilities = [Background],
+    wakeups = [heartbeat = 300],
+))]
+impl DelegateInterface for MyDelegate { /* ... */ }
+```
+
+- `DelegateManifest::wakeups` (`WakeupSchedule { tag, every_secs }`), written by
+  `#[delegate(manifest(wakeups = [tag = seconds, ...]))]`. A node that
+  implements it (a freenet-core release after this one) delivers
+  `InboundDelegateMsg::WakeupFired { tag }` (wire tag 9, unchanged since
+  0.10.0) on that schedule with no app open, under the same conditions as
+  lifecycle events: the manifest lists it and the delegate's app holds the
+  user's `Background` grant.
+- `DelegateManifest::effective_wakeups` is the node's reading: intervals
+  clamped to `[MIN_WAKEUP_INTERVAL_SECS, MAX_WAKEUP_INTERVAL_SECS]` (60 s to
+  7 days), tags of 1 to `MAX_WAKEUP_TAG_BYTES` (64) bytes, a repeated tag keeps
+  its first entry, at most `MAX_WAKEUPS` (4). The macro refuses out-of-range
+  entries at compile time instead, and asserts them against the stdlib's own
+  constants so a mismatched macros/stdlib pair fails to compile.
+- `DelegateManifest::with_wakeup` and `wants_wakeups`.
+
+**Why a manifest entry, not a call.** The 0.10.0 request half
+(`DelegateCtx::schedule_wakeup`, host import
+`__frnt__delegate__schedule_wakeup`) was removed in 0.11.0 because a delegate
+importing a function the node does not provide fails to instantiate. It stays
+removed. A manifest field is ignored by nodes that do not know it (the 0.12.0
+reader skips unknown JSON fields), so one delegate build works on nodes with
+and without wake-ups: it loads and gets its lifecycle events everywhere, and
+receives `WakeupFired` only where the node supports it.
+
+**Compatibility.** Patch release. A manifest without wake-ups serializes
+byte-identically to 0.12.0 (the field is omitted when empty), so upgrading does
+not change any delegate's WASM or key. No new host import and no wire-format
+change. Requires `freenet-macros` 0.3.1 for the `wakeups` argument.
+
 ## [0.12.0]
 
 ### Added — delegate manifests and lifecycle events

@@ -387,6 +387,13 @@ mod host_import_manifest_tests {
     /// these arrived was a plausible-looking addition to the extern block. The
     /// guard above would catch a re-add as a manifest mismatch; this says, in
     /// the failure message, why it is not simply a list that needs updating.
+    ///
+    /// `schedule_wakeup` stays on this list even though wake-ups came back in
+    /// 0.12.1: they came back as a MANIFEST entry (`DelegateManifest::wakeups`),
+    /// precisely so a delegate using them does not import anything a node
+    /// might lack. Re-adding the import would make every such delegate fail to
+    /// instantiate on nodes that predate it, which is the failure this list
+    /// exists to prevent.
     #[test]
     fn the_imports_removed_in_0_11_0_have_not_come_back() {
         const REMOVED: &[&str] = &[
@@ -405,7 +412,8 @@ mod host_import_manifest_tests {
                 !from_source.iter().any(|(_, n)| n == name),
                 "`{name}` was removed in 0.11.0 because no released freenet-core \
                  registers it; a delegate calling it fails to instantiate. \
-                 Re-adding it needs the host side to exist first."
+                 Re-adding it needs the host side to exist first (wake-ups are \
+                 requested through the manifest since 0.12.1, not this import)."
             );
             assert!(
                 !DECLARED_HOST_IMPORTS.iter().any(|i| i.name == *name),
