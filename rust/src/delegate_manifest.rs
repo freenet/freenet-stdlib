@@ -160,8 +160,10 @@ pub struct DelegateManifest {
 /// Timing is the node's business; freenet-core arms a schedule when the
 /// delegate is registered, when its app is granted `Background`, and at each
 /// node start (the first fire comes within about a minute), then fires every
-/// `every_secs` plus a little jitter. Missed fires (node down, delegate busy)
-/// are not caught up: the next one simply comes on schedule.
+/// `every_secs` plus a little jitter. A fire that cannot start (delegate busy,
+/// its time budget spent) is retried for up to 45 s and otherwise skipped.
+/// Missed fires (node down, skipped) are not replayed: the next one simply
+/// comes on schedule.
 ///
 /// # Rules for this struct's fields (permanent)
 ///
@@ -446,8 +448,11 @@ where
 
 /// Decode the wake-up list, dropping any entry that is valid JSON but not a
 /// schedule this reader knows (a later format might add a shape it does not)
-/// instead of failing the manifest. JSON that is not valid at all still fails
-/// the whole manifest, as it always has.
+/// instead of failing the manifest. Input the JSON parser itself rejects
+/// inside `wakeups` (malformed text, a lone surrogate, a number out of range,
+/// a duplicate `wakeups` key) fails the whole manifest; a 0.12.0 reader
+/// skipped the field without parsing it. Only the delegate's author can write
+/// such input, and the macro never does.
 fn lenient_wakeups<'de, D>(d: D) -> Result<Vec<WakeupSchedule>, D::Error>
 where
     D: serde::Deserializer<'de>,

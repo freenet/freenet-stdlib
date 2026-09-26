@@ -27,7 +27,8 @@ impl DelegateInterface for MyDelegate { /* ... */ }
   7 days), tags of 1 to `MAX_WAKEUP_TAG_BYTES` (64) bytes, a repeated tag keeps
   its first entry, at most `MAX_WAKEUPS` (4). The macro refuses out-of-range
   entries at compile time instead, and asserts them against the stdlib's own
-  constants so a mismatched macros/stdlib pair fails to compile.
+  constants, so a macros crate looser than its stdlib fails to compile (and a
+  stdlib without wake-ups has no such constants, so it fails too).
 - `DelegateManifest::with_wakeup` and `wants_wakeups`.
 
 **Why a manifest entry, not a call.** The 0.10.0 request half

@@ -60,7 +60,7 @@ impl ManifestArgs {
         }
         // `wakeups` is omitted when empty, exactly as the stdlib serializer
         // does, so a manifest without wake-ups is byte-identical to the one
-        // stdlib 0.12.0 wrote (no re-key on upgrade).
+        // stdlib 0.12.0 wrote (the manifest section does not change on upgrade).
         let wakeups = if self.wakeups.is_empty() {
             String::new()
         } else {

@@ -54,8 +54,8 @@ the host can break every deployed delegate the moment it sends one. That is safe
 only if the host sends it **strictly in reply to something an older delegate
 cannot have sent**. `WakeupFired` is safe because only a delegate whose manifest
 declares a wake-up (`wakeups = [..]`, 0.12.1) ever receives one, and declaring
-one needs a stdlib that defines the variant. (Its original request half, a
-`ScheduleWakeup` host call, was removed in 0.11.0; see `WakeupFired`'s docs.) A hypothetical "your run was truncated"
+one needs a stdlib that defines the variant. (Its original request half, the
+`schedule_wakeup` host call, was removed in 0.11.0; see `WakeupFired`'s docs.) A hypothetical "your run was truncated"
 notice would **not** be safe, because nothing stops the host emitting it to a
 delegate that never opted in. `Lifecycle` (tag 10) is the opt-in done right: the
 host sends it only to a delegate whose embedded manifest lists that lifecycle
