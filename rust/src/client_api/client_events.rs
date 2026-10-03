@@ -588,6 +588,21 @@ pub enum DelegateRequest<'a> {
         #[serde(borrow)]
         inbound: Vec<InboundDelegateMsg<'a>>,
     },
+    /// Register a delegate with the node.
+    ///
+    /// `cipher` and `nonce` are retained only for wire-format compatibility
+    /// with older clients (0.8.0 removed the `DEFAULT_CIPHER` /
+    /// `DEFAULT_NONCE` constants that used to be sent here); the node
+    /// discards both values outright and never uses them as key material.
+    /// Since freenet-core#4140 / freenet-core#4146, the node derives the
+    /// delegate's local-scope encryption key itself, via
+    /// `HKDF-SHA256(salt = delegate key, ikm = node KEK)`
+    /// (`SecretsStore::derive_delegate_dek` in freenet-core) — the opposite
+    /// of the secret being "sealed client-side": a client-supplied key is
+    /// rejected precisely because accepting one would let a malicious or
+    /// buggy client substitute a key the node operator does not control.
+    /// Any value is fine here, all-zero bytes included (the fields are
+    /// fixed-size, so "any value" means any bytes, not an empty slice).
     RegisterDelegate {
         delegate: DelegateContainer,
         cipher: [u8; 32],
