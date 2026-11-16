@@ -1,0 +1,31 @@
+# Built by CI (`wasm_manifest` job) for wasm32 with the size-optimised release
+# profile real delegates use, then read back with `DelegateManifest::from_wasm`.
+# It is what proves the `#[delegate(manifest(...))]` section survives a real
+# build: every other manifest test runs natively, where the section is not
+# emitted.
+[package]
+name = "wasm-manifest-fixture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+freenet-stdlib = { path = "../../rust", features = ["contract"] }
+
+[features]
+default = ["freenet-main-delegate"]
+freenet-main-delegate = []
+# The `#[delegate]` logger setup checks this feature in the calling crate.
+trace = []
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
+
+[workspace]

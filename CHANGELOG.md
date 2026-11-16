@@ -2,6 +2,628 @@
 
 ## [Unreleased]
 
+## [0.12.1]
+
+### Added — periodic wake-ups, declared in the manifest
+
+```rust
+#[delegate(manifest(
+    lifecycle = [NodeStarted],
+    capabilities = [Background],
+    wakeups = [heartbeat = 300],
+))]
+impl DelegateInterface for MyDelegate { /* ... */ }
+```
+
+- `DelegateManifest::wakeups` (`WakeupSchedule { tag, every_secs }`), written by
+  `#[delegate(manifest(wakeups = [tag = seconds, ...]))]`. A node that
+  implements it (a freenet-core release after this one) delivers
+  `InboundDelegateMsg::WakeupFired { tag }` (wire tag 9, unchanged since
+  0.10.0) on that schedule with no app open, under the same conditions as
+  lifecycle events: the manifest lists it and the delegate's app holds the
+  user's `Background` grant.
+- `DelegateManifest::effective_wakeups` is the node's reading: intervals
+  clamped to `[MIN_WAKEUP_INTERVAL_SECS, MAX_WAKEUP_INTERVAL_SECS]` (60 s to
+  7 days), tags of 1 to `MAX_WAKEUP_TAG_BYTES` (64) bytes, a repeated tag keeps
+  its first entry, at most `MAX_WAKEUPS` (4). The macro refuses out-of-range
+  entries at compile time instead, and asserts them against the stdlib's own
+  constants, so a macros crate looser than its stdlib fails to compile (and a
+  stdlib without wake-ups has no such constants, so it fails too).
+- `DelegateManifest::with_wakeup` and `wants_wakeups`.
+
+**Why a manifest entry, not a call.** The 0.10.0 request half
+(`DelegateCtx::schedule_wakeup`, host import
+`__frnt__delegate__schedule_wakeup`) was removed in 0.11.0 because a delegate
+importing a function the node does not provide fails to instantiate. It stays
+removed. A manifest field is ignored by nodes that do not know it (the 0.12.0
+reader skips unknown JSON fields), so one delegate build works on nodes with
+and without wake-ups: it loads and gets its lifecycle events everywhere, and
+receives `WakeupFired` only where the node supports it.
+
+**Compatibility.** Patch release. No new host import and no wire-format change.
+A manifest without wake-ups serializes byte-identically to 0.12.0 (the field is
+omitted when empty), so upgrading changes nothing about the manifest SECTION.
+Rebuilding a delegate against a different stdlib still changes its WASM, and so
+its key, as any rebuild does (stdlib version strings end up in the module);
+plan the usual migration. Requires `freenet-macros` 0.3.1 for the `wakeups`
+argument.
+
+Two things for authors targeting nodes that predate wake-ups (freenet-core
+v0.2.138 and earlier): such a node asks for `Background` only when a lifecycle
+kind is listed, so declare one (e.g. `NodeStarted`) alongside `wakeups`; and it
+stores the manifest re-serialized without `wakeups`, so the node that adds
+wake-ups must re-read the manifest from the delegate's code (freenet-core does
+this at start-up).
+
+The tag limit is 64 bytes. (The removed 0.10.0 run-time request allowed 128;
+nothing that used it ever ran, since no node provided it.)
+
+## [0.12.0]
+
+### Added — delegate manifests and lifecycle events
+
+A delegate can now declare, inside its own WASM, what it wants from the node:
+
+```rust
+#[delegate(manifest(lifecycle = [Installed, NodeStarted], capabilities = [Background]))]
+impl DelegateInterface for MyDelegate { /* ... */ }
+```
+
+- `DelegateManifest`, `LifecycleKind`, `Capability` and `LifecycleEvent`
+  (new module, re-exported from the prelude). The macro writes the manifest as
+  JSON into a WASM custom section named `freenet-manifest`;
+  `DelegateManifest::from_wasm` reads it back without running any code.
+- `InboundDelegateMsg::Lifecycle(LifecycleEvent)`, appended at wire tag **10**.
+  `LifecycleEvent::Installed` arrives once when the delegate is installed on a
+  node; `LifecycleEvent::NodeStarted { down_since_ms }` after each node start.
+
+**Compatibility.** A delegate built against an older stdlib cannot decode tag
+10, so a node must send `Lifecycle` only to delegates whose manifest lists the
+event's kind; a delegate without a manifest never receives one. The macro names
+every listed kind through `freenet_stdlib::prelude`, so it cannot emit a kind
+the delegate's own stdlib lacks. Listing a lifecycle kind requires
+`capabilities = [Background]`: a node that implements delivery (a freenet-core
+release after this one) also requires the user's grant of it for the
+delegate's app. Older nodes ignore the manifest section, and a delegate with a
+manifest keeps working there in the foreground-only mode it has today.
+
+Manifest entries are names, forever; `manifest_version` is informational and
+readers never gate on it. A reader decodes an entry it does not know (an
+unknown name, or a non-string value) as `Unknown` and keeps the rest.
+
+The manifest is JSON rather than bincode so that nodes can read manifests
+written by *newer* stdlib releases: unknown fields are ignored and unknown
+capability or lifecycle names decode as `Unknown` instead of rejecting the
+manifest.
+
+**Why a minor bump.** Nothing here is source-breaking, but the new variant
+changes every delegate's decoder, so rebuilding any delegate against this
+release changes its WASM and therefore its delegate key. A minor bump keeps
+`cargo update` from doing that silently; adopt it deliberately, with the
+app's migration path (freenet-migrate) in place. Declaring a manifest changes
+the key again, since the section is part of the module.
+
+Requires `freenet-macros` 0.3.0 (the `manifest(...)` argument); publish it first. `#[delegate]`
+now rejects arguments it does not understand instead of ignoring them, which is
+why the macros crate takes a minor bump. The macro checks at compile time that
+it agrees with the stdlib on the section name and format version. One manifest
+per WASM module: a second `manifest(...)` in the same crate is a compile error
+on wasm targets.
+
+## [0.11.0] - 2026-09-21
+
+### Removed — seven delegate host imports no released freenet-core provides
+
+`rust/src/delegate_host.rs` declared seven `extern "C"` host imports that
+freenet-core 0.2.136 does not register. A delegate that **calls** one compiles
+and links normally, then fails at module instantiation with a missing-import
+error. Removing the declarations turns that into a compile error instead, at the
+call site, before anything is published.
+
+Three were withdrawn from the node in freenet-core#5638:
+
+| removed import | removed wrapper |
+|---|---|
+| `__frnt__delegate__put_contract_state` | `DelegateCtx::put_contract_state` |
+| `__frnt__delegate__update_contract_state` | `DelegateCtx::update_contract_state` |
+| `__frnt__delegate__subscribe_contract` | `DelegateCtx::subscribe_contract` |
+
+Four were never registered by any released freenet-core:
+
+| removed import | removed wrapper |
+|---|---|
+| `__frnt__delegate__subscribe_contract_checked` | `DelegateCtx::subscribe_contract_checked` |
+| `__frnt__delegate__list_subscriptions_len` | *(internal to `list_subscriptions`)* |
+| `__frnt__delegate__list_subscriptions` | `DelegateCtx::list_subscriptions` |
+| `__frnt__delegate__schedule_wakeup` | `DelegateCtx::schedule_wakeup` |
+
+`subscribe_contract_checked` and `schedule_wakeup` were added in 0.10.0 and
+never worked on any node. 0.10.0's own documentation told delegate authors to
+**prefer** `subscribe_contract_checked` over `subscribe_contract`.
+
+Also removed, because they existed only to serve the above:
+
+- `SubscribeOutcome` (with `CODE_PINNED`, `CODE_NOT_PINNED`, `from_code`,
+  `is_pinned`) and its prelude re-export
+- `MAX_SUBSCRIPTION_LIST_BYTES`, `MAX_WAKEUP_TAG_BYTES`, `MIN_WAKEUP_DELAY`,
+  `clamp_wakeup_delay`
+- `encode_contract_id_list` / `decode_contract_id_list` and their prelude
+  re-exports — the wire codec for the subscription list, which now has no
+  producer or consumer
+
+**Breaking.** Source-breaking for any crate naming those items; a minor bump
+signals it on 0.x. Delegate WASM already built against 0.10.0 is unaffected —
+it keeps whatever imports it compiled with, and those that call a removed
+function fail to instantiate exactly as they do today. 0.10.0 is **not yanked**.
+
+**What to use instead.** Write and subscribe by emitting the corresponding
+`OutboundDelegateMsg` — `PutContractRequest`, `UpdateContractRequest`,
+`SubscribeContractRequest` — which go through the node's normal contract path
+and, since freenet-core#5615, reach the network. There is no replacement for
+`list_subscriptions` or `schedule_wakeup`; neither ever had a host
+implementation to replace.
+
+`DelegateCtx::get_contract_state` and `get_contract_state_len` are **unchanged
+and still supported** — `freenet_delegate_contracts` now holds only that read.
+
+`InboundDelegateMsg::WakeupFired` is **left in place** at bincode variant tag 9,
+and is documented at the variant so it is not tidied away later. It is the
+delivery half of scheduled wakeup; with the request half gone nothing can ask
+for a wakeup, so it is unreachable rather than harmful. Deleting it would be a
+wire-format change on a pinned enum, and freenet-core's host-side
+implementation exists on an unmerged branch, so the feature is expected to
+return — restoring it means landing both halves together.
+
+### Added — a guard against declaring imports the host does not provide
+
+New module `freenet_stdlib::host_imports`.
+
+`DECLARED_HOST_IMPORTS` is a checked-in list of every WASM host import this
+crate declares, as `(module, name)` pairs. A test parses the crate's own
+`extern "C"` blocks and fails if the list and the source disagree, so adding or
+removing an import is a deliberate edit a reviewer sees rather than a silent
+divergence. It matches only a `fn` declaration line inside an extern block, not
+a mention of the name in prose, and a companion test walks `src/` so a new file
+with an extern block cannot escape the scan.
+
+Nothing previously detected this class of drift, which is how seven imports
+accumulated. The constant is **public** so freenet-core can assert its own
+linker registration set against it without cross-repo file plumbing; that half
+is tracked separately.
+
+### Documentation
+
+- **`WIRE-FORMAT.md`** — what is safe to change on the host↔delegate wire and
+  what is not, established by running bincode rather than by reading its docs.
+  Records three results that contradict the common intuition: appending an enum
+  variant and appending a struct field break in *opposite* directions;
+  `#[non_exhaustive]` has **no effect** on the wire (byte-identical output) and
+  is purely a `match` attribute; and `#[serde(other)]` **does** absorb an unknown
+  tag in bincode 1.x, converting a clean decode error into silent corruption of
+  whatever follows it — though only once the unknown variant carries a payload,
+  which is exactly why it misleads.
+
+  Also covers rebasing a stacked branch after the PR below it is **squash**
+  merged (a plain `git rebase origin/main` replays the whole merged change —
+  use `--onto`), that a **stacked PR runs none of the Rust CI jobs** here
+  because `ci.yml` triggers only on PRs targeting `main`, and why a delegate
+  should prefer a relative delay to an absolute deadline: it *can* read a clock
+  (`freenet_time::__frnt__time__utc_now` is registered on the same linker as the
+  delegate namespaces), but a deadline bakes the delegate's reading of it into a
+  value only the host can act on.
+
+  Also records that resolving a conflict in a **test module** by keeping both
+  sides is safe for the content and not for the delimiters. Git's conflict
+  regions are line ranges, so a `#[test]` attribute can end up in *leading*
+  shared context: two branches each appending a test to one module resolve to a
+  bare `fn`, which compiles, runs, and is quietly no longer a test — the suite
+  green with one fewer test in it. The leading case is the one that bites, since
+  a lost *trailing* brace is a hard error. Losing `#[cfg(test)]` on a module is
+  *not* a silent mode: every test still runs and the build gets noisier.
+  Linked from CONTRIBUTING.md, and at the repo root rather than `docs/` because
+  a bare `docs` line in `.gitignore` makes that directory untracked and
+  `ci.yml`'s `paths-ignore` skips it.
+
+## [0.10.0] - 2026-09-07
+
+*Section boundaries below were reconstructed after the fact: 0.9.0 and 0.10.0
+were both published without their changelog entries being moved out of
+`[Unreleased]`.*
+
+### Added — a delegate can learn whether its subscribe has anything to fire on
+
+`true` from `subscribe_contract` means "the node accepted the registration", and
+says nothing about whether the node holds the contract. A node that knows the
+contract's code but holds no state for it registers the interest and returns
+`true`, identically to one that holds it — which is the ordinary situation at
+startup, before the node has fetched the contract. The delegate believes it has
+a live subscription and does not, and the only signal is a notification that
+never arrives. On a payment address that is money. See freenet-core#5565.
+
+- `DelegateCtx::subscribe_contract_checked(&[u8; 32]) -> Result<SubscribeOutcome, i64>`
+- `SubscribeOutcome` — `Pinned`, `NotPinned`, or `Unrecognized(i64)`.
+  `is_pinned()` is true only for `Pinned`: an outcome a given build cannot
+  interpret is not evidence either way.
+
+**`Pinned` is a statement about now, not a durability promise.** It means the
+node holds state for the contract and has recorded the delegate's interest.
+Under demand-driven hosting **no subscription of any kind is an absolute pin**,
+and a delegate subscription is weaker still: it registers notification interest
+only. On freenet-core as it stands (pre-#4669) it contributes **no hosting
+demand**, and so does not affect eviction ordering at all — unlike a client
+subscription, which is a ranking dimension. freenet-core#5493 implements #4669
+and is open now, so that is current behaviour rather than a fixed property. The name
+describes a live subscription, not a retained one. `NotPinned` is correspondingly
+retryable, and clears as soon as the node holds the state.
+
+**This check happens at subscribe time and nowhere else**, so a subscription that
+was live can quietly stop being so. Re-checking without a UI attached needs a way
+to run later: `DelegateCtx::schedule_wakeup` (freenet-stdlib#82, same release) is
+that mechanism. Neither change alone closes the scenario in freenet-core#5565 —
+this one lets a delegate learn the truth, and that one lets it ask again. Do not
+read `Pinned` as fire-and-forget.
+
+`subscribe_contract` is left **behaviourally unchanged**, deliberately. Altering
+what it returns would change the behaviour of already-deployed delegate WASM.
+
+**This is not a wire-format change.** It adds a host function and a plain Rust
+type, so it consumes no bincode variant tag and cannot shift one — additive in
+both directions, which a new enum variant would not be. A delegate that does not
+import it is unaffected; one that does, on a node too old to provide it, fails to
+**instantiate** with a named missing-import error rather than failing
+mid-protocol at decode. Same reasoning as `list_subscriptions`.
+
+Note this does **not** duplicate `list_subscriptions`: that reads the
+subscription set, which contains accepted-but-unpinned registrations, so
+introspection answers "what did I register?" and this answers "what actually got
+pinned?".
+
+The two outcome discriminants (`Pinned = 0`, `NotPinned = 1`) are part of the
+host ABI once a node returns them, and are pinned by test. Requires a node
+providing `__frnt__delegate__subscribe_contract_checked` in the
+`freenet_delegate_contracts` namespace. **No released node does yet** — the host
+half is freenet-core#5565.
+
+### Added
+
+- **`OutboundDelegateMsg::UnsubscribeContractRequest` and
+  `InboundDelegateMsg::UnsubscribeContractResponse`**, both appended at bincode
+  **tag 8** of their enum.
+
+  freenet-core#2830 specified subscribe and unsubscribe together; only subscribe
+  was built, and `crates/core/src/contract.rs` has carried the
+  `TODO(#2830)` since. Until now the only way a delegate's subscription was
+  released was the implicit cleanup when the delegate itself was unregistered,
+  so a delegate that had finished with a contract kept holding interest in it
+  for as long as the delegate existed.
+
+  **Unsubscribing a contract the delegate is not subscribed to reports
+  `Ok(())`.** Not a convenience: it is what the host does. Teardown goes through
+  a removal path that is already a no-op for a client id that is not present, so
+  an error return would have the host inventing a failure it did not have.
+
+  **Appended, never inserted** — every existing tag is exactly where it was, so
+  deployed delegate WASM is unaffected. Tag 8 was chosen deliberately in
+  coordination with freenet-stdlib#82, which appends `ScheduleWakeup` /
+  `WakeupFired` and now takes **tag 9**.
+
+- **`DelegateCtx::list_subscriptions`** — a delegate can now ask the node which
+  contracts it is subscribed to. Backed by two new V2 host functions in the
+  `freenet_delegate_contracts` import namespace,
+  `__frnt__delegate__list_subscriptions_len` and
+  `__frnt__delegate__list_subscriptions`, with
+  `encode_contract_id_list` / `decode_contract_id_list` as the shared codec.
+
+  A delegate's subscription set lives in the node: the WASM is instantiated per
+  invocation and dropped afterwards, so between invocations the delegate has no
+  view of it. Until now it could only keep a parallel record in its secrets,
+  which drifts from the node's exactly when it matters, or re-subscribe to
+  everything on every wake.
+
+  **Scoped honestly: this does not by itself deliver the restart-replay
+  freenet-core#5467 asks for.** The node's delegate-subscription registry is
+  in-memory, so a restart *loses* those subscriptions rather than replaying
+  them, and after one this call correctly returns an empty list. It is the read
+  side of that capability, and becomes load-bearing when freenet-core#4669
+  part 3's durable store lands and there is something persistent to read back.
+  Within a single node lifetime it is useful today.
+
+  It returns `Result<Vec<[u8; 32]>, i64>`, not a bare `Vec`. An empty list and a
+  failed enumeration mean opposite things to a caller deciding whether to
+  re-subscribe, so they must not share a representation.
+
+  **This is additive for every existing delegate**, and that was checked against
+  a shipped artifact rather than assumed. River's deployed `chat_delegate.wasm`
+  is built against stdlib 0.8.5, which already declares the five
+  `freenet_delegate_contracts` externs — and `wasm-objdump -x` shows it imports
+  **none** of them, only the four secrets functions and one logger it actually
+  calls. The linker drops unreferenced externs, so declaring two more changes
+  nothing for a delegate that does not call them. Had that not held, every
+  delegate merely *rebuilt* against 0.10.0 would have acquired imports no
+  deployed node provides and failed to instantiate everywhere.
+
+  A delegate that *does* call it fails to **load** on a node that does not
+  provide the imports — a named missing-import error at instantiation, rather
+  than a silent failure mid-protocol. That is the reason for choosing a host
+  function over a message variant.
+
+  **Requires a node whose freenet-core registers these imports, and no released
+  node does yet.** Host functions are registered by name and reference no stdlib
+  type, so the stdlib version a node was built against guarantees nothing here;
+  the core half is tracked separately.
+
+### Fixed
+
+- **`InboundDelegateMsg`'s doc comment claimed `OutboundDelegateMsg` was
+  `#[non_exhaustive]`. It never has been.** The comment is corrected, and the
+  asymmetry is now documented as the deliberate choice it is, on both enums.
+
+  `OutboundDelegateMsg` is **staying** un-marked, and should not be "fixed" by
+  marking it. Every variant is a request the host must act on, and freenet-core
+  dispatches them in exhaustive matches with no wildcard (`contract.rs`, in the
+  request loop and in the app-message filter). Marking the enum would force
+  those to grow `_ =>` arms, and a newly added variant would then compile
+  against the host with no arm of its own — the delegate's request falling into
+  the wildcard, the call reporting success. The compile error is what prevents
+  that, and it is the only thing that does. `InboundDelegateMsg` keeps the
+  attribute because its consumers are third-party delegate WASM, which can
+  reasonably ignore an unknown variant.
+
+  The doc states two limits on that argument rather than overselling it: the
+  compile error forces an *arm* to exist, not a working handler (this crate's
+  own FlatBuffers encoder has explicit arms that log and drop), and it is **not**
+  the bug behind this workstream — a delegate `SubscribeContractRequest` *is*
+  handled today; its defect is that it registers no demand
+  (freenet-core#4669), which is a different failure with a different fix.
+
+- **`DelegateCtx::subscribe_contract`'s doc comment** said notification delivery
+  was "a follow-up" (it works), and said nothing about whether a delegate
+  subscription registers demand in the network.
+
+  It now says that **whether it does is a property of the node, not of this
+  library, and a delegate cannot detect which it has**. On nodes predating
+  freenet-core#4669 a subscribe registers no demand at all — no pin, no renewal
+  set, no eviction exemption — so the delegate sees remote updates only while
+  something else keeps the node subscribed, typically an open UI client. Once
+  #4669 lands it registers demand when the node is hosting the contract, and
+  still does not when the node can resolve but is not hosting it, since a pin on
+  a contract the node does not hold could be neither renewed nor reclaimed.
+
+  The call reports success in every one of those cases and nothing
+  distinguishes them, which is why this belongs at the call site rather than in
+  an issue. It is deliberately phrased as current node behaviour with a tracking
+  reference rather than as a property of the API, so that freenet-core#4669
+  landing makes it incomplete rather than wrong.
+
+### Internal — wire-format guards
+
+- **Every variant of both delegate message enums now has its bincode tag
+  pinned** (`delegate_msg_variant_tags_are_pinned`). The previous pin covered
+  `InboundDelegateMsg`'s variant 0 alone, so any reorder that left
+  `ApplicationMessage` first went undetected — including swapping
+  `UserResponse` and `GetContractResponse`, which reassigns two tags and makes
+  deployed delegate WASM decode each as the other, silently. That exact swap was
+  written during the work that produced this pin, which is the argument for it.
+
+  The guard fails closed in both directions: the tag map is an exhaustive
+  `match`, so a new variant is a compile error until it is pinned, and a probe
+  asserts that the next tag along does not decode, so a variant cannot be added
+  without the count constants noticing.
+
+- **The compatibility rules are now asserted, not just documented**
+  (`delegate_wire_compat` in `delegate_interface.rs`, `struct_field_wire_compat`
+  in `client_events.rs`). Worth reading before changing anything on the wire,
+  because appending an enum variant and appending a struct field break in
+  **opposite** directions:
+
+  | change | old sender → new receiver | new sender → old receiver |
+  |---|---|---|
+  | append an enum variant | fine, old tags unchanged | hard error, unknown tag |
+  | append a struct field | **hard error**, unexpected end of input | silently ignored *if the struct is terminal in its message*; **silent corruption** if it is not |
+
+  So a struct field is the more dangerous of the two: bincode is positional and
+  carries no field tags, so there is nothing for a decoder to skip, and
+  `#[serde(default)]` does not help — it is a self-describing-format feature and
+  protects the `serde_json` path only. The practical rule is to prefer a new
+  enum variant over a new field on an existing wire struct, since a variant is
+  only seen by a peer that asked for it.
+
+  `NodeDiagnosticsResponse` happens to be terminal in its message, which is the
+  only reason a field could be appended to it without corrupting anything after
+  it. That property is now pinned rather than assumed.
+
+### Added — scheduled-wakeup primitive for delegates
+
+Lets an always-on delegate run periodic background work (key rotation, TTL
+pruning, scheduled publication) without a connected UI, instead of pushing that
+work into a client sync loop that stops when the tab closes.
+Driving use case: freenet/river#228. Host half: freenet/freenet-core#3972.
+
+- `DelegateCtx::schedule_wakeup(after: Duration, tag: &[u8]) -> Result<(), i64>`
+  — a **host function**, in the `freenet_delegate_management` namespace.
+- `InboundDelegateMsg::WakeupFired { tag: Vec<u8> }` — an inbound wire variant
+  at **tag 9**, delivered when a scheduled wakeup fires.
+- `MAX_WAKEUP_TAG_BYTES` (128) and `MIN_WAKEUP_DELAY` (1s).
+
+#### The outbound half is a host function, not a wire variant
+
+This is the asymmetry that matters, and it is deliberate.
+
+A delegate's outbound messages are serialized as **one batch** and decoded whole
+by the host. An outbound variant the host does not recognize therefore fails the
+**entire batch** — so a delegate built against this release, returning
+`[ApplicationMessage(reply), ScheduleWakeup{..}]` to a current-release node,
+would have **the reply discarded along with the wakeup**, and the user's action
+would silently do nothing. That is the direction ordinary rollout produces every
+time, because stdlib ships before core by policy.
+
+A host function fails the other way: an unimported function fails at
+**instantiation**, with a named missing import — loudly, once, at load, rather
+than silently and per message.
+
+`WakeupFired` stays an inbound variant because that direction has no equivalent
+hazard: a delegate that cannot schedule never receives one. The rule this
+follows is in `WIRE-FORMAT.md` — prefer a host function where the answer is
+synchronous, and add an inbound variant only where the host sends it strictly in
+reply to something an older delegate cannot have sent.
+
+#### `after` is a delay, not a deadline
+
+The host measures it from when it receives the call. A delay needs no clock on
+the delegate side, and if absolute scheduling is ever wanted it is `target - now`
+in terms of this same argument — so nothing is foreclosed. The guarantee is
+"not before"; nothing promises precision.
+
+`schedule_wakeup` **clamps `after` up to `MIN_WAKEUP_DELAY` itself**, so
+`Duration::ZERO` is a one-second delay rather than a tight wake loop — a delegate
+re-arming inside its own handler would otherwise spin the node.
+
+`tag` is capped at `MAX_WAKEUP_TAG_BYTES`, applied before the host call.
+
+**Both of those are fail-fast convenience for well-behaved callers, not bounds.**
+`__frnt__delegate__schedule_wakeup` is an ordinary WASM import: a delegate can
+declare its own `extern "C"` block and pass a 10 MB tag, or a zero delay, without
+ever constructing a `DelegateCtx`. The guest controls its own imports, so no
+guest-side check can bound what the host receives. **Only the host can enforce
+either, and no host does yet** — freenet-core#3972. The same is true of the
+per-delegate cap on how many wakeups may be pending, which is an obligation on
+#3972 and not something that exists today.
+
+That last point matters for reading the tag cap's rationale: a size cap is needed
+*in addition to* a count cap, and neither is in place yet.
+
+#### `WakeupFired` carries no context, and the cache explains why
+
+freenet-core's delegate context cache is keyed **per delegate**, not per
+conversation, and prunes after 10 minutes. Any wakeup worth scheduling outlives
+that, so the context that existed at scheduling time is gone; and if a live
+context happens to exist from another in-flight exchange, it belongs to that
+exchange. There is no coherent value to put in the field. State that must
+survive a wakeup belongs in the delegate's secrets.
+
+#### Durability is a requirement on the host, and is unimplemented
+
+A week-long delay is only useful if pending wakeups survive a node restart.
+**No host does this today**; freenet-core#3972 must implement it, and nothing in
+this crate can make it true. Stated as an obligation rather than a guarantee
+because the precedent runs the other way — `DELEGATE_SUBSCRIPTIONS`, the one
+comparable piece of per-delegate host state, is in-memory and a restart discards
+it entirely.
+
+#### Compatibility
+
+`WakeupFired` is **appended at tag 9**, behind the unsubscribe pair at tag 8, so
+no existing variant's bincode tag moves and every message a deployed delegate
+already understood still decodes. `inbound_wakeup_fired_wire_format_is_stable`
+pins its tag and full byte layout.
+
+The two directions are not symmetric:
+
+- **Old delegate -> new host**: safe, and now safe by construction rather than
+  by convention — the scheduling half is a host import, so an older delegate
+  simply does not import it. There is no outbound wire variant to mis-decode,
+  which is the whole point of the conversion above.
+- **New host -> old delegate**: `WakeupFired` at a tag an older delegate does not
+  know is a **hard bincode decode error**, not a skipped message. It is safe only
+  because the host sends it solely to a delegate that scheduled one, and a
+  delegate that cannot import `schedule_wakeup` cannot have scheduled. That
+  opt-in-by-construction property is a **requirement on freenet-core#3972**, not
+  a property of the wire format.
+- The host function itself is additive both ways: a delegate that does not import
+  it is unaffected, and one that does fails to **instantiate** on too old a node
+  with a named missing-import error.
+
+### TypeScript SDK 0.4.0 — Breaking (npm package `@freenetorg/freenet-stdlib`)
+
+The npm package is versioned separately from the Rust crate. This release
+changes runtime behavior for existing callers, so on a 0.x line it takes a
+minor bump: **0.3.0 -> 0.4.0**, not 0.3.1.
+
+Upgrading from npm: 0.3.0 and earlier matched responses to requests by *arrival
+order alone*, with no correlation of any kind, so concurrent requests for
+different contracts could resolve into each other's promises. That is what this
+release fixes. Applications that serialised their requests to work around it can
+stop doing so **for requests on different contracts**; see "Known limitation"
+below before relaxing it for concurrent requests on the *same* contract.
+
+- **Host responses are now correlated to requests by contract key.**
+  `FreenetWsApi` previously resolved the *oldest* pending request of a type
+  with whatever response arrived, with no correlation at all. Two concurrent
+  `get()`s for different contracts whose answers came back out of order
+  therefore resolved into each other's promises — one contract's state
+  delivered to the other's caller, silently. This is reachable in practice, not
+  theoretical: freenet-core drives each contract operation on its own task and
+  publishes results as they complete, so responses arrive in completion order,
+  not request order.
+
+  Every `ContractResponse` carries the contract key (or, for `NotFound`, the
+  instance id), so requests now record the key they expect back and are matched
+  on it. A response that matches no pending request is dropped rather than
+  mis-delivered; the `ResponseHandler` callbacks still see it, so the legacy
+  callback API is unchanged.
+
+  One response settles *every* pending request for its key. Concurrent requests
+  for one contract are indistinguishable — the wire carries no request id — and
+  the node coalesces byte-identical concurrent UPDATEs into a single
+  transaction, emitting one result for both, so settling only the oldest would
+  strand the rest until the 30s timeout.
+
+- **`subscribe()` now waits for the host's confirmation.** It previously
+  returned a `Promise<void>` that resolved as soon as the request was *sent*,
+  and could never reject — a refused subscription (a subscriber-limit rejection,
+  for instance) left the awaited promise silently resolved. It now resolves on
+  `SubscribeResponse { subscribed: true }` and rejects on `subscribed: false`,
+  on a host error naming the contract, on connection close, or after
+  `REQUEST_TIMEOUT_MS`. **Callers who `await subscribe()` see behavior change**:
+  the call now blocks until the host answers, and can throw where it previously
+  could not. Fire-and-forget callers should add a rejection handler.
+
+- **A host error no longer fails every in-flight request.** Any single error
+  previously rejected every pending get, put and update across all contracts.
+  Errors are now scoped to the requests whose contract key the error message
+  names. An error naming no pending contract still fails everything, since it
+  may be connection-wide and must not leave callers waiting out the timeout.
+
+#### Known limitation: two requests for the SAME contract key
+
+Correlation is by contract key, because the key is the only identifying field a
+`ContractResponse` carries. Two requests for the *same* key are therefore
+indistinguishable, and one case remains open, reported as
+[#96](https://github.com/freenet/freenet-stdlib/issues/96):
+
+Giving up on a request locally does not stop the node working on it — the SDK
+sends nothing to cancel the operation — so a request that hit
+`REQUEST_TIMEOUT_MS` can still be answered afterwards. If the caller has retried
+the same contract by then, that late answer matches the retry exactly and
+settles it. The retry resolves with a result fetched for a request its caller
+already abandoned, and its own answer is later dropped against an empty queue.
+Mostly this means staler state for the right contract, but not always: a retry
+issued with `fetchContract: true` can be settled by an earlier response that
+carries no contract.
+
+**This release does not fix that, deliberately.** A client-side fence was
+attempted and withdrawn: with no request id on the wire, the SDK cannot tell a
+late answer from the retry's own answer, so any rule that drops "the next
+response for this key" is as likely to drop the retry's answer as the ghost's.
+Doing so hangs that retry until its own timeout, which mints another
+indistinguishable case — a self-sustaining chain of spurious timeouts against a
+contract the node is serving correctly. That is a worse failure than the
+mis-delivery it was meant to prevent. The evidence is on
+[#105](https://github.com/freenet/freenet-stdlib/pull/105).
+
+The real fix is a client-generated request id echoed in every terminal response,
+which makes correlation exact and this whole class of problem unreachable. That
+is a wire-protocol change spanning freenet-core, tracked in
+[#106](https://github.com/freenet/freenet-stdlib/issues/106).
+
+**Until then**, an application that issues concurrent requests for the same
+contract key, or retries one after a timeout, should treat a response as
+"an answer for this contract" rather than "the answer to this call": re-check
+whatever the result is used for, and prefer idempotent retries. Requests for
+*different* contracts are correlated correctly and need no such care.
+
+## [0.9.0] - 2026-08-05
+
 ### Breaking (next release must be 0.9.0, not a patch)
 - **`DelegateRequest::RegisterDelegateWithPredecessors`** removed (added in
   0.8.4). freenet-core's node-side handler for this request was disabled in

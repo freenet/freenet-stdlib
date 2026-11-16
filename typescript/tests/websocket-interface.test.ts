@@ -833,6 +833,13 @@ describe("Subscribe and Disconnect requests", () => {
             const cr = req.clientRequest as any;
             if (cr.contractRequestType === CRType.Subscribe) {
               receivedSubscribe = true;
+              // subscribe() resolves on the host's confirmation, so answer it.
+              socket.send(
+                buildContractResponse(
+                  ContractResponseType.SubscribeResponse,
+                  new SubscribeResponseT(makeKeyT(), true)
+                )
+              );
             }
           }
         } catch (_) {}

@@ -427,6 +427,13 @@ describe("Subscribe with SubscribeResponse", () => {
               if (cr.contractRequest && cr.contractRequest.summary) {
                 receivedSummary = cr.contractRequest.summary.length > 0;
               }
+              // subscribe() resolves on the host's confirmation, so answer it.
+              socket.send(
+                buildContractResponse(
+                  ContractResponseType.SubscribeResponse,
+                  new SubscribeResponseT(makeKeyT(), true)
+                )
+              );
             }
           }
         } catch (_) {}

@@ -588,6 +588,21 @@ pub enum DelegateRequest<'a> {
         #[serde(borrow)]
         inbound: Vec<InboundDelegateMsg<'a>>,
     },
+    /// Register a delegate with the node.
+    ///
+    /// `cipher` and `nonce` are retained only for wire-format compatibility
+    /// with older clients (0.8.0 removed the `DEFAULT_CIPHER` /
+    /// `DEFAULT_NONCE` constants that used to be sent here); the node
+    /// discards both values outright and never uses them as key material.
+    /// Since freenet-core#4140 / freenet-core#4146, the node derives the
+    /// delegate's local-scope encryption key itself, via
+    /// `HKDF-SHA256(salt = delegate key, ikm = node KEK)`
+    /// (`SecretsStore::derive_delegate_dek` in freenet-core) — the opposite
+    /// of the secret being "sealed client-side": a client-supplied key is
+    /// rejected precisely because accepting one would let a malicious or
+    /// buggy client substitute a key the node operator does not control.
+    /// Any value is fine here, all-zero bytes included (the fields are
+    /// fixed-size, so "any value" means any bytes, not an empty slice).
     RegisterDelegate {
         delegate: DelegateContainer,
         cipher: [u8; 32],
@@ -1633,11 +1648,22 @@ impl HostResponse {
                             "SubscribeContractRequest reached client serialization - this is a bug"
                         );
                     }
+                    OutboundDelegateMsg::UnsubscribeContractRequest(_) => {
+                        tracing::error!(
+                            "UnsubscribeContractRequest reached client serialization - this is a bug"
+                        );
+                    }
                     OutboundDelegateMsg::SendDelegateMessage(_) => {
                         tracing::error!(
                             "SendDelegateMessage reached client serialization - this is a bug"
                         );
                     }
+                    // Deliberately exhaustive, no wildcard. `#[non_exhaustive]`
+                    // does not apply inside the defining crate, so a new
+                    // outbound variant is a compile error here until someone
+                    // decides whether it has a FlatBuffers union member or is
+                    // executor-only like the contract requests above. Adding
+                    // the unsubscribe pair is what proved this fires.
                 });
                 let messages_offset = builder.create_vector(&messages);
                 let delegate_response_offset = FbsDelegateResponse::create(
@@ -2587,6 +2613,416 @@ mod delegate_request_wire_format {
     }
 }
 
+/// Wire-format pins for [`ContractRequest`].
+///
+/// Same rationale as `delegate_request_wire_format` above: `ContractRequest`
+/// crosses the client<->node boundary as bincode (the `EncodingProtocol::Native`
+/// path; `browser.rs` and `regular.rs` both `bincode::serialize` their
+/// requests), which encodes an enum's variant as a 4-byte little-endian `u32`
+/// discriminant. The *declaration order* of the variants is therefore part of
+/// the wire contract: reordering or inserting a variant anywhere but the end
+/// silently reassigns every following tag and breaks already-deployed clients
+/// (the v0.2.11 break class). `ContractRequest` had no such pin before this
+/// module, and a new `Unsubscribe` variant is about to be appended — this
+/// closes the gap first.
+///
+/// Each variant (`Put`, `Update`, `Get`, `Subscribe`) is pinned to its FULL
+/// expected byte vector, not just the 4-byte tag, so a field reorder or a
+/// change to a nested type's encoding (`ContractContainer`, `ContractKey`,
+/// `UpdateData`, ...) is caught too. Unlike the `DelegateRequest` freeze,
+/// there is no earlier shipped commit to anchor these bytes to — this module
+/// establishes the frozen baseline from the current encoding; from here on,
+/// any change to these bytes must be deliberate and version-gated.
+///
+/// Also pinned: the flatbuffers `ContractRequestType` union discriminants
+/// (`schemas/flatbuffers/client_request.fbs`). Those are fixed by the
+/// schema's declaration order the same way bincode's are fixed by the Rust
+/// enum's declaration order, so a schema reorder is just as much a wire
+/// break for flatbuffers/browser clients as a Rust reorder is for native
+/// ones.
+#[cfg(test)]
+mod contract_request_wire_format {
+    use super::ContractRequest;
+    use crate::code_hash::CodeHash;
+    use crate::generated::client_request::ContractRequestType;
+    use crate::prelude::{
+        ContractCode, ContractContainer, ContractInstanceId, ContractKey, ContractWasmAPIVersion,
+        Parameters, RelatedContracts, State, StateSummary, UpdateData, WrappedContract,
+        WrappedState,
+    };
+    use std::sync::Arc;
+
+    fn sample_key() -> ContractKey {
+        ContractKey::from_id_and_code(
+            ContractInstanceId::new([0x11; 32]),
+            CodeHash::new([0x22; 32]),
+        )
+    }
+
+    fn sample_container() -> ContractContainer {
+        let code = Arc::new(ContractCode::from(vec![1u8, 2, 3]));
+        let params = Parameters::from(vec![9u8, 8, 7]);
+        ContractContainer::Wasm(ContractWasmAPIVersion::V1(WrappedContract::new(
+            code, params,
+        )))
+    }
+
+    // The four sample values whose complete bincode encodings are frozen in
+    // `wire_format_is_frozen`. Kept byte-for-byte identical to the throwaway
+    // generator that produced the frozen vectors, so the freeze is
+    // reproducible: construct the value, `bincode::serialize`, compare.
+    fn sample_put() -> ContractRequest<'static> {
+        ContractRequest::Put {
+            contract: sample_container(),
+            state: WrappedState::new(vec![0x44, 0x55, 0x66]),
+            related_contracts: RelatedContracts::new(),
+            subscribe: true,
+            blocking_subscribe: false,
+        }
+    }
+
+    fn sample_update() -> ContractRequest<'static> {
+        ContractRequest::Update {
+            key: sample_key(),
+            data: UpdateData::State(State::from(vec![0x77, 0x88])),
+        }
+    }
+
+    fn sample_get() -> ContractRequest<'static> {
+        ContractRequest::Get {
+            key: ContractInstanceId::new([0x33; 32]),
+            return_contract_code: true,
+            subscribe: false,
+            blocking_subscribe: false,
+        }
+    }
+
+    /// Complements [`sample_get`], whose three consecutive `bool` fields cannot
+    /// all be pairwise distinguishable in a single sample (three bools always
+    /// share a value somewhere). `sample_get` sets `subscribe` and
+    /// `blocking_subscribe` both false, so a declaration-order swap of those two
+    /// encodes identically and its frozen vector alone cannot catch it. This
+    /// sample differs in exactly that pair, so together the two freeze every
+    /// pairwise field order in `Get`.
+    fn sample_get_subscribe_pair() -> ContractRequest<'static> {
+        ContractRequest::Get {
+            key: ContractInstanceId::new([0x33; 32]),
+            return_contract_code: false,
+            subscribe: true,
+            blocking_subscribe: false,
+        }
+    }
+
+    fn sample_subscribe() -> ContractRequest<'static> {
+        ContractRequest::Subscribe {
+            key: ContractInstanceId::new([0x33; 32]),
+            summary: Some(StateSummary::from(vec![0x99, 0xAA])),
+        }
+    }
+
+    /// Complete-byte wire-format freeze for all four variants.
+    ///
+    /// The test also DESERIALIZES each frozen vector, proving the byte
+    /// stream still decodes into the expected variant on this build.
+    #[test]
+    fn wire_format_is_frozen() {
+        const PUT: &[u8] = &[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 177, 119, 236, 27,
+            242, 109, 251, 59, 112, 16, 212, 115, 230, 212, 71, 19, 178, 155, 118, 91, 153, 198,
+            230, 14, 203, 250, 231, 66, 222, 73, 101, 67, 3, 0, 0, 0, 0, 0, 0, 0, 9, 8, 7, 68, 0,
+            48, 164, 43, 234, 3, 4, 34, 33, 221, 91, 193, 53, 159, 47, 206, 127, 237, 159, 116, 81,
+            44, 75, 126, 103, 73, 141, 96, 191, 52, 206, 177, 119, 236, 27, 242, 109, 251, 59, 112,
+            16, 212, 115, 230, 212, 71, 19, 178, 155, 118, 91, 153, 198, 230, 14, 203, 250, 231,
+            66, 222, 73, 101, 67, 3, 0, 0, 0, 0, 0, 0, 0, 68, 85, 102, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            0,
+        ];
+        const UPDATE: &[u8] = &[
+            1, 0, 0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+            17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 34, 34, 34, 34, 34, 34, 34, 34, 34,
+            34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34,
+            34, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 119, 136,
+        ];
+        const GET: &[u8] = &[
+            2, 0, 0, 0, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
+            51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 1, 0, 0,
+        ];
+        // Complements GET: `sample_get` leaves `subscribe` and
+        // `blocking_subscribe` both false, so a declaration-order swap of that
+        // pair encodes identically and GET alone cannot catch it. Three bools
+        // can never all be pairwise distinct in one sample, so a second vector
+        // differing in exactly that pair is what completes the freeze.
+        const GET_SUBSCRIBE_PAIR: &[u8] = &[
+            2, 0, 0, 0, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
+            51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 0, 1, 0,
+        ];
+        const SUBSCRIBE: &[u8] = &[
+            3, 0, 0, 0, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
+            51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 1, 2, 0, 0, 0, 0, 0, 0, 0, 153,
+            170,
+        ];
+
+        // 1. Serialization is byte-stable for every variant.
+        assert_eq!(
+            bincode::serialize(&sample_put()).unwrap(),
+            PUT,
+            "Put (tag 0) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_update()).unwrap(),
+            UPDATE,
+            "Update (tag 1) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_get()).unwrap(),
+            GET,
+            "Get (tag 2) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_get_subscribe_pair()).unwrap(),
+            GET_SUBSCRIBE_PAIR,
+            "Get (tag 2) encoding changed (subscribe/blocking_subscribe pair)"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_subscribe()).unwrap(),
+            SUBSCRIBE,
+            "Subscribe (tag 3) encoding changed"
+        );
+
+        // 2. The four variant tags are exactly 0,1,2,3.
+        assert_eq!(PUT[..4], 0u32.to_le_bytes());
+        assert_eq!(UPDATE[..4], 1u32.to_le_bytes());
+        assert_eq!(GET[..4], 2u32.to_le_bytes());
+        assert_eq!(SUBSCRIBE[..4], 3u32.to_le_bytes());
+
+        // 3. Each frozen byte stream still DECODES into its variant on this
+        //    build.
+        assert!(matches!(
+            bincode::deserialize::<ContractRequest>(PUT).unwrap(),
+            ContractRequest::Put { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ContractRequest>(UPDATE).unwrap(),
+            ContractRequest::Update { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ContractRequest>(GET).unwrap(),
+            ContractRequest::Get { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ContractRequest>(SUBSCRIBE).unwrap(),
+            ContractRequest::Subscribe { .. }
+        ));
+    }
+
+    /// The flatbuffers union discriminants are fixed by
+    /// `schemas/flatbuffers/client_request.fbs`'s declaration order for the
+    /// `ContractRequestType` union (`Put, Update, Get, Subscribe` -> 1..4;
+    /// `0` is the union's implicit `NONE`). Reordering that schema silently
+    /// reassigns these the same way reordering the Rust enum reassigns the
+    /// bincode tags above.
+    #[test]
+    fn fbs_discriminants_match_declaration_order() {
+        assert_eq!(ContractRequestType::Put.0, 1);
+        assert_eq!(ContractRequestType::Update.0, 2);
+        assert_eq!(ContractRequestType::Get.0, 3);
+        assert_eq!(ContractRequestType::Subscribe.0, 4);
+    }
+}
+
+/// Wire-format pins for [`ClientRequest`].
+///
+/// Same rationale as `contract_request_wire_format` and
+/// `delegate_request_wire_format` above. `ClientRequest` is the outermost
+/// enum on the client<->node boundary: every one of its seven variants
+/// (`DelegateOp`, `ContractOp`, `Disconnect`, `Authenticate`, `NodeQueries`,
+/// `Close`, `StreamChunk`) is pinned to its FULL expected bincode byte
+/// vector, which also transitively pins the nested `DelegateRequest` /
+/// `ContractRequest` encodings for the two variants that wrap them. There
+/// was no wire-format pin for `ClientRequest` before this module; this
+/// establishes the frozen baseline from the current encoding.
+///
+/// Only 5 of the 7 variants exist on the flatbuffers wire path — the
+/// `ClientRequestType` union in `client_request.fbs` declares
+/// `ContractRequest, DelegateRequest, Disconnect, Authenticate, StreamChunk`
+/// only; `NodeQueries` and `Close` are native-bincode-only (no fbs/browser
+/// client constructs or sends them). Those five discriminants are pinned
+/// too, for the same reason as `ContractRequestType` above.
+#[cfg(test)]
+mod client_request_wire_format {
+    use super::{ClientRequest, ContractRequest, DelegateRequest, NodeQuery};
+    use crate::code_hash::CodeHash;
+    use crate::generated::client_request::ClientRequestType;
+    use crate::prelude::{ContractInstanceId, DelegateKey};
+    use bytes::Bytes;
+    use std::borrow::Cow;
+
+    // The seven sample values whose complete bincode encodings are frozen in
+    // `wire_format_is_frozen`. Kept byte-for-byte identical to the throwaway
+    // generator that produced the frozen vectors, so the freeze is
+    // reproducible: construct the value, `bincode::serialize`, compare.
+    fn sample_delegate_op() -> ClientRequest<'static> {
+        ClientRequest::DelegateOp(DelegateRequest::UnregisterDelegate(DelegateKey::new(
+            [0x11; 32],
+            CodeHash::new([0x22; 32]),
+        )))
+    }
+
+    fn sample_contract_op() -> ClientRequest<'static> {
+        ClientRequest::ContractOp(ContractRequest::Subscribe {
+            key: ContractInstanceId::new([0x33; 32]),
+            summary: None,
+        })
+    }
+
+    fn sample_disconnect() -> ClientRequest<'static> {
+        ClientRequest::Disconnect {
+            cause: Some(Cow::Borrowed("bye")),
+        }
+    }
+
+    fn sample_authenticate() -> ClientRequest<'static> {
+        ClientRequest::Authenticate {
+            token: "tok".to_string(),
+        }
+    }
+
+    fn sample_node_queries() -> ClientRequest<'static> {
+        ClientRequest::NodeQueries(NodeQuery::ConnectedPeers)
+    }
+
+    fn sample_close() -> ClientRequest<'static> {
+        ClientRequest::Close
+    }
+
+    fn sample_stream_chunk() -> ClientRequest<'static> {
+        ClientRequest::StreamChunk {
+            stream_id: 1,
+            index: 2,
+            total: 3,
+            data: Bytes::from_static(&[9, 9, 9]),
+        }
+    }
+
+    /// Complete-byte wire-format freeze for all seven variants.
+    ///
+    /// The test also DESERIALIZES each frozen vector, proving the byte
+    /// stream still decodes into the expected variant on this build.
+    #[test]
+    fn wire_format_is_frozen() {
+        const DELEGATE_OP: &[u8] = &[
+            0, 0, 0, 0, 2, 0, 0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+            17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 34, 34, 34, 34, 34, 34,
+            34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34,
+            34, 34, 34, 34,
+        ];
+        const CONTRACT_OP: &[u8] = &[
+            1, 0, 0, 0, 3, 0, 0, 0, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51,
+            51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 0,
+        ];
+        const DISCONNECT: &[u8] = &[2, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 98, 121, 101];
+        const AUTHENTICATE: &[u8] = &[3, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 116, 111, 107];
+        const NODE_QUERIES: &[u8] = &[4, 0, 0, 0, 0, 0, 0, 0];
+        const CLOSE: &[u8] = &[5, 0, 0, 0];
+        const STREAM_CHUNK: &[u8] = &[
+            6, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 9, 9, 9,
+        ];
+
+        // 1. Serialization is byte-stable for every variant.
+        assert_eq!(
+            bincode::serialize(&sample_delegate_op()).unwrap(),
+            DELEGATE_OP,
+            "DelegateOp (tag 0) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_contract_op()).unwrap(),
+            CONTRACT_OP,
+            "ContractOp (tag 1) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_disconnect()).unwrap(),
+            DISCONNECT,
+            "Disconnect (tag 2) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_authenticate()).unwrap(),
+            AUTHENTICATE,
+            "Authenticate (tag 3) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_node_queries()).unwrap(),
+            NODE_QUERIES,
+            "NodeQueries (tag 4) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_close()).unwrap(),
+            CLOSE,
+            "Close (tag 5) encoding changed"
+        );
+        assert_eq!(
+            bincode::serialize(&sample_stream_chunk()).unwrap(),
+            STREAM_CHUNK,
+            "StreamChunk (tag 6) encoding changed"
+        );
+
+        // 2. The seven variant tags are exactly 0,1,2,3,4,5,6.
+        assert_eq!(DELEGATE_OP[..4], 0u32.to_le_bytes());
+        assert_eq!(CONTRACT_OP[..4], 1u32.to_le_bytes());
+        assert_eq!(DISCONNECT[..4], 2u32.to_le_bytes());
+        assert_eq!(AUTHENTICATE[..4], 3u32.to_le_bytes());
+        assert_eq!(NODE_QUERIES[..4], 4u32.to_le_bytes());
+        assert_eq!(CLOSE[..4], 5u32.to_le_bytes());
+        assert_eq!(STREAM_CHUNK[..4], 6u32.to_le_bytes());
+
+        // 3. Each frozen byte stream still DECODES into its variant on this
+        //    build.
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(DELEGATE_OP).unwrap(),
+            ClientRequest::DelegateOp(_)
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(CONTRACT_OP).unwrap(),
+            ClientRequest::ContractOp(_)
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(DISCONNECT).unwrap(),
+            ClientRequest::Disconnect { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(AUTHENTICATE).unwrap(),
+            ClientRequest::Authenticate { .. }
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(NODE_QUERIES).unwrap(),
+            ClientRequest::NodeQueries(_)
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(CLOSE).unwrap(),
+            ClientRequest::Close
+        ));
+        assert!(matches!(
+            bincode::deserialize::<ClientRequest>(STREAM_CHUNK).unwrap(),
+            ClientRequest::StreamChunk { .. }
+        ));
+    }
+
+    /// The flatbuffers union discriminants are fixed by
+    /// `schemas/flatbuffers/client_request.fbs`'s declaration order for the
+    /// `ClientRequestType` union (`ContractRequest, DelegateRequest,
+    /// Disconnect, Authenticate, StreamChunk` -> 1..5; `0` is the union's
+    /// implicit `NONE`). Note the schema's `ContractRequest`/`DelegateRequest`
+    /// ordering is the OPPOSITE of the Rust enum's `DelegateOp`/`ContractOp`
+    /// ordering above -- the two encodings are independent wire contracts,
+    /// each pinned to its own declaration order.
+    #[test]
+    fn fbs_discriminants_match_declaration_order() {
+        assert_eq!(ClientRequestType::ContractRequest.0, 1);
+        assert_eq!(ClientRequestType::DelegateRequest.0, 2);
+        assert_eq!(ClientRequestType::Disconnect.0, 3);
+        assert_eq!(ClientRequestType::Authenticate.0, 4);
+        assert_eq!(ClientRequestType::StreamChunk.0, 5);
+    }
+}
+
 /// Hardening pins for the flatbuffers decode boundary.
 ///
 /// Every test here exists because a real decode site panicked, or silently
@@ -3510,6 +3946,387 @@ mod fbs_decode_hardening {
         assert!(
             SecretsId::try_decode_fbs(&fbs).is_ok(),
             "a 32-byte hash must still decode"
+        );
+    }
+}
+
+/// Executable evidence for what happens on the bincode wire when a **field** is
+/// appended to a struct.
+///
+/// This is a different question from appending a variant to an enum, and the
+/// answers are not merely different — they break in the **opposite direction**.
+/// Getting that backwards is easy and expensive, so the behaviour is pinned
+/// here rather than reasoned about in a review comment.
+///
+/// Summary of what these tests establish, for `bincode::serialize` /
+/// `bincode::deserialize` as this crate uses them:
+///
+/// | change | old sender to new receiver | new sender to old receiver |
+/// |---|---|---|
+/// | append an **enum variant** | fine (old tags unchanged) | hard error, unknown tag |
+/// | append a **struct field** | **hard error**, unexpected end of input | silently ignored *if the struct is terminal*, **silent corruption** if it is not |
+///
+/// So a struct field is the more dangerous of the two. It has no tag, so there
+/// is nothing for a decoder to skip; bincode is positional and not
+/// self-describing. `#[serde(default)]` does not help — see
+/// `serde_default_does_not_rescue_a_missing_bincode_field`.
+///
+/// The practical rule that follows: **prefer a new enum variant over a new
+/// field on an existing wire struct.** A variant is only seen by a peer that
+/// asked for it; a field changes what every existing peer decodes.
+#[cfg(test)]
+mod struct_field_wire_compat {
+    use super::{HostResponse, NodeDiagnosticsResponse, QueryResponse, WrappedState};
+    use serde::{Deserialize, Serialize};
+
+    /// A wire struct before a field was appended.
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct OldShape {
+        first: u32,
+        second: String,
+    }
+
+    /// The same struct after appending `added`, the way a new node would emit it.
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct NewShape {
+        first: u32,
+        second: String,
+        added: Vec<u8>,
+    }
+
+    /// The same again, but with `#[serde(default)]` on the new field — the
+    /// annotation people reach for expecting it to make the change compatible.
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct NewShapeWithDefault {
+        first: u32,
+        second: String,
+        #[serde(default)]
+        added: Vec<u8>,
+    }
+
+    fn old_value() -> OldShape {
+        OldShape {
+            first: 7,
+            second: "diagnostics".to_string(),
+        }
+    }
+
+    fn new_value() -> NewShape {
+        NewShape {
+            first: 7,
+            second: "diagnostics".to_string(),
+            added: vec![0xDE, 0xAD],
+        }
+    }
+
+    /// **New sender to old receiver, struct terminal: silently succeeds, and
+    /// the new field is dropped.**
+    ///
+    /// `bincode::deserialize` is configured `allow_trailing_bytes()`
+    /// (bincode-1.3.3 `src/lib.rs`), so the appended field's bytes are simply
+    /// left unread. No error, no warning — the old peer just never learns the
+    /// field exists.
+    ///
+    /// This is the benign case, and it is benign *only* because nothing follows
+    /// the struct in the encoding. See
+    /// `an_appended_field_corrupts_whatever_follows_it`.
+    #[test]
+    fn a_new_field_is_silently_ignored_by_an_old_receiver() {
+        let bytes = bincode::serialize(&new_value()).expect("new value must serialize");
+        let decoded: OldShape =
+            bincode::deserialize(&bytes).expect("trailing bytes are allowed, so this succeeds");
+        assert_eq!(decoded, old_value(), "the shared prefix decodes unchanged");
+    }
+
+    /// **Old sender to new receiver: hard decode error.**
+    ///
+    /// This is the direction that bites, and it is the reverse of the enum
+    /// case. A new client reading an old node's response runs off the end of
+    /// the input looking for a field the old node never wrote, and the whole
+    /// message fails — not just the new field.
+    ///
+    /// Concretely: appending a field to a response struct means a freshly-built
+    /// client cannot decode that response from **any** node not yet upgraded.
+    /// During a staged fleet rollout that is most of the fleet, and the tool
+    /// you would use to watch the rollout is the one that breaks.
+    #[test]
+    fn an_old_payload_fails_to_decode_once_a_field_is_appended() {
+        let bytes = bincode::serialize(&old_value()).expect("old value must serialize");
+        let decoded = bincode::deserialize::<NewShape>(&bytes);
+        assert!(
+            decoded.is_err(),
+            "an old payload must NOT decode into a struct with an appended field; \
+             if this ever passes, the compatibility table on this module is wrong"
+        );
+    }
+
+    /// `#[serde(default)]` does **not** rescue the case above.
+    ///
+    /// It is a self-describing-format feature: it fills a field whose *name*
+    /// was absent from the input. bincode carries no names and no field count,
+    /// so there is no "absent" to detect — the decoder just reads past the end
+    /// of the buffer and fails. `#[serde(default)]` on a bincode struct field
+    /// is therefore JSON-only protection, and reading it as wire compatibility
+    /// is a mistake worth naming explicitly.
+    ///
+    /// (`ContractState::size_bytes` in this file carries exactly this
+    /// annotation. It protects the `serde_json` report path, not the bincode
+    /// client path.)
+    #[test]
+    fn serde_default_does_not_rescue_a_missing_bincode_field() {
+        let bytes = bincode::serialize(&old_value()).expect("old value must serialize");
+        assert!(
+            bincode::deserialize::<NewShapeWithDefault>(&bytes).is_err(),
+            "#[serde(default)] must not be mistaken for bincode wire compatibility"
+        );
+
+        // The same annotation genuinely does work for JSON, which is why it is
+        // easy to believe it works everywhere.
+        let json = serde_json::to_string(&old_value()).expect("old value must serialize to JSON");
+        let from_json: NewShapeWithDefault =
+            serde_json::from_str(&json).expect("serde(default) fills the missing field in JSON");
+        assert!(from_json.added.is_empty());
+    }
+
+    /// **The dangerous case: an appended field that is not terminal corrupts
+    /// whatever follows it, silently.**
+    ///
+    /// If the struct has siblings after it in the enclosing encoding, the extra
+    /// bytes are not trailing — they shift every subsequent field. An old
+    /// receiver then reads the new field's bytes *as* the next field and gets a
+    /// plausible, wrong value with no error at all.
+    ///
+    /// This is why "adding a field is fine, we checked" is not a conclusion you
+    /// can carry from one struct to another: whether it is safe depends on
+    /// where the struct sits in the message, not on the struct.
+    #[test]
+    fn an_appended_field_corrupts_whatever_follows_it() {
+        #[allow(dead_code)] // `payload` exists to occupy wire space, not to be read
+        #[derive(Serialize, Deserialize, Debug)]
+        struct OldEnvelope {
+            payload: OldShape,
+            trailer: u32,
+        }
+        #[derive(Serialize, Deserialize, Debug)]
+        struct NewEnvelope {
+            payload: NewShape,
+            trailer: u32,
+        }
+
+        let bytes = bincode::serialize(&NewEnvelope {
+            payload: new_value(),
+            trailer: 0xABCD_EF01,
+        })
+        .expect("new envelope must serialize");
+
+        match bincode::deserialize::<OldEnvelope>(&bytes) {
+            Ok(decoded) => assert_ne!(
+                decoded.trailer, 0xABCD_EF01,
+                "if this ever holds, bincode grew field framing and this whole module \
+                 needs revisiting"
+            ),
+            Err(_) => {
+                // Also an acceptable outcome, and the better one: the shifted
+                // bytes happened not to form a decodable value. The point of
+                // the test is that the field is NOT skipped cleanly, and both
+                // arms show that.
+            }
+        }
+    }
+
+    /// `NodeDiagnosticsResponse` is **terminal** in its enclosing message, and
+    /// this pins that property.
+    ///
+    /// It is the only reason appending a field to it is survivable for old
+    /// clients at all (`a_new_field_is_silently_ignored_by_an_old_receiver`).
+    /// The property is invisible at the definition site — nothing next to
+    /// `NodeDiagnosticsResponse` says "must stay last" — so if a field is ever
+    /// added *after* the payload in `QueryResponse::NodeDiagnostics` or
+    /// `HostResponse::QueryResponse`, this fails and says why.
+    ///
+    /// Note what this does NOT license: appending to `NodeDiagnosticsResponse`
+    /// still breaks a new client talking to an old node, per
+    /// `an_old_payload_fails_to_decode_once_a_field_is_appended`. Terminality
+    /// buys one direction, not both.
+    #[test]
+    fn node_diagnostics_response_is_terminal_in_its_message() {
+        // Every field carries a DISTINCTIVE, NON-ZERO value on purpose.
+        //
+        // An all-default response encodes as 27 zero bytes, and `ends_with`
+        // against a run of zeros degenerates into "the message ends in zeros" —
+        // which stays true after appending any field that encodes as zeros
+        // (`None`, an empty `Vec`, `0u64`, `false`). That is satisfiable under
+        // exactly the mutation this test exists to catch, so the assertion
+        // would have passed while terminality was broken.
+        let mut contract_states = std::collections::HashMap::new();
+        contract_states.insert(
+            "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9".to_string(),
+            super::ContractState {
+                subscribers: 0xAB,
+                subscriber_peer_ids: vec!["peer-a".to_string()],
+                size_bytes: 0xCDEF,
+            },
+        );
+        let response = NodeDiagnosticsResponse {
+            node_info: Some(super::NodeInfo {
+                peer_id: "peer-self".to_string(),
+                is_gateway: true,
+                location: Some("0.5".to_string()),
+                listening_address: Some("0.0.0.0:31337".to_string()),
+                uptime_seconds: 0x1234,
+            }),
+            network_info: Some(super::NetworkInfo {
+                connected_peers: vec![("peer-x".to_string(), "10.0.0.1:31337".to_string())],
+                active_connections: 7,
+            }),
+            subscriptions: vec![super::SubscriptionInfo {
+                contract_key: crate::contract_interface::ContractInstanceId::new([7u8; 32]),
+                client_id: 42,
+            }],
+            contract_states,
+            system_metrics: Some(super::SystemMetrics {
+                active_connections: 0x5678,
+                hosting_contracts: 0x9A,
+            }),
+            connected_peers_detailed: vec![super::ConnectedPeerInfo {
+                peer_id: "peer-x".to_string(),
+                address: "10.0.0.1:31337".to_string(),
+            }],
+        };
+
+        let inner = bincode::serialize(&response).expect("response must serialize");
+        assert_ne!(
+            *inner.last().expect("the fixture encodes to something"),
+            0,
+            "ends_with needs a non-zero TAIL, not merely a non-zero byte somewhere. If the last \
+             field ever becomes empty again, ends_with silently degenerates into 'ends in zeros' \
+             and stops catching the append it exists to catch"
+        );
+        // The default type parameter, i.e. the `HostResponse` that is actually
+        // on the wire. Pinning terminality against some other instantiation
+        // would be pinning a type nobody sends.
+        let whole = bincode::serialize(&HostResponse::<WrappedState>::QueryResponse(
+            QueryResponse::NodeDiagnostics(response),
+        ))
+        .expect("host response must serialize");
+
+        assert!(
+            whole.ends_with(&inner),
+            "NodeDiagnosticsResponse must remain the LAST thing in its encoding. \
+             Something now follows it, so appending a field to it would no longer be \
+             trailing-byte-safe for older clients — it would silently corrupt whatever \
+             was added after it."
+        );
+
+        // Belt to the ends_with brace: the payload must account for everything
+        // after the two 4-byte enum tags (HostResponse::QueryResponse, then
+        // QueryResponse::NodeDiagnostics) and nothing else. This catches an
+        // appended sibling field even in the case ends_with cannot — one whose
+        // encoding happens to match the payload's own trailing bytes.
+        assert_eq!(
+            whole.len(),
+            8 + inner.len(),
+            "exactly two enum tags may precede the payload and nothing may follow it"
+        );
+    }
+
+    /// The rule above, in code that has already shipped.
+    ///
+    /// `ContractState::size_bytes` was appended in #52 (2026-02-18, crate
+    /// version 0.1.36) and is present in every released tag from `rust-v0.8.0`
+    /// onward. `ContractState` is a `HashMap` **value** inside
+    /// `NodeDiagnosticsResponse`, and two more fields follow the map — so the
+    /// appended `u64` is not trailing. It shifts everything after it.
+    ///
+    /// A client built before that commit, querying a node built after it, does
+    /// not get a diagnostics response with one field missing. It gets **no
+    /// diagnostics response at all**: the decoder reads the appended `u64` as
+    /// the next value in sequence and fails, or worse, does not.
+    ///
+    /// This test isolates that single variable — it uses today's `String` map
+    /// key, so it measures the effect of the appended field and not of the
+    /// later key change in #70.
+    ///
+    /// Nothing here is fixable after the fact; the released bytes are the
+    /// released bytes. It is pinned as the concrete instance of why the table
+    /// on this module matters, and because a rule with a real example attached
+    /// is the one people believe.
+    #[test]
+    fn the_shipped_size_bytes_append_is_an_instance_of_this() {
+        use super::{
+            ConnectedPeerInfo, ContractState, NetworkInfo, NodeInfo, SubscriptionInfo,
+            SystemMetrics,
+        };
+        use crate::contract_interface::ContractInstanceId;
+        use std::collections::HashMap;
+
+        /// `ContractState` as it was before #52 appended `size_bytes`.
+        #[allow(dead_code)] // decoded into, never read — the decode is the test
+        #[derive(Serialize, Deserialize, Debug)]
+        struct OldContractState {
+            subscribers: u32,
+            subscriber_peer_ids: Vec<String>,
+        }
+
+        /// `NodeDiagnosticsResponse` as an older client sees it: identical in
+        /// every respect except the map's value type.
+        #[allow(dead_code)]
+        #[derive(Serialize, Deserialize, Debug)]
+        struct OldNodeDiagnosticsResponse {
+            node_info: Option<NodeInfo>,
+            network_info: Option<NetworkInfo>,
+            subscriptions: Vec<SubscriptionInfo>,
+            contract_states: HashMap<String, OldContractState>,
+            system_metrics: Option<SystemMetrics>,
+            connected_peers_detailed: Vec<ConnectedPeerInfo>,
+        }
+
+        let mut contract_states = HashMap::new();
+        contract_states.insert(
+            "6kVs66bKaQAC6ohr8b43SvJ95r36tc2hnG7HezmaJHF9".to_string(),
+            ContractState {
+                subscribers: 3,
+                subscriber_peer_ids: vec!["peer-a".to_string()],
+                size_bytes: 1024,
+            },
+        );
+
+        let new_node_response = NodeDiagnosticsResponse {
+            node_info: None,
+            network_info: None,
+            subscriptions: vec![SubscriptionInfo {
+                contract_key: ContractInstanceId::new([7u8; 32]),
+                client_id: 42,
+            }],
+            contract_states,
+            system_metrics: Some(SystemMetrics {
+                active_connections: 1,
+                hosting_contracts: 1,
+            }),
+            connected_peers_detailed: vec![ConnectedPeerInfo {
+                peer_id: "peer-x".to_string(),
+                address: "10.0.0.1:31337".to_string(),
+            }],
+        };
+
+        let bytes = bincode::serialize(&new_node_response).expect("a new node's response");
+
+        let faithfully_decoded = match bincode::deserialize::<OldNodeDiagnosticsResponse>(&bytes) {
+            // The common outcome, and the honest one: the shifted bytes do not
+            // form a decodable value and the client sees an error.
+            Err(_) => false,
+            // The quieter outcome: it decodes into something, and that
+            // something is wrong.
+            Ok(decoded) => {
+                decoded.system_metrics.is_some() && decoded.connected_peers_detailed.len() == 1
+            }
+        };
+
+        assert!(
+            !faithfully_decoded,
+            "an appended field on a non-terminal struct must not decode cleanly on an older \
+             reader; if this ever passes, bincode gained field framing and the compatibility \
+             table on this module needs rewriting"
         );
     }
 }

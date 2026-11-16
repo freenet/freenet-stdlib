@@ -20,11 +20,11 @@ jobs:
 
     steps:
       - name: Cancel Previous Runs
-        uses: styfle/cancel-workflow-action@0.11.0
+        uses: styfle/cancel-workflow-action@0.13.1
         with:
           access_token: ${{ github.token }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -49,11 +49,11 @@ jobs:
 
     steps:
       - name: Cancel Previous Runs
-        uses: styfle/cancel-workflow-action@0.11.0
+        uses: styfle/cancel-workflow-action@0.13.1
         with:
           access_token: ${{ github.token }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -65,6 +65,38 @@ jobs:
       - name: Build - freenet-stdlib
         working-directory: rust
         run: cargo build --target ${{ matrix.targets }}
+
+  wasm_manifest:
+    name: Delegate manifest survives a wasm32 release build
+
+    runs-on: ubuntu-latest
+    env:
+      FREENET_LOG: error
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            tests/wasm-manifest-fixture
+
+      - name: Build the fixture delegate (strip + LTO, like real delegates)
+        working-directory: tests/wasm-manifest-fixture
+        run: cargo build --release --target wasm32-unknown-unknown
+
+      - name: Read the manifest back from the module
+        working-directory: rust
+        run: >
+          cargo run --example read_manifest --
+          ../tests/wasm-manifest-fixture/target/wasm32-unknown-unknown/release/wasm_manifest_fixture.wasm
+          '{"manifest_version":1,"lifecycle":["installed","node_started"],"capabilities":["background"],"wakeups":[{"tag":"heartbeat","every_secs":300}]}'
 
   clippy_check:
     name: Clippy
@@ -80,11 +112,11 @@ jobs:
 
     steps:
       - name: Cancel Previous Runs
-        uses: styfle/cancel-workflow-action@0.11.0
+        uses: styfle/cancel-workflow-action@0.13.1
         with:
           access_token: ${{ github.token }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -104,7 +136,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -124,9 +156,9 @@ jobs:
         working-directory: typescript
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
 
@@ -138,6 +170,229 @@ jobs:
 
       - name: Test
         run: npm test
+
+  flatbuffers_drift:
+    name: Flatbuffers bindings match schemas
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      # Pinned deliberately. Different flatc releases format their output
+      # differently, so this job compares against one specific compiler.
+      #
+      # The version is read from build.rs rather than repeated here: two copies
+      # would let the compiler and the pin drift apart, which is the class of
+      # mistake this job exists to catch.
+      - name: Read pinned flatc version
+        id: flatc
+        run: |
+          # `|| true` so a failed grep does not abort the step under `bash -e`
+          # before the message below can explain what went wrong. It fails
+          # closed either way; this makes the failure legible.
+          version="$(grep -oP 'PINNED_FLATC: &str = "\K[^"]+' rust/build.rs || true)"
+          if [ -z "$version" ]; then
+            echo "could not read PINNED_FLATC from rust/build.rs" >&2
+            echo "(has the declaration been reformatted?)" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Downloaded outside the checkout on purpose: anything left in the working
+      # tree would show up as untracked, and the staleness check below treats
+      # untracked files as drift.
+      #
+      # The checksum is not ceremony. Release assets can be replaced by anyone
+      # with upstream write access, and a substituted binary would self-report
+      # the expected version, pass the gate below, and then dictate what this
+      # repository is required to commit.
+      #
+      # It is necessarily pinned by hand, so it is the one value that does NOT
+      # follow PINNED_FLATC automatically: moving the pin without updating this
+      # fails with "computed checksum did NOT match", which reads as a
+      # supply-chain alarm rather than "you forgot the hash". Update both
+      # together. The asset filename is likewise not stable across flatc
+      # releases and may need revisiting on a bump.
+      - name: Install pinned flatc
+        env:
+          FLATC_VERSION: ${{ steps.flatc.outputs.version }}
+          FLATC_SHA256: 9e3b46402076388e61ceeb07344e95a71b2c67fa54b861eaaef905bbe9311b86
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/flatc.zip" \
+            "https://github.com/google/flatbuffers/releases/download/v${FLATC_VERSION}/Linux.flatc.binary.g++-13.zip"
+          echo "${FLATC_SHA256}  $RUNNER_TEMP/flatc.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/flatc.zip" -d "$HOME/.flatc"
+          chmod +x "$HOME/.flatc/flatc"
+          echo "$HOME/.flatc" >> "$GITHUB_PATH"
+
+      - name: Verify flatc version
+        env:
+          FLATC_VERSION: ${{ steps.flatc.outputs.version }}
+        run: |
+          # A silently-different compiler would make this whole job compare the
+          # wrong thing and pass, which is the failure mode it exists to prevent.
+          installed="$(flatc --version | awk '{print $NF}')"
+          if [ "$installed" != "$FLATC_VERSION" ]; then
+            echo "expected flatc $FLATC_VERSION, got '$installed'" >&2
+            exit 1
+          fi
+
+      # Keeps the RUST runtime on the same release as the pinned compiler.
+      # Upstream ships flatc and the `flatbuffers` crate from one tag, and
+      # generated code is only guaranteed against the runtime it was generated
+      # for, so the two drifting apart is a real risk worth failing on.
+      #
+      # This is the gap the rest of the job cannot see. Everything else here
+      # compares generated code to the SCHEMAS; nothing compared it to the
+      # runtime, so bumping `flatbuffers` in Cargo.toml while leaving
+      # PINNED_FLATC alone passed every check. That was not hypothetical: PR #115
+      # (flatbuffers 24.3 -> 25.12) was green on exactly this job.
+      #
+      # `Cargo.lock` is untracked, so the requirement in Cargo.toml is a range
+      # and this reads what actually resolved rather than what was asked for.
+      #
+      # DELIBERATELY NOT a repo-wide rule, and the distinction matters: the
+      # npm runtime (typescript/package.json, ^25.9.23) is two majors ahead of
+      # the same pinned compiler that generates typescript/src, and its suite
+      # passes. So cross-major flatc/runtime mixing is evidently not fatal in
+      # practice, and this check is a guard on the half we control end to end
+      # rather than proof that a mismatch cannot work. Aligning the TypeScript
+      # side means moving PINNED_FLATC to 25.x and regenerating both languages,
+      # which is a deliberate change, not a side effect of this one.
+      - name: Verify the Rust flatbuffers runtime matches the pinned compiler
+        working-directory: rust
+        env:
+          FLATC_VERSION: ${{ steps.flatc.outputs.version }}
+        run: |
+          # Without pipefail the assignment below is fail-closed only because
+          # python happens to reject empty input; an extractor that tolerated it
+          # would silently degrade to comparing an empty string.
+          set -o pipefail
+          # Walks the resolve graph from freenet-stdlib to ITS direct, normal
+          # flatbuffers dependency, rather than selecting every package with
+          # that name. A second flatbuffers anywhere else in the graph -- a dev
+          # dependency, another workspace member -- would otherwise fail this
+          # job even though the runtime the bindings compile against still
+          # matched the compiler.
+          cat > "$RUNNER_TEMP/resolve_flatbuffers.py" <<'PY'
+          import json, sys
+
+          meta = json.load(sys.stdin)
+          pkg = next((p for p in meta["packages"] if p["name"] == "freenet-stdlib"), None)
+          if pkg is None:
+              sys.exit("freenet-stdlib not present in cargo metadata")
+          node = next((n for n in meta["resolve"]["nodes"] if n["id"] == pkg["id"]), None)
+          if node is None:
+              sys.exit("no resolve node for freenet-stdlib")
+          def is_normal(dep):
+              # Dev-only deps compile the tests, not the bindings.
+              kinds = dep.get("dep_kinds") or [{"kind": None}]
+              return any(k.get("kind") is None for k in kinds)
+
+          ids = {
+              d["pkg"]
+              for d in node["deps"]
+              if d["name"] == "flatbuffers" and is_normal(d)
+          }
+          versions = sorted({p["version"] for p in meta["packages"] if p["id"] in ids})
+          if not versions:
+              sys.exit("freenet-stdlib has no resolved flatbuffers dependency")
+          if len(versions) > 1:
+              sys.exit(
+                  "freenet-stdlib resolved MULTIPLE flatbuffers versions: "
+                  + ", ".join(versions)
+                  + " -- the bindings can only match one of them"
+              )
+          print(versions[0])
+          PY
+          # A failure anywhere in this pipeline aborts the step under `bash -e`,
+          # and the script exits with a message rather than empty output, so
+          # there is no path where an unset value compares equal and passes.
+          resolved="$(cargo metadata --format-version 1 | python3 "$RUNNER_TEMP/resolve_flatbuffers.py")"
+          if [ "$resolved" != "$FLATC_VERSION" ]; then
+            echo "flatbuffers runtime/compiler mismatch." >&2
+            echo "  flatc (PINNED_FLATC in rust/build.rs): $FLATC_VERSION" >&2
+            echo "  flatbuffers crate resolved to:         $resolved" >&2
+            echo >&2
+            echo "These must be the same release. Either bump PINNED_FLATC to match" >&2
+            echo "the crate and regenerate the bindings, or hold the crate at" >&2
+            echo "$FLATC_VERSION in rust/Cargo.toml." >&2
+            exit 1
+          fi
+
+      # Deleting first makes a regeneration that quietly does nothing fail
+      # closed. Deletions of tracked files ARE visible to the staleness check
+      # below, whereas a no-op regeneration leaves a clean tree that reads as
+      # success. Without this the job's correctness rests on the build script
+      # actually executing, which today holds only because this is the one Rust
+      # job without a cargo cache -- an implicit property nothing enforces.
+      #
+      # The TypeScript half also catches ORPHANS, which nothing else can see.
+      # When a table is deleted, renamed, or moves namespace, flatc stops
+      # emitting its old .ts file but does not remove it, so the stale file is
+      # never regenerated, never modified, and reads as a clean tree. Deleting
+      # every file carrying flatc's own header first means an orphan stays
+      # deleted and shows up as drift. The marker is what makes this safe to do
+      # by pattern: the hand-written sources in typescript/src do not carry it.
+      - name: Remove generated bindings so a no-op regeneration is visible
+        run: |
+          rm -f rust/src/generated/*_generated.rs
+          grep -rl "automatically generated by the FlatBuffers compiler" typescript/src \
+            | xargs -r rm -f
+
+      # build.rs runs cargo fmt itself and panics if anything goes wrong, so a
+      # regeneration that cannot run fails here rather than reaching the
+      # comparison below having quietly changed nothing.
+      - name: Regenerate Rust bindings
+        working-directory: rust
+        run: FREENET_REGEN_FLATBUFFERS=1 cargo build
+
+      # No `npm install`: flatc-schemas only shells out to the flatc binary, so
+      # installing the package tree would add a minute and a network flake
+      # surface for nothing.
+      - name: Regenerate TypeScript bindings
+        working-directory: typescript
+        run: npm run flatc-schemas
+
+      # Until this job existed nothing compared the schemas to the bindings: the
+      # build regenerated only when a contributor happened to have flatc, and CI
+      # never installed it, so a schema edit that was never regenerated compiled
+      # and passed against bindings describing the previous schema.
+      # `git status --porcelain`, not `git diff --exit-code`: a new .fbs file
+      # generates entirely NEW binding files, which are untracked, and a plain
+      # diff reports a clean tree for them. That would let a schema merge with no
+      # committed bindings at all -- the loudest version of the drift this job
+      # exists to catch, sailing straight past it.
+      # The version in the remediation comes from the same step output as the
+      # install, not a literal: a hardcoded one silently rots when the pin moves,
+      # and the advice then tells contributors to install a compiler the build
+      # script explicitly rejects.
+      - name: Fail if the committed bindings are stale
+        env:
+          FLATC_VERSION: ${{ steps.flatc.outputs.version }}
+        run: |
+          changes="$(git status --porcelain)"
+          if [ -n "$changes" ]; then
+            echo "The committed flatbuffers bindings do not match the schemas." >&2
+            echo >&2
+            echo "$changes" >&2
+            echo >&2
+            echo "Regenerate them and commit the result:" >&2
+            echo "  (cd rust && FREENET_REGEN_FLATBUFFERS=1 cargo build)" >&2
+            echo "  (cd typescript && npm run flatc-schemas)" >&2
+            echo "This needs flatc $FLATC_VERSION specifically; another release reformats every file." >&2
+            exit 1
+          fi
 
   claude-ci-analysis:
     name: Claude CI Analysis
@@ -158,7 +413,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 

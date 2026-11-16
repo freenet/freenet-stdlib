@@ -26,12 +26,11 @@
 //!         }
 //!         ctx.set_secret(b"new_secret", b"value");
 //!
-//!         // V2: Direct contract access (no round-trips!)
+//!         // Read contract state the node already holds (no round-trip)
 //!         let contract_id = [0u8; 32]; // your contract instance ID
 //!         if let Some(state) = ctx.get_contract_state(&contract_id) {
 //!             // process state...
 //!         }
-//!         ctx.put_contract_state(&contract_id, b"new state");
 //!
 //!         Ok(vec![])
 //!     }
@@ -46,9 +45,26 @@
 //! - **Secrets** (`get_secret`/`set_secret`): Persistent encrypted storage.
 //!   Survives across all delegate invocations. Use for private keys, tokens, etc.
 //!
-//! - **Contracts** (`get_contract_state`/`put_contract_state`/`update_contract_state`/
-//!   `subscribe_contract`): V2 host functions for direct contract state access.
-//!   Synchronous local reads/writes — no request/response round-trips.
+//! - **Contracts** (`get_contract_state`): a synchronous read of contract state
+//!   the node already holds locally, with no request/response round-trip.
+//!
+//!   There is no host function for *writing* or *subscribing*. A delegate does
+//!   both by emitting the corresponding `OutboundDelegateMsg` —
+//!   `PutContractRequest`, `UpdateContractRequest`, `SubscribeContractRequest` —
+//!   which go through the node's normal contract path.
+//!
+//! # Adding a host function is the additive way to extend this API
+//!
+//! Host functions are resolved **by name at module instantiation**. A delegate
+//! that imports one an older node does not provide fails to load, with a named
+//! missing-import error; a delegate that does not import it is unaffected. So
+//! adding a host function is additive for every existing delegate, and its
+//! failure mode for a too-old node is loud and diagnosable at load time.
+//!
+//! Contrast the message API (`OutboundDelegateMsg`): a new variant sent to an
+//! older host fails mid-protocol at bincode decode, with no way for the
+//! delegate to have detected the host's version first. Where a capability can
+//! be expressed either way, prefer the host function.
 //!
 //! # Error Codes
 //!
@@ -165,22 +181,6 @@ extern "C" {
         out_ptr: i64,
         out_len: i64,
     ) -> i64;
-    /// Put (store) contract state. Returns 0 on success, or negative error code (i64).
-    fn __frnt__delegate__put_contract_state(
-        id_ptr: i64,
-        id_len: i32,
-        state_ptr: i64,
-        state_len: i64,
-    ) -> i64;
-    /// Update contract state (requires existing state). Returns 0 on success, or negative error code (i64).
-    fn __frnt__delegate__update_contract_state(
-        id_ptr: i64,
-        id_len: i32,
-        state_ptr: i64,
-        state_len: i64,
-    ) -> i64;
-    /// Subscribe to contract updates. Returns 0 on success, or negative error code (i64).
-    fn __frnt__delegate__subscribe_contract(id_ptr: i64, id_len: i32) -> i64;
 }
 
 #[cfg(target_family = "wasm")]
@@ -210,7 +210,7 @@ extern "C" {
 /// Provides access to:
 /// - **Temporary context**: State shared within a single message batch (reset between calls)
 /// - **Persistent secrets**: Encrypted storage that survives across all invocations
-/// - **Contract state** (V2): Direct synchronous access to local contract state
+/// - **Contract state**: Direct synchronous read of local contract state
 ///
 /// # Context Methods
 /// - [`read`](Self::read), [`write`](Self::write), [`len`](Self::len), [`clear`](Self::clear)
@@ -219,13 +219,10 @@ extern "C" {
 /// - [`get_secret`](Self::get_secret), [`set_secret`](Self::set_secret),
 ///   [`has_secret`](Self::has_secret), [`remove_secret`](Self::remove_secret)
 ///
-/// # Contract Methods (V2)
-/// - [`get_contract_state`](Self::get_contract_state),
-///   [`put_contract_state`](Self::put_contract_state),
-///   [`update_contract_state`](Self::update_contract_state),
-///   [`subscribe_contract`](Self::subscribe_contract)
+/// # Contract Methods
+/// - [`get_contract_state`](Self::get_contract_state)
 ///
-/// # Delegate Management Methods (V2)
+/// # Delegate Management Methods
 /// - [`create_delegate`](Self::create_delegate)
 #[derive(Default)]
 #[repr(transparent)]
@@ -498,7 +495,7 @@ impl DelegateCtx {
     }
 
     // ========================================================================
-    // Contract methods (V2 — direct synchronous access)
+    // Contract methods (direct synchronous read of local state)
     // ========================================================================
 
     /// Get contract state by instance ID.
@@ -544,77 +541,6 @@ impl DelegateCtx {
         {
             let _ = instance_id;
             None
-        }
-    }
-
-    /// Store (PUT) contract state by instance ID.
-    ///
-    /// The contract's code must already be registered in the runtime's contract
-    /// store. Returns `true` on success, `false` on error.
-    pub fn put_contract_state(&mut self, instance_id: &[u8; 32], state: &[u8]) -> bool {
-        #[cfg(target_family = "wasm")]
-        {
-            let result = unsafe {
-                __frnt__delegate__put_contract_state(
-                    instance_id.as_ptr() as i64,
-                    32,
-                    state.as_ptr() as i64,
-                    state.len() as i64,
-                )
-            };
-            result == 0
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = (instance_id, state);
-            false
-        }
-    }
-
-    /// Update contract state by instance ID.
-    ///
-    /// Like `put_contract_state`, but only succeeds if the contract already has
-    /// stored state. This performs a full state replacement (not a delta-based
-    /// update through the contract's `update_state` logic). Returns `true` on
-    /// success, `false` if no prior state exists or on other errors.
-    pub fn update_contract_state(&mut self, instance_id: &[u8; 32], state: &[u8]) -> bool {
-        #[cfg(target_family = "wasm")]
-        {
-            let result = unsafe {
-                __frnt__delegate__update_contract_state(
-                    instance_id.as_ptr() as i64,
-                    32,
-                    state.as_ptr() as i64,
-                    state.len() as i64,
-                )
-            };
-            result == 0
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = (instance_id, state);
-            false
-        }
-    }
-
-    /// Subscribe to contract updates by instance ID.
-    ///
-    /// Registers interest in receiving notifications when the contract's state
-    /// changes. Currently validates that the contract is known and returns success;
-    /// actual notification delivery is a follow-up.
-    ///
-    /// Returns `true` on success, `false` if the contract is unknown or on error.
-    pub fn subscribe_contract(&mut self, instance_id: &[u8; 32]) -> bool {
-        #[cfg(target_family = "wasm")]
-        {
-            let result =
-                unsafe { __frnt__delegate__subscribe_contract(instance_id.as_ptr() as i64, 32) };
-            result == 0
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = instance_id;
-            false
         }
     }
 
