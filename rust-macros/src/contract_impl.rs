@@ -89,12 +89,38 @@ pub(crate) fn contract_ffi_impl(
         Type::Path(p) => p.clone(),
         _ => panic!(),
     };
+    let mut update_validates = false;
+    for m in args.args.iter() {
+        if let syn::Meta::Path(path) = m {
+            if path.is_ident("update_validates") {
+                if update_validates {
+                    return quote_spanned! {
+                        path.span() =>
+                        compile_error!("`update_validates` specified more than once");
+                    }
+                    .into();
+                }
+                update_validates = true;
+            }
+        }
+    }
     let mut impl_trait = ImplTrait {
         type_name,
         children: vec![],
+        update_validates,
     };
 
     if let ContractType::Raw = c_type {
+        if let Some(other) = args.args.iter().find(|m| match m {
+            syn::Meta::Path(path) => !path.is_ident("update_validates"),
+            _ => true,
+        }) {
+            return quote_spanned! {
+                other.span() =>
+                compile_error!("argument not allowed, the only supported argument for this trait is: `update_validates`");
+            }
+            .into();
+        }
         let ffi = impl_trait.gen_extern_functions();
         return quote! {
             #input
@@ -110,6 +136,8 @@ pub(crate) fn contract_ffi_impl(
 
     for m in args.args.iter() {
         match m {
+            // Already recorded above.
+            syn::Meta::Path(path) if path.is_ident("update_validates") => {}
             syn::Meta::List(list) => match list.path.get_ident() {
                 Some(id) if id == "children" => {
                     if found_children {
@@ -306,6 +334,7 @@ pub(crate) fn contract_ffi_impl(
 struct ImplTrait {
     type_name: TypePath,
     children: Vec<TypePath>,
+    update_validates: bool,
 }
 
 impl ImplTrait {
@@ -489,11 +518,28 @@ impl ImplTrait {
         let update_fn = self.gen_update_state_fn();
         let summarize_fn = self.gen_summarize_state_fn();
         let get_delta_fn = self.gen_get_state_delta();
+        let update_validates_fn = self.gen_update_validates_fn();
         quote! {
             #validate_state_fn
             #update_fn
             #summarize_fn
             #get_delta_fn
+            #update_validates_fn
+        }
+    }
+
+    /// Emitted only for `#[contract(update_validates)]`: the presence of the
+    /// export is the declaration, the node never calls it.
+    fn gen_update_validates_fn(&self) -> TokenStream {
+        if !self.update_validates {
+            return TokenStream::new();
+        }
+        quote! {
+            #[no_mangle]
+            #[cfg(feature = "freenet-main-contract")]
+            pub extern "C" fn __frnt__update_validates() -> i32 {
+                1
+            }
         }
     }
 

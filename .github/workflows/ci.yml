@@ -36,6 +36,11 @@ jobs:
       - name: Test - features
         run: cargo test --workspace --features contract,net,testing,trace
 
+      - name: Test - contract exports
+        run: >
+          cargo test -p freenet-stdlib --features contract,freenet-main-contract
+          --test contract_update_validates --test contract_without_update_validates
+
   build_targets:
     name: Build targets
 

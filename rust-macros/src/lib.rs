@@ -39,6 +39,30 @@ enum ContractType {
 }
 
 /// Generate the necessary code for the WASM runtime to interact with your contract ergonomically and safely.
+///
+/// # Opting in to `update_validates`
+///
+/// ```ignore
+/// #[contract(update_validates)]
+/// impl ContractInterface for MyContract { /* ... */ }
+/// ```
+///
+/// This additionally exports `__frnt__update_validates() -> i32` (returning 1)
+/// from the WASM module. The presence of the export is the declaration; the
+/// node never calls it. A contract that opts in promises that
+/// `update_state(state, data)`, given a state this node stored:
+///
+/// 1. treats every `UpdateData` (including `UpdateData::State`) as untrusted
+///    input, and
+/// 2. returns `Err` unless its output would pass `validate_state`.
+///
+/// A node that sees the export may then skip its own `validate_state` calls
+/// before and after `update_state` when it already stores a state for the key,
+/// avoiding redundant validation work. A state for a key the node does not yet
+/// store is always fully validated. Without the argument nothing changes. A
+/// node that does not know about the export ignores it.
+///
+/// Adding the argument changes the WASM, and so the contract key.
 #[proc_macro_attribute]
 pub fn contract(
     args: proc_macro::TokenStream,
