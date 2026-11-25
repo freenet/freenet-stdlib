@@ -55,6 +55,48 @@ use super::{
 ///     }
 /// }
 /// ```
+///
+/// The `update_validates` argument is accepted:
+///
+/// ```
+/// # use freenet_stdlib::prelude::*;
+/// # struct Contract;
+/// #[contract(update_validates)]
+/// impl ContractInterface for Contract {
+/// #   fn validate_state(_: Parameters<'static>, _: State<'static>, _: RelatedContracts<'static>) -> Result<ValidateResult, ContractError> { Ok(ValidateResult::Valid) }
+/// #   fn update_state(_: Parameters<'static>, s: State<'static>, _: Vec<UpdateData<'static>>) -> Result<UpdateModification<'static>, ContractError> { Ok(UpdateModification::valid(s)) }
+/// #   fn summarize_state(_: Parameters<'static>, _: State<'static>) -> Result<StateSummary<'static>, ContractError> { Ok(StateSummary::from(vec![])) }
+/// #   fn get_state_delta(_: Parameters<'static>, _: State<'static>, _: StateSummary<'static>) -> Result<StateDelta<'static>, ContractError> { Ok(StateDelta::from(vec![])) }
+/// }
+/// ```
+///
+/// and an unknown argument is a compile error (a typo must not silently drop the export):
+///
+/// ```compile_fail
+/// # use freenet_stdlib::prelude::*;
+/// # struct Contract;
+/// #[contract(update_validate)]
+/// impl ContractInterface for Contract {
+/// #   fn validate_state(_: Parameters<'static>, _: State<'static>, _: RelatedContracts<'static>) -> Result<ValidateResult, ContractError> { Ok(ValidateResult::Valid) }
+/// #   fn update_state(_: Parameters<'static>, s: State<'static>, _: Vec<UpdateData<'static>>) -> Result<UpdateModification<'static>, ContractError> { Ok(UpdateModification::valid(s)) }
+/// #   fn summarize_state(_: Parameters<'static>, _: State<'static>) -> Result<StateSummary<'static>, ContractError> { Ok(StateSummary::from(vec![])) }
+/// #   fn get_state_delta(_: Parameters<'static>, _: State<'static>, _: StateSummary<'static>) -> Result<StateDelta<'static>, ContractError> { Ok(StateDelta::from(vec![])) }
+/// }
+/// ```
+///
+/// and so is naming it twice:
+///
+/// ```compile_fail
+/// # use freenet_stdlib::prelude::*;
+/// # struct Contract;
+/// #[contract(update_validates, update_validates)]
+/// impl ContractInterface for Contract {
+/// #   fn validate_state(_: Parameters<'static>, _: State<'static>, _: RelatedContracts<'static>) -> Result<ValidateResult, ContractError> { Ok(ValidateResult::Valid) }
+/// #   fn update_state(_: Parameters<'static>, s: State<'static>, _: Vec<UpdateData<'static>>) -> Result<UpdateModification<'static>, ContractError> { Ok(UpdateModification::valid(s)) }
+/// #   fn summarize_state(_: Parameters<'static>, _: State<'static>) -> Result<StateSummary<'static>, ContractError> { Ok(StateSummary::from(vec![])) }
+/// #   fn get_state_delta(_: Parameters<'static>, _: State<'static>, _: StateSummary<'static>) -> Result<StateDelta<'static>, ContractError> { Ok(StateDelta::from(vec![])) }
+/// }
+/// ```
 // ANCHOR: contractifce
 /// # ContractInterface
 ///
