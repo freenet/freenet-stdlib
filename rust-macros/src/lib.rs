@@ -62,6 +62,10 @@ enum ContractType {
 /// store is always fully validated. Without the argument nothing changes. A
 /// node that does not know about the export ignores it.
 ///
+/// `update_state` cannot report `ValidateResult::RequestRelated`, so a contract
+/// whose validity depends on related contracts cannot make this promise and
+/// should not opt in.
+///
 /// Adding the argument changes the WASM, and so the contract key.
 #[proc_macro_attribute]
 pub fn contract(

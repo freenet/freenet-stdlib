@@ -6,6 +6,10 @@
 
 - `#[contract(update_validates)]` additionally exports `__frnt__update_validates() -> i32`, declaring that `update_state` validates its own output so a node may skip redundant `validate_state` calls on states it already stores. No change without the argument.
 
+### Changed
+
+- `#[contract(...)]` on a raw `ContractInterface` impl now rejects unknown arguments with a compile error (it used to ignore every argument), so a misspelled `update_validates` cannot silently drop the opt-in.
+
 ## [0.12.1]
 
 ### Added — periodic wake-ups, declared in the manifest
