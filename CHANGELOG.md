@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.2]
+
 ### Added
 
 - `#[contract(update_validates)]` additionally exports `__frnt__update_validates() -> i32`, declaring that `update_state` validates its own output so a node may skip redundant `validate_state` calls on states it already stores. No change without the argument.
